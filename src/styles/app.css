@@ -1,10 +1,6 @@
 /* Extension-only additions on top of the design system. */
 .popup-body{width:360px;height:600px;overflow:hidden}
 .popup-body #app{width:360px;height:600px}
-button.li{width:100%;text-align:left;font:inherit;color:inherit;background:none;border:0}
-button.rowlink{width:100%;text-align:left;font:inherit;color:inherit}
-button.action{font:inherit;border:0;cursor:pointer}
-.card.pad-sm[type=button]{border-width:1px}
 .solo{min-height:100dvh;display:grid;place-items:center;padding:var(--s-8) var(--s-4);background:var(--c-bg)}
 .solo .pb-expand{width:360px;border:1px solid var(--c-border);border-radius:var(--r-xl);overflow:hidden;box-shadow:var(--shadow-3)}
 .solo .popup{position:relative}

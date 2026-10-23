@@ -13,7 +13,7 @@ const dots = (n: number, of = 4): Safe =>
 function pwField(id: string, label: string, auto: string, describe?: string, extra?: Safe): Safe {
   const peek = S.f[`peek_${id}`] === true;
   const e = err(id);
-  return html`<div class="field"><label class="label" for="${id}">${label}</label><div class="input-wrap"><input class="input" id="${id}" data-f="${id}" data-live type="${peek ? "text" : "password"}" autocomplete="${auto}" value="${fv(id)}" ${describe || e ? html`aria-describedby="${e ? id + "-e" : describe}"` : ""} ${e ? html`aria-invalid="true"` : ""} ${busy("unlock") ? html`disabled` : ""}><button class="icon-btn" type="button" data-act="peek" data-for="${id}" aria-label="${peek ? "Hide password" : "Show password"}" aria-pressed="${peek}">${I(peek ? "eye-off" : "eye")}</button></div>${extra ?? ""}${e ? html`<p class="err" id="${id}-e" role="alert">${I("circle-alert", "s16")}<span>${e}</span></p>` : ""}</div>`;
+  return html`<div class="field"><label class="label" for="${id}">${label}</label><div class="input-wrap"><input class="input" id="${id}" data-f="${id}" data-live type="${peek ? "text" : "password"}" autocomplete="${auto}" value="${fv(id)}" ${describe || e ? html`aria-describedby="${e ? id + "-e" : describe}"` : ""} ${e ? html`aria-invalid="true"` : ""} ${busy("unlock") ? html`disabled` : ""}><button class="icon-btn" type="button" data-act="peek" data-for="${id}" aria-label="${peek ? "Hide password" : "Show password"}" aria-pressed="${String(peek)}">${I(peek ? "eye-off" : "eye")}</button></div>${extra ?? ""}${e ? html`<p class="err" id="${id}-e" role="alert">${I("circle-alert", "s16")}<span>${e}</span></p>` : ""}</div>`;
 }
 
 actions.peek = (el) => {
@@ -197,7 +197,7 @@ screens.verify = () => {
         const picked = v.pick[i];
         const wrong = picked !== null && picked !== w[p];
         return html`<fieldset class="stack" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Word ${p + 1}</legend>
-    <div class="pick">${v.opts[i]!.map((o) => html`<button type="button" data-act="pick" data-i="${i}" data-w="${o}" aria-pressed="${picked === o}" class="${picked === o && wrong ? "wrong" : ""}">${o}</button>`)}</div>
+    <div class="pick">${v.opts[i]!.map((o) => html`<button type="button" data-act="pick" data-i="${i}" data-w="${o}" aria-pressed="${String(picked === o)}" class="${picked === o && wrong ? "wrong" : ""}">${o}</button>`)}</div>
     ${wrong ? html`<p class="err" role="alert">${I("circle-alert", "s16")}Not word ${p + 1}. Check your paper.</p>` : ""}</fieldset>`;
       })
     : ""}
@@ -304,8 +304,8 @@ screens.import = () => {
   ${showErr ? html`<p class="err" id="mn-e" role="alert">${I("circle-alert", "s16")}<span>${c.msg}</span></p>` : c.ok ? html`<p class="help" id="mn-h">${I("circle-check", "s16")} ${c.count} words, checksum valid. Paste is allowed.</p>` : html`<p class="help" id="mn-h">12 or 24 words separated by spaces. Paste is allowed.</p>`}</div>
   <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">When did this wallet first receive coins?</legend>
     <div class="opt-list" role="radiogroup">
-      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="default" aria-checked="${!custom}"><span class="body"><span class="t">Since Silent Payments started on Fractal</span><span class="d">Block ${num(DEFAULT_BIRTHDAY)}. Safest, slower first scan.</span></span></button>
-      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="custom" aria-checked="${custom}"><span class="body"><span class="t">I know the block</span><span class="d">Faster. Too late and older coins will not show.</span></span></button>
+      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="default" aria-checked="${String(!custom)}"><span class="body"><span class="t">Since Silent Payments started on Fractal</span><span class="d">Block ${num(DEFAULT_BIRTHDAY)}. Safest, slower first scan.</span></span></button>
+      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="custom" aria-checked="${String(custom)}"><span class="body"><span class="t">I know the block</span><span class="d">Faster. Too late and older coins will not show.</span></span></button>
     </div>
     ${custom ? html`<div class="field" style="margin-top:8px"><label class="label" for="bd">Block height</label><input class="input mono" id="bd" data-f="bd" inputmode="numeric" placeholder="${num(DEFAULT_BIRTHDAY)}" value="${fv("bd")}" ${err("bd") ? html`aria-invalid="true" aria-describedby="bd-e"` : ""}>${err("bd") ? html`<p class="err" id="bd-e" role="alert">${I("circle-alert", "s16")}<span>${err("bd")}</span></p>` : ""}</div>` : ""}</fieldset>
   <details class="card flat pad-sm" ${S.f.ppOpen ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle" data-k="ppOpen">Extra passphrase (only if you set one)</summary><div class="field" style="margin-top:8px"><label class="label" for="pp">Passphrase</label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}"></div></details>

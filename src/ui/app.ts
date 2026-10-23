@@ -174,6 +174,18 @@ function touch(): void {
   void call({ type: "ACTIVITY" }).catch(() => undefined);
 }
 
+/* Live fields re-render after the key event finishes. Replacing a focused input while
+   the browser is still handling the keystroke makes it drop focus. */
+let liveQueued = false;
+function scheduleLive(): void {
+  if (liveQueued) return;
+  liveQueued = true;
+  setTimeout(() => {
+    liveQueued = false;
+    render();
+  }, 0);
+}
+
 export function mount(el: HTMLElement, mode: Mode): void {
   root = el;
   S.mode = mode;
@@ -195,7 +207,8 @@ export function mount(el: HTMLElement, mode: Mode): void {
     const k = t.dataset?.f;
     if (!k) return;
     S.f[k] = t.type === "checkbox" ? t.checked : t.value;
-    if (t.dataset.live !== undefined || t.type === "checkbox") render();
+    if (t.type === "checkbox") render();
+    else if (t.dataset.live !== undefined) scheduleLive();
   };
   document.addEventListener("input", onField);
   document.addEventListener("change", (ev) => {

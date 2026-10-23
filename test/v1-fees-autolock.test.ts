@@ -70,3 +70,24 @@ describe("auto-lock timing", () => {
     expect(autoLockDecision(s, 56 * M, 15, false).lock).toBe(true);
   });
 });
+
+describe("block data service limits", () => {
+  it("treats a 403 request-limit answer as rate limited, for fees and for chain reads", async () => {
+    const { openChain } = await import("../src/lib/chain.ts");
+    const { RateLimitedError } = await import("../src/lib/requests.ts");
+    const { DEFAULT_CHAIN } = await import("../src/lib/network.ts");
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ code: -2004, msg: "exceeded the request limit for unauthenticated requests", data: null }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    try {
+      const chain = openChain(DEFAULT_CHAIN);
+      await expect(chain.feeRates!()).rejects.toBeInstanceOf(RateLimitedError);
+      await expect(chain.getTip()).rejects.toBeInstanceOf(RateLimitedError);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});

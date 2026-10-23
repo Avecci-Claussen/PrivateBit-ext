@@ -73,10 +73,17 @@ export function extractUnisatTxids(data: unknown): string[] {
   return out;
 }
 
+/** Without a key the service answers 403 with code -2004 once its limit is hit. */
+async function throwUnisatHttp(res: Response, url: string): Promise<never> {
+  if (res.status === 429) throw new RateLimitedError(`${url} 429`);
+  const body = await res.json().catch(() => null);
+  if (body && typeof body === "object") unwrapUnisat<unknown>(body, url);
+  throw new Error(`${url} ${res.status}`);
+}
+
 async function unisatGet<T>(url: string, headers: Record<string, string>): Promise<T> {
   const res = await fetch(url, { headers });
-  if (res.status === 429) throw new RateLimitedError(`${url} 429`);
-  if (!res.ok) throw new Error(`${url} ${res.status}`);
+  if (!res.ok) await throwUnisatHttp(res, url);
   return unwrapUnisat<T>(await res.json(), url);
 }
 
@@ -258,7 +265,7 @@ export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): Ch
       // Fee requests go through the requests module so a proxy route can be added later.
       const url = `${root}/v1/indexer/fees/recommended`;
       const res = await fetchVia(route, url, { headers });
-      if (!res.ok) throw new Error(`fees ${res.status}`);
+      if (!res.ok) await throwUnisatHttp(res, url);
       return parseRecommendedFees(unwrapUnisat<unknown>(await res.json(), "fees/recommended"));
     },
   };

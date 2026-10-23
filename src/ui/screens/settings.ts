@@ -83,8 +83,8 @@ function networkForm(): Safe {
     <button class="opt" role="radio" aria-checked="true" type="button">${NETLOGO("fractal", "lg")}<span class="body"><span class="t">Fractal Bitcoin</span><span class="d">Mainnet</span></span>${I("check")}</button>
     <button class="opt" role="radio" aria-checked="false" aria-disabled="true" type="button">${NETLOGO("btc", "lg")}<span class="body"><span class="t">Bitcoin</span><span class="d">Not available in this version</span></span><span class="plan">Unavailable</span></button></div></fieldset>
   <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Where block data comes from</legend><div class="opt-list" role="radiogroup">
-    <button class="opt" role="radio" aria-checked="${!own}" type="button" data-act="set" data-k="src" data-v="service"><span class="body"><span class="t">Public block data service</span><span class="d"><span class="mono">${host(chain().kind === "core" ? DEFAULT_UNISAT_BASE : chain().url, DEFAULT_UNISAT_BASE)}</span>. Easiest. Sees your IP and the payments you broadcast.</span></span>${!own ? I("check") : ""}</button>
-    <button class="opt" role="radio" aria-checked="${own}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own Fractal node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
+    <button class="opt" role="radio" aria-checked="${String(!own)}" type="button" data-act="set" data-k="src" data-v="service"><span class="body"><span class="t">Public block data service</span><span class="d"><span class="mono">${host(chain().kind === "core" ? DEFAULT_UNISAT_BASE : chain().url, DEFAULT_UNISAT_BASE)}</span>. Easiest. Sees your IP and the payments you broadcast.</span></span>${!own ? I("check") : ""}</button>
+    <button class="opt" role="radio" aria-checked="${String(own)}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own Fractal node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
   ${own
     ? html`<button class="rowlink" type="button" data-act="go" data-to="set-node"><span class="body"><span class="t">Node settings</span><span class="d">${chain().kind === "core" ? chain().url : "Not set up yet"}</span></span><span class="v">${I("chevron-right", "s16")}</span></button>`
     : html`<div class="field" data-enter="net-save"><label class="label" for="tok">Data service API key <span class="optl">(optional)</span></label><input class="input" id="tok" data-f="tok" type="password" autocomplete="off" value="${fv("tok")}" aria-describedby="tok-h"><p class="help" id="tok-h">Stored encrypted on this computer only. Without a key the service often limits requests. Leave empty to use it without one.</p></div>`}
@@ -281,7 +281,7 @@ actions["pj-save"] = async () => {
 /* ---------- security (59, 59b) ---------- */
 function lockSeg(id: string): Safe {
   const cur = prefs().lockMinutes;
-  return html`<div class="seg" role="radiogroup" aria-labelledby="${id}">${LOCK_CHOICES.map((m) => html`<button type="button" role="radio" data-act="lock-min" data-v="${m}" aria-checked="${cur === m}">${m} min</button>`)}</div>`;
+  return html`<div class="seg" role="radiogroup" aria-labelledby="${id}">${LOCK_CHOICES.map((m) => html`<button type="button" role="radio" data-act="lock-min" data-v="${m}" aria-checked="${String(cur === m)}">${m} min</button>`)}</div>`;
 }
 screens["set-security"] = () => {
   const b = S.b!;

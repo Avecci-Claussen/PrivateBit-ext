@@ -75,7 +75,7 @@ export function balanceSec(): Safe {
       ? html`<span>Last checked block ${num(st.lastHeight ?? 0)}</span>`
       : html`<span>Up to date, block ${num(st.lastHeight ?? 0)}</span>`;
   return html`<section class="bal" aria-label="Balance">
-  <div class="bal-top"><h2 class="cap row" style="gap:6px">${NETLOGO("fractal")}${sc.on ? "Balance so far" : "Fractal Bitcoin"}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${hide}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
+  <div class="bal-top"><h2 class="cap row" style="gap:6px">${NETLOGO("fractal")}${sc.on ? "Balance so far" : "Fractal Bitcoin"}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
   <p class="bal-amt ${hide ? "hidden" : ""}">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">FB</span></p>
   ${fiat}
   <p class="bal-sub">${hide ? html`<span>Hidden. Use the eye button to show it.</span>` : html`${pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}${blockLine}`}</p></section>`;
@@ -181,7 +181,7 @@ function balPanel(): Safe {
   const p = price();
   const h = health();
   const sc = scanning();
-  return html`<section class="panel" aria-labelledby="b-h"><div class="row between"><h2 id="b-h" class="cap row" style="font:var(--t-caption);gap:6px">${NETLOGO("fractal")}${sc.on ? "Balance so far" : "Fractal Bitcoin"}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${hide}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
+  return html`<section class="panel" aria-labelledby="b-h"><div class="row between"><h2 id="b-h" class="cap row" style="font:var(--t-caption);gap:6px">${NETLOGO("fractal")}${sc.on ? "Balance so far" : "Fractal Bitcoin"}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
   <p class="bigbal">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">FB</span></p>
   ${hide || p.kind === "off" ? "" : p.kind === "na" ? html`<p class="fiat">USD price unavailable</p>` : p.kind === "stale" ? html`<p class="fiat stale">${usd(conf)} <span class="muted">price from ${hm(p.at!)}, not updated</span></p>` : html`<p class="fiat">${usd(conf)} <span class="muted">at $${p.usd!.toFixed(4)}, ${hm(p.at!)}</span></p>`}
   <div class="bal-sub">${!hide && pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}<span>${sc.on ? `Finding coins, block ${num(sc.at)} of ${num(sc.tip)}` : h !== "ok" ? `Last checked block ${num(st.lastHeight ?? 0)}` : `Up to date, block ${num(st.lastHeight ?? 0)}`}</span></div>

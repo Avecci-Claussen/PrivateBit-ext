@@ -143,7 +143,7 @@ function fullActivity(list: HistoryEntry[], filter: string): Safe {
   }
   const e = cur() ?? list[0];
   const sc = scanning();
-  const seg = (k: string, l: string) => html`<button type="button" role="radio" data-act="act-filter" data-v="${k}" aria-checked="${filter === k}">${l}</button>`;
+  const seg = (k: string, l: string) => html`<button type="button" role="radio" data-act="act-filter" data-v="${k}" aria-checked="${String(filter === k)}">${l}</button>`;
   return html`<div class="topbar"><h1>Activity</h1><span class="cap row" style="gap:4px">${I("lock", "s16")}Encrypted, only on this computer</span><div class="seg" role="radiogroup" aria-label="Filter" style="width:360px">${seg("all", "All")}${seg("received", "Received")}${seg("sent", "Sent")}${seg("payjoin", "Payjoin")}</div></div>
   ${h.rebuilding ? html`<div class="card" role="status"><div class="row between"><span class="row strong" style="gap:6px">${I("refresh-cw", "s16 spin")}Rebuilding your activity</span><span class="small num">${sc.pct}%</span></div><div class="progress" role="progressbar" aria-label="Rebuilding activity" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div><p class="small muted">Reading blocks from ${num(sc.from)} again. Checked up to block ${num(sc.at)}. Labels you typed cannot be rebuilt.</p></div>` : ""}
   <div class="grid2 g-main">
