@@ -6,7 +6,7 @@ import { DEFAULT_BIRTHDAY, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACT
 const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
 import { LOCK_CHOICES } from "../../lib/prefs.ts";
 import { PRICE_HOST } from "../../lib/requests.ts";
-import { price } from "../derive.ts";
+import { price, syncLine } from "../derive.ts";
 
 const chain = (): ChainConfig => S.b!.state.chain;
 const prefs = (): Prefs => S.b!.prefs;
@@ -390,7 +390,7 @@ screens["set-scan"] = () => {
     title: "Finding coins",
     header: hdr({ title: "Finding coins" }),
     main: html`
-  <div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Looking from block</span><span class="v mono">${num(st.birthday ?? DEFAULT_BIRTHDAY)}</span></div><div class="r"><span class="k">Checked up to</span><span class="v mono">${num(st.lastHeight ?? 0)}</span></div><div class="r"><span class="k">Status</span><span class="v">${done ? html`<span class="badge ok">${I("circle-check")}Up to date</span>` : html`<span class="badge">${I("refresh-cw")}Finding coins${st.tip ? `, ${num(st.tip - (st.lastHeight ?? 0))} blocks to go` : ""}</span>`}</span></div></div></div>
+  <div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Looking from block</span><span class="v mono">${num(st.birthday ?? DEFAULT_BIRTHDAY)}</span></div><div class="r"><span class="k">Checked up to</span><span class="v mono">${num(st.lastHeight ?? 0)}</span></div><div class="r"><span class="k">Status</span><span class="v">${done ? html`<span class="badge ok">${I("circle-check")}Up to date</span>` : !st.tip ? html`<span class="badge">${I("clock")}${syncLine()}</span>` : html`<span class="badge">${I("refresh-cw")}Finding coins, ${num(st.tip - (st.lastHeight ?? 0))} blocks to go</span>`}</span></div></div></div>
   <div class="field" data-enter="rescan"><label class="label" for="bk">Look again from block</label><input class="input mono" id="bk" data-f="bk" inputmode="numeric" autocomplete="off" value="${fv("bk")}" aria-describedby="bk-h" ${err("bk") ? html`aria-invalid="true"` : ""}><p class="help" id="bk-h">Use this if a payment is missing. Earlier blocks take longer. Silent Payments on Fractal started at block ${num(DEFAULT_BIRTHDAY)}.</p>${errP("bk")}</div>
   <button class="btn btn-ghost btn-sm" type="button" data-act="bk-default" style="align-self:flex-start">Use block ${num(DEFAULT_BIRTHDAY)}</button>`,
     foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="rescan" ${busy("bk") ? html`aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Look again from this block</button>`,
@@ -486,7 +486,7 @@ function fullSettings(): Safe {
   }
   const pr = prefs();
   return html`<div class="topbar"><h1>Settings</h1><span class="cap">Changes save when you select Save in each section</span></div>
-  <div class="settings-grid"><nav class="subnav" aria-label="Settings sections"><a href="#net">Network and data</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
+  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#net">Network and data</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
   <div class="stack" style="gap:var(--s-8)">
     <section class="sect" id="net"><header><h2>Network and data source</h2><p>PrivateBit reads every block and finds your coins on this computer. The data source only sees that you read blocks, plus the payments you broadcast.</p></header>
       ${networkForm()}
@@ -498,9 +498,9 @@ function fullSettings(): Safe {
       <div class="row"><button class="btn btn-primary" type="button" data-act="pj-save">Save</button></div></section>
     <section class="sect" id="sec"><header><h2>Security</h2><p>Lock deletes payment link keys. Auto lock waits while a payment is in progress.</p></header>
       <div class="field"><span class="label" id="alf">Lock after no use for</span><div style="max-width:420px">${lockSeg("alf")}</div><p class="help">Waits while a payment link or Payjoin payment is in progress.</p></div>
-      <div class="row"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove wallet</button></div></section>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove wallet</button></div></section>
     <section class="sect" id="bk"><header><h2>Backup and finding coins</h2><p>Your recovery words restore everything except the labels you typed.</p></header>
-      <div class="row"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button></div>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button></div>
       <p class="cap">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p></section>
   </div></div>`;
 }

@@ -108,6 +108,12 @@ export async function start(mode: Mode): Promise<void> {
     const h = location.hash.replace(/^#\/?/, "");
     if (mode === "full" && h && screens[h] && !LOCKED_ROUTES.has(h)) go(h, {}, { reset: true });
   }
+  if (mode === "full") {
+    window.addEventListener("hashchange", () => {
+      const h = location.hash.replace(/^#\/?/, "");
+      if (S.b?.state.unlocked && h && h !== S.route && screens[h] && !LOCKED_ROUTES.has(h)) go(h, {}, { reset: true });
+    });
+  }
   setInterval(() => void tick(), 4000);
   void tick();
 }

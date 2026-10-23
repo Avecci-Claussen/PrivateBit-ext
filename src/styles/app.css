@@ -14,3 +14,5 @@
 tr.sel td{background:var(--c-surface2)}
 .btn-danger[disabled],.btn-danger[aria-disabled=true]{opacity:.5}
 details > summary{list-style-position:inside}
+button.action{padding:0 4px}
+.panel .li .t{white-space:normal}
