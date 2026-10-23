@@ -308,7 +308,7 @@ screens["send-fee"] = () => {
   const lim = S.d.feesErr === "rate-limited";
   const feeAt = (r: number): bigint => BigInt(Math.ceil(vb * r));
   const opt = (k: "slow" | "normal" | "fast") =>
-    html`<button class="fee" type="button" role="radio" data-act="fee-mode" data-v="${k}" aria-checked="${String(m === k)}" ${f ? "" : html`aria-disabled="true" disabled`}><span class="fn">${k[0]!.toUpperCase() + k.slice(1)}</span><span class="fr">${f ? `${f[k]} sat/vB` : "\u2013"}</span><span class="ft">${TARGET[k]}</span></button>`;
+    html`<button class="fee" type="button" role="radio" data-act="fee-mode" data-v="${k}" aria-checked="${String(m === k)}" ${f ? "" : html`aria-disabled="true" disabled`}><span class="fn">${k[0]!.toUpperCase() + k.slice(1)}</span><span class="fr">${f ? `${f[k]} sat/vB` : "No rate"}</span><span class="ft">${TARGET[k]}</span></button>`;
   const tooLow = chk && !chk.ok && chk.reason === "too-low";
   return {
     title: "Network fee",
@@ -317,7 +317,7 @@ screens["send-fee"] = () => {
   ${!f ? html`<div class="banner warn" role="status">${I("unplug", "s16")}<div><span class="bt">${lim ? "Fee rates are limited right now" : "Fee rates unavailable"}</span>${lim ? "The block data service is limiting requests without an API key." : "The block data service did not answer."} Enter a custom rate, or try again in a minute. <button class="link" type="button" data-act="fees-retry">Try again</button></div></div>` : ""}
   <div class="fees" role="radiogroup" aria-label="Fee speed">${opt("slow")}${opt("normal")}${opt("fast")}</div>
   <div class="field"><label class="label" for="cf">Custom <span class="optl">(sat/vB)</span></label><div class="input-wrap"><input class="input mono" id="cf" data-f="feeCustom" data-live inputmode="decimal" autocomplete="off" placeholder="${String(minRate())}" value="${cv}" ${chk && !chk.ok ? html`aria-invalid="true" aria-describedby="cf-e"` : ""} data-act-focus="custom"><span class="unit">sat/vB</span></div>
-  ${chk && !chk.ok ? html`<p class="err" id="cf-e" role="alert">${I("circle-alert", "s16")}<span>${chk.reason === "too-low" ? `Too low. Below ${minRate()} sat/vB most nodes will not relay it, so it may never confirm and your coins stay stuck until it drops out.` : chk.reason === "too-high" ? "That is far above every current rate. Check the number." : "Enter a number, for example the Normal rate."}</span></p>` : ""}</div>
+  ${chk && !chk.ok ? html`<p class="err" id="cf-e" role="alert">${I("circle-alert", "s16")}<span>${chk.reason === "too-low" ? `Too low. Below ${minRate()} sat/vB most nodes will not relay it, so it may never confirm and your coins stay stuck until it drops out.` : chk.reason === "too-high" ? "That is far above every current rate. Check the number." : "Enter a number, such as the Normal rate."}</span></p>` : ""}</div>
   ${same && !cv ? html`<div class="banner" role="status">${I("info", "s16")}<div><span class="bt">Every speed is ${f!.normal} sat/vB right now</span>Blocks on Fractal are not full, so Normal gets in as fast as Fast.</div></div>` : ""}
   <div class="card"><div class="kv">
     ${tooLow
@@ -601,9 +601,9 @@ function fullSend(): Safe {
   const vb = estimateVbytes(Math.max(1, coinMode() === "choose" ? sel.length : 1), 2);
   const feeEst = rate !== null ? BigInt(Math.ceil(vb * rate)) : null;
   const opts: [FeeMode, string, string, string][] = [
-    ["slow", "Slow", f ? `${f.slow} sat/vB` : "\u2013", "Can wait"],
-    ["normal", "Normal", f ? `${f.normal} sat/vB` : "\u2013", "Next few blocks"],
-    ["fast", "Fast", f ? `${f.fast} sat/vB` : "\u2013", "Next block"],
+    ["slow", "Slow", f ? `${f.slow} sat/vB` : "No rate", "Can wait"],
+    ["normal", "Normal", f ? `${f.normal} sat/vB` : "No rate", "Next few blocks"],
+    ["fast", "Fast", f ? `${f.fast} sat/vB` : "No rate", "Next block"],
     ["custom", "Custom", "sat/vB", "You choose"],
   ];
   const cv = fv("feeCustom");

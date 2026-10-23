@@ -325,7 +325,7 @@ export async function buildSend(args: {
       : request.pj
         ? "This is not a PrivateBit payment link (missing RK/OH). Payjoin will not run. Inputs are yours alone."
         : request.silent
-          ? "Silent Payment — this send's inputs are yours alone. Payjoin only runs when both people use a PrivateBit payment link."
+          ? "Silent Payment. This send's inputs are yours alone. Payjoin only runs when both people use a PrivateBit payment link."
           : "Transparent destination; change is Silent Payment label m=0",
     request,
     change: selected.change,

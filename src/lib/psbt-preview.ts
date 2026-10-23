@@ -44,7 +44,7 @@ export function previewPsbt(psbtBytes: Uint8Array): PsbtPreview {
     }
     const sighash = inp.sighashType;
     if (sighash !== undefined && (sighash & 0x80) !== 0) {
-      warnings.push(`input ${i} uses SIGHASH_ANYONECANPAY — forbidden for Silent Payments`);
+      warnings.push(`input ${i} uses SIGHASH_ANYONECANPAY, which is forbidden for Silent Payments`);
     }
     inputs.push({
       kind: "in",
