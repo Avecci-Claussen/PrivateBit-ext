@@ -99,7 +99,7 @@ export function encodeSilentAddress(
 }
 
 export function decodeSilentAddress(addr: string): SilentAddress {
-  const { prefix, words } = bech32m.decode(addr, 1023);
+  const { prefix, words } = bech32m.decode(addr as `${string}1${string}`, 1023);
   if (words.length < 1) throw new Error("empty silent address");
   const version = words[0];
   if (version === 31) throw new Error("silent payment v31 is incompatible");

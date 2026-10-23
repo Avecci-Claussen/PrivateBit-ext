@@ -79,7 +79,7 @@ describe("BIP352 official vectors", () => {
       for (const receiving of tc.receiving) {
         const eligible = extractEligibleVins(receiving.given.vin);
         if (!eligible || eligible.length === 0) {
-          expect(receiving.expected.outputs.length).toBe(0);
+          expect(receiving.expected.outputs!.length).toBe(0);
           continue;
         }
         const scanSecret = fromHex(receiving.given.key_material.scan_priv_key);

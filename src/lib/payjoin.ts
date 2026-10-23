@@ -110,13 +110,14 @@ export function assertPayjoinLink(request: PaymentRequest): string {
   }
   if (!isMailboxPj(pj)) throw new Error("pj= is not a BIP77 mailbox URL");
   receiverKeyOf(request, pj);
-  if (!request.ohttp && !ohttpFromPj(pj, {})) {
+  if (!request.ohttp && !ohttpFromPj(pj, {} as PayjoinConfig)) {
     throw new Error("BIP77 Payjoin needs OH in the payment link");
   }
   return pj;
 }
 
 export type PostedOriginal = {
+  ok?: undefined;
   pj: string;
   replySk: Uint8Array;
   replyPk: Uint8Array;

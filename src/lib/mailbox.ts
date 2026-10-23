@@ -141,7 +141,7 @@ export function ohttpRelayTransport(cfg: OhttpKeyConfig, relay: string): Mailbox
       const res = await fetch(relay, {
         method: "POST",
         headers: { "content-type": "message/ohttp-req" },
-        body: wire,
+        body: wire as unknown as BodyInit,
       });
       return new Uint8Array(await res.arrayBuffer());
     });
@@ -160,7 +160,7 @@ export function ohttpGatewayTransport(cfg: OhttpKeyConfig, directory: string): M
       const res = await fetch(gateway, {
         method: "POST",
         headers: { "content-type": "message/ohttp-req" },
-        body: wire,
+        body: wire as unknown as BodyInit,
       });
       return new Uint8Array(await res.arrayBuffer());
     });
@@ -183,7 +183,7 @@ export function fetchTransport(): MailboxTransport {
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": bytes.length > 1000 ? "application/octet-stream" : "text/plain" },
-        body: bytes,
+        body: bytes as unknown as BodyInit,
       });
       const out = new Uint8Array(await res.arrayBuffer());
       return { status: res.status, bytes: out, body: utf8d.decode(out).trim() };
@@ -193,7 +193,7 @@ export function fetchTransport(): MailboxTransport {
       const res = await fetch(url, {
         method: "PUT",
         headers: { "content-type": "application/octet-stream" },
-        body: bytes,
+        body: bytes as unknown as BodyInit,
       });
       const out = new Uint8Array(await res.arrayBuffer());
       return { status: res.status, bytes: out, body: utf8d.decode(out).trim() };
