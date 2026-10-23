@@ -9,7 +9,7 @@ import {
 } from "./bip352.ts";
 import { evenPriv } from "./schnorr-util.ts";
 import { concatBytes, fromHex, hex } from "./bytes.ts";
-import { coinSelect } from "./coinselect.ts";
+import { coinSelect, estimateVbytes, maxSendable } from "./coinselect.ts";
 import type { Account } from "./keys.ts";
 import { CHANGE_LABEL, FRACTAL } from "./network.ts";
 import { parseBip21, type PaymentRequest } from "./bip21.ts";
@@ -19,7 +19,7 @@ import { scureIdHex, voutFromParentHex } from "./tx.ts";
 import { previewPsbtBase64 } from "./psbt-preview.ts";
 import type { ChainSource } from "./chain.ts";
 
-const NETWORK: btc.BTC_NETWORK = {
+const NETWORK: typeof btc.NETWORK = {
   bech32: FRACTAL.bech32,
   pubKeyHash: FRACTAL.pubKeyHash,
   scriptHash: FRACTAL.scriptHash,
@@ -33,7 +33,31 @@ export type SignableInput = {
   label: number | null;
   value: string;
   scriptPubKey: string;
+  kind?: "sp" | "bip86";
+  index?: number;
 };
+
+/**
+ * Private key for one of our inputs. Silent Payment coins use spendSecret + tweak (unchanged).
+ * A migration one-time coin uses its BIP86 key-path secret (internal key tweaked by TapTweak).
+ */
+export function inputSecret(
+  account: Account,
+  u: { tweak: string; label: number | null; kind?: "sp" | "bip86"; index?: number; scriptPubKey?: string },
+): Uint8Array {
+  if (u.kind === "bip86") {
+    if (u.index === undefined) throw new Error("one-time coin without an index");
+    const k = account.oneTime(u.index);
+    if (u.scriptPubKey && u.scriptPubKey !== k.scriptPubKey) throw new Error("one-time coin script mismatch");
+    return k.secret;
+  }
+  return spendSecret({
+    spendSecret: account.spendSecret,
+    tweak: fromHex(u.tweak),
+    label: u.label,
+    scanSecret: account.scanSecret,
+  });
+}
 
 export type BuiltSend = {
   psbtBase64: string;
@@ -42,6 +66,8 @@ export type BuiltSend = {
   request: PaymentRequest;
   change: bigint;
   fee: bigint;
+  amount: bigint;
+  vbytes: number;
   silentOutputs: string[];
   ourOutputs: OwnedOutput[];
   signableInputs: SignableInput[];
@@ -53,6 +79,11 @@ export type PlanPayload = {
   request: { address: string; silent: boolean; pj?: string; amount?: string };
   change: string;
   fee: string;
+  /** Amount paid to the destination, sats. */
+  amount: string;
+  /** Outpoints spent. */
+  inputs: string[];
+  vbytes: number;
   ourOutputs: OwnedOutput[];
   hasPayjoin: boolean;
   preview: {
@@ -77,6 +108,9 @@ export function planPayload(built: BuiltSend): PlanPayload {
     },
     change: built.change.toString(),
     fee: built.fee.toString(),
+    amount: built.amount.toString(),
+    inputs: built.signableInputs.map((u) => `${u.txid}:${u.vout}`),
+    vbytes: built.vbytes,
     ourOutputs: built.ourOutputs,
     hasPayjoin: destinationNeedsPayjoin(built.request),
     preview: {
@@ -123,14 +157,7 @@ export function signPayjoinProposal(args: {
         throw new Error("Payjoin proposal uses a forbidden sighash on our input");
       }
     }
-    const d = evenPriv(
-      spendSecret({
-        spendSecret: args.account.spendSecret,
-        tweak: fromHex(u.tweak),
-        label: u.label,
-        scanSecret: args.account.scanSecret,
-      }),
-    );
+    const d = evenPriv(inputSecret(args.account, u));
     const preimage = tx.preimageWitnessV1(i, prevScripts, btc.SigHash.DEFAULT, amounts);
     const sig = schnorr.sign(preimage, d);
     tx.updateInput(i, { finalScriptWitness: [sig] });
@@ -161,13 +188,20 @@ export async function buildSend(args: {
   feeRate: number;
   source: ChainSource;
   skipOutpoints?: Set<string>;
+  /** Manual coin choice: exactly these outpoints, nothing else is added. */
+  include?: string[];
+  /** Send everything spendable (or everything chosen) in one output, no change. */
+  max?: boolean;
 }): Promise<BuiltSend> {
   const request = parseBip21(args.destination);
-  const payAmount = request.amount ?? args.amount;
+  if (args.max && request.amount !== undefined) throw new Error("Max is not allowed when the link sets the amount");
+  const payAmount = args.max
+    ? maxSendable(args.utxos, args.feeRate, args.skipOutpoints, args.include).amount
+    : request.amount ?? args.amount;
   if (payAmount <= 0n) throw new Error("amount required");
 
-  const extraOut = 1; // change
-  const selected = coinSelect(args.utxos, payAmount, args.feeRate, extraOut, args.skipOutpoints);
+  const extraOut = args.max ? 0 : 1; // change
+  const selected = coinSelect(args.utxos, payAmount, args.feeRate, extraOut, args.skipOutpoints, args.include);
 
   const tx = new btc.Transaction({ allowUnknownOutputs: true });
   const prevScripts: Uint8Array[] = [];
@@ -216,12 +250,7 @@ export async function buildSend(args: {
     for (const u of selected.inputs) {
       const parent = await args.source.getTxHex(u.txid);
       const prev = voutFromParentHex(parent, u.vout);
-      const d = spendSecret({
-        spendSecret: args.account.spendSecret,
-        tweak: fromHex(u.tweak),
-        label: u.label,
-        scanSecret: args.account.scanSecret,
-      });
+      const d = inputSecret(args.account, u);
       vins.push({
         txid: u.txid,
         vout: u.vout,
@@ -256,12 +285,7 @@ export async function buildSend(args: {
       for (const u of selected.inputs) {
         const parent = await args.source.getTxHex(u.txid);
         const prev = voutFromParentHex(parent, u.vout);
-        const d = spendSecret({
-          spendSecret: args.account.spendSecret,
-          tweak: fromHex(u.tweak),
-          label: u.label,
-          scanSecret: args.account.scanSecret,
-        });
+        const d = inputSecret(args.account, u);
         vins.push({
           txid: u.txid,
           vout: u.vout,
@@ -285,14 +309,7 @@ export async function buildSend(args: {
 
   for (let i = 0; i < selected.inputs.length; i++) {
     const u = selected.inputs[i];
-    const d = evenPriv(
-      spendSecret({
-        spendSecret: args.account.spendSecret,
-        tweak: fromHex(u.tweak),
-        label: u.label,
-        scanSecret: args.account.scanSecret,
-      }),
-    );
+    const d = evenPriv(inputSecret(args.account, u));
     const preimage = tx.preimageWitnessV1(i, prevScripts, btc.SigHash.DEFAULT, amounts);
     const sig = schnorr.sign(preimage, d);
     tx.updateInput(i, { finalScriptWitness: [sig] });
@@ -313,6 +330,8 @@ export async function buildSend(args: {
     request,
     change: selected.change,
     fee: selected.fee,
+    amount: payAmount,
+    vbytes: estimateVbytes(selected.inputs.length, tx.outputsLength),
     silentOutputs,
     ourOutputs,
     signableInputs: selected.inputs.map((u) => ({
@@ -322,6 +341,7 @@ export async function buildSend(args: {
       label: u.label,
       value: u.value,
       scriptPubKey: u.scriptPubKey,
+      ...(u.kind === "bip86" ? { kind: "bip86" as const, index: u.index } : {}),
     })),
   };
 }
