@@ -327,7 +327,7 @@ actions["import-continue"] = () => {
   S.f.mnTried = true;
   const c = checkMnemonic(fv("mn"));
   S.err = {};
-  if (birthdayValue() === null) S.err.bd = "Enter a block number, for example the block of your first payment.";
+  if (birthdayValue() === null) S.err.bd = "Enter a block number, such as the block of your first payment.";
   if (!c.ok || S.err.bd) {
     render();
     return;

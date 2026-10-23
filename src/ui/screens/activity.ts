@@ -44,7 +44,7 @@ screens.activity = () => {
     main = html`<h1 style="font:var(--t-title)">Activity</h1>
   <div class="card" role="status"><div class="row between"><span class="row strong" style="gap:6px">${I("refresh-cw", "s16 spin")}Rebuilding your activity</span><span class="small num">${sc.pct}%</span></div>
     <div class="progress" role="progressbar" aria-label="Rebuilding activity" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div>
-    <p class="small muted">History was not on this computer, for example after restoring from recovery words. PrivateBit is reading blocks from ${num(sc.from)} again. Checked up to block ${num(sc.at)}.</p></div>
+    <p class="small muted">History was not on this computer, such as after restoring from recovery words. PrivateBit is reading blocks from ${num(sc.from)} again. Checked up to block ${num(sc.at)}.</p></div>
   ${h.entries.length ? html`<p class="day">Found so far</p><div class="list">${h.entries.map((e) => actRow(e))}</div>` : ""}
   <p class="small muted">Labels you typed and notes are not on the chain, so they cannot be rebuilt. Amounts, dates and fees can.</p>`;
   } else if (!h.entries.length) {
