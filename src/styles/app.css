@@ -1,0 +1,20 @@
+/* Extension-only additions on top of the design system. */
+.popup-body{width:360px;height:600px;overflow:hidden}
+.popup-body #app{width:360px;height:600px}
+button.li{width:100%;text-align:left;font:inherit;color:inherit;background:none;border:0}
+button.rowlink{width:100%;text-align:left;font:inherit;color:inherit}
+button.action{font:inherit;border:0;cursor:pointer}
+.card.pad-sm[type=button]{border-width:1px}
+.solo{min-height:100dvh;display:grid;place-items:center;padding:var(--s-8) var(--s-4);background:var(--c-bg)}
+.solo .pb-expand{width:360px;border:1px solid var(--c-border);border-radius:var(--r-xl);overflow:hidden;box-shadow:var(--shadow-3)}
+.solo .popup{position:relative}
+.flowpanel{max-width:560px}
+.foot.inpanel{position:static;border-top:0;padding:0;background:none;margin-top:var(--s-2)}
+.fp-overlay{position:fixed;inset:0;z-index:var(--z-modal);display:grid;place-items:center}
+.fp-overlay .scrim{position:fixed}
+.fp-overlay .sheet{position:relative;left:auto;right:auto;bottom:auto;width:min(440px,calc(100vw - 32px));border-radius:var(--r-xl);max-height:80dvh}
+.fp-overlay .dialog{position:relative;left:auto;right:auto;top:auto;transform:none;width:min(400px,calc(100vw - 32px))}
+.fp-toast .toast{position:fixed;left:50%;right:auto;transform:translateX(-50%);bottom:24px;min-width:240px}
+tr.sel td{background:var(--c-surface2)}
+.btn-danger[disabled],.btn-danger[aria-disabled=true]{opacity:.5}
+details > summary{list-style-position:inside}

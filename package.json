@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Fractal Bitcoin wallet. Silent Payments. Payjoin. Local keys.",
+  "description": "Private Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
   "scripts": {
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
     "directory": "node --experimental-strip-types directory/server.ts"
@@ -17,11 +17,13 @@
     "@scure/base": "^1.2.6",
     "@scure/bip32": "^1.7.0",
     "@scure/bip39": "^1.6.0",
-    "@scure/btc-signer": "^1.8.1"
+    "@scure/btc-signer": "^1.8.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
     "@types/node": "^22.20.5",
+    "@types/qrcode": "^1.5.6",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
     "vitest": "^3.1.4"

@@ -1,0 +1,59 @@
+/* Full page (options / expanded view). Responsive: sidebar >= 1024, top bar below. */
+.app{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100dvh;background:var(--c-bg)}
+.side{border-right:1px solid var(--c-border);padding:var(--s-4) var(--s-3);display:flex;flex-direction:column;gap:var(--s-6);position:sticky;top:0;height:100dvh;background:var(--c-bg)}
+.brandrow{display:flex;align-items:center;gap:var(--s-2);padding:0 var(--s-2);font:var(--t-title)}
+.side nav{display:flex;flex-direction:column;gap:2px}
+.side nav a{display:flex;align-items:center;gap:var(--s-3);height:40px;padding:0 var(--s-3);border-radius:var(--r-md);color:var(--c-fg2);text-decoration:none;font:var(--t-body-strong)}
+.side nav a[aria-current=page]{background:var(--c-surface2);color:var(--c-fg)}
+.side nav a[aria-current=page] svg{color:var(--c-accent-text)}
+@media (hover:hover) and (pointer:fine){.side nav a:hover{background:var(--c-surface2);color:var(--c-fg)}}
+.side .grp{font:var(--t-caption);color:var(--c-fg2);padding:0 var(--s-3);margin-bottom:var(--s-1)}
+.side .foot-s{margin-top:auto;display:flex;flex-direction:column;gap:var(--s-2)}
+.content{padding:var(--s-6) var(--s-8) var(--s-12);display:flex;flex-direction:column;gap:var(--s-6);min-width:0;max-width:1200px;width:100%}
+.topbar{display:flex;align-items:center;gap:var(--s-3);flex-wrap:wrap}
+.topbar h1{font:600 24px/32px var(--font-sans);flex:1;min-width:0}
+.grid2{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:var(--s-6);align-items:start}
+.panel{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-lg);padding:var(--s-5);display:flex;flex-direction:column;gap:var(--s-4);min-width:0}
+.panel h2{font:var(--t-title)}
+.bigbal{font:600 40px/44px var(--font-sans);font-variant-numeric:tabular-nums;letter-spacing:-0.01em}
+.bigbal .unit{font:var(--t-title);color:var(--c-fg2);margin-left:6px}
+table.t{width:100%;border-collapse:collapse;font:var(--t-small)}
+table.t th{font:var(--t-caption);color:var(--c-fg2);text-align:left;padding:var(--s-2) var(--s-3);border-bottom:1px solid var(--c-border);white-space:nowrap}
+table.t td{padding:var(--s-3);border-bottom:1px solid var(--c-border);vertical-align:middle}
+table.t tr:last-child td{border-bottom:0}
+table.t .r{text-align:right}
+table.t td.amt{font:var(--t-mono);font-weight:500;text-align:right;white-space:nowrap}
+.tscroll{overflow-x:auto;margin:0 calc(var(--s-5) * -1);padding:0 var(--s-5)}
+.mobilebar{display:none}
+.settings-grid{display:grid;grid-template-columns:200px minmax(0,720px);gap:var(--s-8);align-items:start}
+.subnav{display:flex;flex-direction:column;gap:2px;position:sticky;top:var(--s-6)}
+.subnav a{padding:var(--s-2) var(--s-3);border-radius:var(--r-md);color:var(--c-fg2);text-decoration:none;font:var(--t-body-strong)}
+.subnav a[aria-current=true]{background:var(--c-surface2);color:var(--c-fg)}
+.sect{display:flex;flex-direction:column;gap:var(--s-4);padding-bottom:var(--s-8);border-bottom:1px solid var(--c-border);scroll-margin-top:var(--s-6)}
+.sect:last-child{border-bottom:0}
+.sect > header h2{font:var(--t-title)}
+.sect > header p{color:var(--c-fg2);margin-top:4px;max-width:65ch}
+.who{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:var(--s-3)}
+@media (max-width:1023px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{display:none}
+  .mobilebar{display:flex;align-items:center;gap:var(--s-2);height:56px;padding:0 var(--s-4);border-bottom:1px solid var(--c-border);position:sticky;top:0;background:var(--c-bg);z-index:var(--z-sticky)}
+  .mobilebar .spacer{flex:1}
+  .content{padding:var(--s-5) var(--s-4) var(--s-10)}
+  .grid2{grid-template-columns:minmax(0,1fr)}
+  .settings-grid{grid-template-columns:minmax(0,1fr)}
+  .subnav{position:static;flex-direction:row;overflow-x:auto;gap:var(--s-1);padding-bottom:var(--s-1)}
+  .subnav a{white-space:nowrap}
+}
+@media (max-width:639px){ .col-hide{display:none} .bigbal{font-size:32px;line-height:36px} }
+/* visual pass fix: page title never collides with actions on narrow screens */
+.topbar{flex-wrap:wrap;row-gap:var(--s-3)}
+@media (max-width:639px){.topbar h1{flex-basis:100%;margin-right:0}.topbar .btn{flex:1 1 0;min-width:0}}
+@media (max-width:639px){.topbar .btn{padding-inline:var(--s-2);gap:var(--s-1)}}
+.g-main{grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr)}
+.fees4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.nw{white-space:nowrap}
+.m-only{display:none}
+@media (max-width:1023px){.g-main{grid-template-columns:minmax(0,1fr)}.g-main > aside{position:static!important}}
+@media (max-width:639px){.fees4{grid-template-columns:repeat(2,minmax(0,1fr))}.m-only{display:block;margin-top:4px}.tb-note{flex-basis:100%;order:3}}
+.panel > .row.between{flex-wrap:wrap;row-gap:var(--s-3)}
