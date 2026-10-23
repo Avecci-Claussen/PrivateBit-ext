@@ -2,26 +2,49 @@
   "manifest_version": 3,
   "name": "PrivateBit",
   "version": "1.0.0",
-  "description": "Fractal Bitcoin wallet. Silent Payments. Payjoin. Local keys.",
+  "description": "Private Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
   "action": {
     "default_title": "PrivateBit",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "options_page": "full.html",
-  "permissions": ["storage", "alarms", "clipboardWrite"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "clipboardWrite"
+  ],
   "host_permissions": [
     "https://payjo.in/*",
     "https://pj.bobspacebkk.com/*",
     "https://open-api-fractal.unisat.io/*",
+    "https://api.coingecko.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "options_ui": {
+    "page": "full.html",
+    "open_in_tab": true
   }
 }

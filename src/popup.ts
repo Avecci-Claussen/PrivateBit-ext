@@ -1,3 +1,2 @@
-import { mount } from "./ui.ts";
-
-mount(document.getElementById("app")!, { settings: false });
+import { start } from "./ui/main.ts";
+void start("popup");

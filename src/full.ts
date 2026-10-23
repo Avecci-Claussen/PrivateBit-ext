@@ -1,3 +1,2 @@
-import { mount } from "./ui.ts";
-
-mount(document.getElementById("app")!, { settings: true });
+import { start } from "./ui/main.ts";
+void start("full");

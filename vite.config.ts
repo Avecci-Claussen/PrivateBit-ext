@@ -4,6 +4,9 @@ import { copyFileSync } from "node:fs";
 
 export default defineConfig({
   base: "./",
+  // Nothing from the environment is ever compiled in: no VITE_ variables, no keys.
+  envPrefix: "PRIVATEBIT_BUILD_NEVER_",
+  publicDir: "public",
   plugins: [
     {
       name: "copy-manifest",
@@ -15,7 +18,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "popup.html"),
