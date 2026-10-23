@@ -168,6 +168,8 @@ export type SessionView = {
   reservedOutpoint?: string;
   destination?: string;
   txid?: string;
+  /** Send role: coins the signed original spends. Sending without Payjoin must reuse them. */
+  inputs?: string[];
 };
 
 export type BroadcastResult = { kind: "txid"; txid: string } | { kind: "payjoin-pending" };
@@ -1001,6 +1003,7 @@ export class PrivateBit {
       expiresAt: s.expiresAt,
       destination: s.destination,
       txid: s.txid,
+      inputs: s.signableInputs.map((i) => `${i.txid}:${i.vout}`),
     }));
     return [...rec, ...snd].sort((a, b) => b.createdAt - a.createdAt);
   }
