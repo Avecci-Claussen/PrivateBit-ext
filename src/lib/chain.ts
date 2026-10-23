@@ -1,4 +1,5 @@
 import { rejectAddressUtxoAsSot } from "./policy.ts";
+import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
 import { FRACTAL, migrateChainConfig, type ChainConfig, type ChainKind } from "./network.ts";
 
 export type Tip = { height: number; hash: string };
@@ -12,7 +13,16 @@ export type ChainSource = {
   getTxHex(txid: string): Promise<string>;
   broadcast(txHex: string): Promise<string>;
   estimateFeeSatPerVb(): Promise<number>;
+  /** Fee tiers for the picker. Optional so test doubles can omit it. */
+  feeRates?(): Promise<FeeRates>;
 };
+
+/** Fee tiers for any source; falls back to one rate for every tier. */
+export async function feeRatesOf(source: ChainSource): Promise<FeeRates> {
+  if (source.feeRates) return source.feeRates();
+  const r = await source.estimateFeeSatPerVb();
+  return { fast: r, normal: r, slow: r, minimum: 1, source: "fallback" };
+}
 
 /** Methods that look like an address-UTXO index. Calling them is a policy violation. */
 export type ForbiddenSot = {
@@ -37,6 +47,9 @@ type UnisatEnvelope = { code?: number; msg?: string; data?: unknown };
 export function unwrapUnisat<T>(body: unknown, path: string): T {
   if (!body || typeof body !== "object") throw new Error(`unisat ${path}: empty`);
   const env = body as UnisatEnvelope;
+  if (env.code === -2004 || /request limit/i.test(env.msg ?? "")) {
+    throw new RateLimitedError(`unisat ${path}: ${env.msg ?? "rate limited"}`);
+  }
   if (env.code !== 0) throw new Error(`unisat ${path}: ${env.msg ?? String(env.code)}`);
   return env.data as T;
 }
@@ -62,6 +75,7 @@ export function extractUnisatTxids(data: unknown): string[] {
 
 async function unisatGet<T>(url: string, headers: Record<string, string>): Promise<T> {
   const res = await fetch(url, { headers });
+  if (res.status === 429) throw new RateLimitedError(`${url} 429`);
   if (!res.ok) throw new Error(`${url} ${res.status}`);
   return unwrapUnisat<T>(await res.json(), url);
 }
@@ -111,6 +125,25 @@ export function coreSource(cfg: ChainConfig): ChainSource {
       if (!r.feerate) return 1;
       return Math.max(1, Math.ceil((r.feerate * 1e8) / 1000));
     },
+    async feeRates() {
+      const rate = async (target: number): Promise<number | undefined> => {
+        const r = (await rpc(cfg.url, auth, "estimatesmartfee", [target])) as { feerate?: number };
+        return r.feerate ? Math.max(1, (r.feerate * 1e8) / 1000) : undefined;
+      };
+      const [f, n, sl] = [await rate(1), await rate(3), await rate(6)];
+      const info = (await rpc(cfg.url, auth, "getmempoolinfo")) as { mempoolminfee?: number };
+      const minimum = info.mempoolminfee ? Math.max(0.1, (info.mempoolminfee * 1e8) / 1000) : 1;
+      const normal = n ?? f ?? sl ?? 1;
+      return {
+        fast: Math.max(f ?? normal, normal),
+        normal,
+        slow: Math.min(sl ?? normal, normal),
+        minimum: Math.min(minimum, sl ?? normal),
+        updatedAt: Date.now(),
+        source: "node" as const,
+        targets: { fast: 1, normal: 3, slow: 6 },
+      };
+    },
   };
 }
 
@@ -128,7 +161,7 @@ function unisatHeaders(token?: string): Record<string, string> {
  * Address UTXO helpers are intentionally omitted so they cannot become SoT.
  * Never talks to mempool.fractalbitcoin.io.
  */
-export function unisatSource(cfg: ChainConfig): ChainSource {
+export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): ChainSource {
   const migrated = migrateChainConfig(cfg);
   const root = (migrated.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
   const headers = unisatHeaders(migrated.unisatToken);
@@ -220,6 +253,13 @@ export function unisatSource(cfg: ChainConfig): ChainSource {
       }>(`${root}/v1/indexer/fees/recommended`, headers);
       const fee = data.halfHourFee ?? data.hourFee ?? data.fastestFee ?? data.economyFee ?? 1;
       return Math.max(1, Math.ceil(fee));
+    },
+    async feeRates() {
+      // Fee requests go through the requests module so a proxy route can be added later.
+      const url = `${root}/v1/indexer/fees/recommended`;
+      const res = await fetchVia(route, url, { headers });
+      if (!res.ok) throw new Error(`fees ${res.status}`);
+      return parseRecommendedFees(unwrapUnisat<unknown>(await res.json(), "fees/recommended"));
     },
   };
 }

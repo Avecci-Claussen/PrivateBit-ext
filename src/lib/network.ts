@@ -30,6 +30,17 @@ export const DEFAULT_BIRTHDAY = 2_228_749;
 
 export type ChainKind = "core" | "unisat";
 
+/** Secrets that are stored encrypted (privatebit.chain.secrets), never in privatebit.chain. */
+export type ChainSecrets = { unisatToken?: string; rpcPassword?: string };
+
+export function splitChainSecrets(cfg: ChainConfig): { plain: ChainConfig; secrets: ChainSecrets } {
+  const { unisatToken, rpcPassword, ...plain } = cfg;
+  const secrets: ChainSecrets = {};
+  if (unisatToken) secrets.unisatToken = unisatToken;
+  if (rpcPassword) secrets.rpcPassword = rpcPassword;
+  return { plain: plain as ChainConfig, secrets };
+}
+
 export type ChainConfig = {
   kind: ChainKind;
   /** Core RPC URL, or UniSat Open API base. */
@@ -48,32 +59,32 @@ export const DEFAULT_PAYJOIN_DIRECTORY = "https://payjo.in";
 /** Default OHTTP relay used with payjo.in (BIP77 ecosystem). */
 export const DEFAULT_OHTTP_RELAY = "https://pj.bobspacebkk.com";
 
-function envString(key: "VITE_UNISAT_API_KEY" | "VITE_UNISAT_BASE"): string {
-  const v = import.meta.env[key];
-  return typeof v === "string" ? v.trim() : "";
-}
-
+/**
+ * No API key is ever baked into the build. The key is optional, entered by the user in
+ * Settings and stored encrypted. Node tests may pass PRIVATEBIT_LIVE_TEST_UNISAT_KEY through the process
+ * environment to run the live tests; the extension has no process and reads nothing here.
+ */
 export function envUnisatToken(): string {
-  return envString("VITE_UNISAT_API_KEY");
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  return (env?.PRIVATEBIT_LIVE_TEST_UNISAT_KEY ?? "").trim();
 }
 
 export function envUnisatBase(): string {
-  return envString("VITE_UNISAT_BASE") || FRACTAL.defaultUnisat;
+  return FRACTAL.defaultUnisat;
 }
 
 export const DEFAULT_CHAIN: ChainConfig = {
   kind: "unisat",
-  url: envUnisatBase(),
-  unisatToken: envUnisatToken(),
+  url: FRACTAL.defaultUnisat,
   payjoinDirectory: DEFAULT_PAYJOIN_DIRECTORY,
   ohttpRelay: DEFAULT_OHTTP_RELAY,
 };
 
 const MEMPOOL_HOST = "mempool.fractalbitcoin.io";
 
-/** Drop Esplora / mempool hosts. Token comes from .env.local at build if unset. */
-export function migrateChainConfig(cfg?: Partial<ChainConfig> & { kind?: string; url?: string }): ChainConfig {
-  const token = (cfg?.unisatToken && cfg.unisatToken.length > 0 ? cfg.unisatToken : envUnisatToken()) || undefined;
+/** Drop Esplora / mempool hosts. The token is only what the user saved; nothing comes from the build. */
+export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { kind?: string; url?: string }): ChainConfig {
+  const token = cfg?.unisatToken && cfg.unisatToken.length > 0 ? cfg.unisatToken : undefined;
   const rawDir = cfg?.payjoinDirectory?.trim() || DEFAULT_PAYJOIN_DIRECTORY;
   const payjoinDirectory = /ntfy\.sh/i.test(rawDir) ? DEFAULT_PAYJOIN_DIRECTORY : rawDir;
   const ohttpRelay = cfg?.ohttpRelay?.trim() || DEFAULT_OHTTP_RELAY;
@@ -90,13 +101,13 @@ export function migrateChainConfig(cfg?: Partial<ChainConfig> & { kind?: string;
   if (cfg?.kind === "esplora" || (cfg?.url && cfg.url.includes(MEMPOOL_HOST))) {
     return {
       kind: "unisat",
-      url: envUnisatBase(),
+      url: FRACTAL.defaultUnisat,
       unisatToken: token,
       payjoinDirectory,
       ohttpRelay,
     };
   }
-  const url = (cfg?.url || envUnisatBase()).replace(/\/$/, "");
+  const url = (cfg?.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
   return {
     kind: "unisat",
     url,
