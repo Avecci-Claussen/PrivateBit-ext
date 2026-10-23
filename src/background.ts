@@ -1,15 +1,62 @@
 import { chromeKv } from "./chrome-kv.ts";
 import { jsonSafe } from "./lib/json.ts";
-import { DEFAULT_CHAIN, redactChain, type ChainConfig } from "./lib/network.ts";
+import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, redactChain, type ChainConfig } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
+import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
+import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
+import { getPrice, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates } from "./lib/requests.ts";
+import { createMnemonic } from "./lib/vault.ts";
+import { openChain } from "./lib/chain.ts";
+import type { CoinMeta } from "./lib/coinmeta.ts";
 
-const wallet = new PrivateBit(chromeKv(), DEFAULT_CHAIN);
+const kv = chromeKv();
+const wallet = new PrivateBit(kv, DEFAULT_CHAIN);
 const FOLLOW_ALARM = "privatebit.follow-tip";
 const PJ_ALARM = "privatebit.payjoin";
 const PJ_SOON = "privatebit.payjoin.soon";
+const LOCK_ALARM = "privatebit.autolock";
+const PRICE_ALARM = "privatebit.price";
 
-function ensureFollowAlarm(): void {
+const ACTIVITY_KEY = "privatebit.activity";
+const LOCKINFO_KEY = "privatebit.lockinfo";
+const HEALTH_KEY = "privatebit.health";
+const PRICE_KEY = "privatebit.price";
+const ONBOARD_KEY = "privatebit.onboard";
+const FEES_KEY = "privatebit.fees";
+
+export type Health = { state: "ok" | "rate-limited" | "offline" | "error"; since?: number; at: number; detail?: string };
+export type PriceCache = { usd?: number; at?: number; fetchedAt?: number; failedAt?: number };
+export type LockInfo = { by: "auto" | "user"; minutes?: number; at: number };
+
+async function getPrefs(): Promise<Prefs> {
+  return normalizePrefs((await kv.get([PREFS_KEY]))[PREFS_KEY]);
+}
+
+function errorCode(e: unknown): "rate-limited" | "offline" | undefined {
+  if (e instanceof RateLimitedError) return "rate-limited";
+  const m = e instanceof Error ? e.message : String(e);
+  if (/rate limit|request limit|429/i.test(m)) return "rate-limited";
+  if (e instanceof TypeError || /failed to fetch|fetch failed|network|ECONN|ENOTFOUND/i.test(m)) return "offline";
+  return undefined;
+}
+
+async function noteHealth(e?: unknown): Promise<void> {
+  const prev = (await kv.get([HEALTH_KEY]))[HEALTH_KEY] as Health | undefined;
+  const now = Date.now();
+  if (!e) {
+    await kv.set({ [HEALTH_KEY]: { state: "ok", at: now } satisfies Health });
+    return;
+  }
+  const code = errorCode(e);
+  if (!code) return; // locked, no vault, or a logic error: not a reachability problem
+  const since = prev && prev.state === code ? (prev.since ?? prev.at) : now;
+  await kv.set({ [HEALTH_KEY]: { state: code, since, at: now } satisfies Health });
+}
+
+function ensureAlarms(): void {
   chrome.alarms.create(FOLLOW_ALARM, { periodInMinutes: 1, delayInMinutes: 1 });
+  chrome.alarms.create(LOCK_ALARM, { periodInMinutes: 1, delayInMinutes: 1 });
+  chrome.alarms.create(PRICE_ALARM, { periodInMinutes: PRICE_PERIOD_MIN, delayInMinutes: PRICE_PERIOD_MIN });
 }
 
 function schedulePayjoinWake(): void {
@@ -31,15 +78,53 @@ async function pumpPayjoin(): Promise<void> {
   }
 }
 
+async function isUnlocked(): Promise<boolean> {
+  return !!(await wallet.dataKey());
+}
+
+async function checkAutoLock(): Promise<void> {
+  if (!(await isUnlocked())) return;
+  const prefs = await getPrefs();
+  const now = Date.now();
+  const got = (await kv.get([ACTIVITY_KEY]))[ACTIVITY_KEY] as ActivityState | undefined;
+  const state = got ?? touch(undefined, now);
+  const d = autoLockDecision(state, now, prefs.lockMinutes, await wallet.waitingPayjoin());
+  if (d.lock) {
+    await wallet.lock();
+    await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+    await kv.set({ [LOCKINFO_KEY]: { by: "auto", minutes: prefs.lockMinutes, at: now } satisfies LockInfo });
+    return;
+  }
+  await kv.set({ [ACTIVITY_KEY]: d.next });
+}
+
+async function refreshPrice(force = false): Promise<PriceCache> {
+  const prev = ((await kv.get([PRICE_KEY]))[PRICE_KEY] as PriceCache | undefined) ?? {};
+  const prefs = await getPrefs();
+  if (!prefs.usd || !(await isUnlocked())) return prev;
+  const fresh = prev.fetchedAt && Date.now() - prev.fetchedAt < PRICE_PERIOD_MIN * 60_000;
+  if (fresh && !force) return prev;
+  try {
+    const p = await getPrice();
+    const next: PriceCache = { usd: p.usd, at: p.at, fetchedAt: p.fetchedAt };
+    await kv.set({ [PRICE_KEY]: next });
+    return next;
+  } catch {
+    const next: PriceCache = { ...prev, failedAt: Date.now() };
+    await kv.set({ [PRICE_KEY]: next });
+    return next;
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  ensureFollowAlarm();
+  ensureAlarms();
   void pumpPayjoin();
 });
 chrome.runtime.onStartup.addListener(() => {
-  ensureFollowAlarm();
+  ensureAlarms();
   void pumpPayjoin();
 });
-ensureFollowAlarm();
+ensureAlarms();
 void pumpPayjoin();
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -47,36 +132,299 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void pumpPayjoin();
     return;
   }
+  if (alarm.name === LOCK_ALARM) {
+    void checkAutoLock();
+    return;
+  }
+  if (alarm.name === PRICE_ALARM) {
+    void refreshPrice();
+    return;
+  }
   if (alarm.name !== FOLLOW_ALARM) return;
   void (async () => {
+    if (!(await isUnlocked())) return;
     try {
       await wallet.loadChain();
       await wallet.followTip();
-    } catch {
-      /* locked, or UniSat tip not indexed yet */
+      await noteHealth();
+    } catch (e) {
+      await noteHealth(e);
     }
   })();
 });
 
+type PlanArgs = { destination: string; amount: string; feeRate?: number; coins?: string[]; max?: boolean };
+
 type Msg =
   | { type: "STATE" }
-  | { type: "CREATE"; password: string; passphrase?: string; birthday: number; words?: 12 | 24 }
+  | { type: "BUNDLE" }
+  | { type: "NEW_MNEMONIC"; words?: 12 | 24 }
+  | { type: "ONBOARD_GET" }
+  | { type: "ONBOARD_CLEAR" }
+  | { type: "CREATE_CHECKED"; password: string; passphrase?: string }
   | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number }
   | { type: "UNLOCK"; password: string }
   | { type: "LOCK" }
+  | { type: "ACTIVITY" }
   | { type: "SCAN" }
   | { type: "TIP" }
-  | { type: "PLAN"; destination: string; amount: string }
-  | { type: "BROADCAST"; intent: "payjoin" | "simple-send"; destination: string; amount: string }
+  | ({ type: "PLAN" } & PlanArgs)
+  | ({ type: "BROADCAST"; intent: "payjoin" | "simple-send"; label?: string } & PlanArgs)
+  | { type: "MAX_AMOUNT"; feeRate: number; coins?: string[] }
+  | { type: "FEE_RATES"; force?: boolean }
+  | { type: "PRICE"; force?: boolean }
+  | { type: "PREFS_SET"; prefs: Partial<Prefs> }
+  | { type: "COINS" }
+  | { type: "SET_COIN_META"; outpoint: string; patch: Partial<CoinMeta> }
+  | { type: "HISTORY" }
+  | { type: "SET_LABEL"; txid: string; label?: string }
+  | { type: "ONETIME_ISSUE" }
+  | { type: "ONETIME_VIEW" }
+  | { type: "SWEEP_PLAN"; index: number; feeRate: number }
+  | { type: "SWEEP_ONETIME"; index: number; feeRate: number }
+  | { type: "MIGRATE_START" }
+  | { type: "MIGRATE_STATUS" }
+  | { type: "MIGRATE_FINISH"; label: string }
+  | { type: "MIGRATE_CANCEL" }
+  | { type: "SESSIONS" }
+  | { type: "CANCEL_LINK"; id: string }
   | { type: "SAVE_CHAIN"; chain: ChainConfig }
   | { type: "LOAD_CHAIN" }
+  | { type: "TEST_CHAIN"; chain: ChainConfig }
   | { type: "SET_BIRTHDAY"; birthday: number }
   | { type: "FOLLOW_TIP" }
   | { type: "OFFER_PAYJOIN"; amount: string }
-  | { type: "SERVICE_PAYJOIN" };
+  | { type: "SERVICE_PAYJOIN" }
+  | { type: "SHOW_WORDS"; password: string }
+  | { type: "CHANGE_PASSWORD"; current: string; next: string }
+  | { type: "REMOVE_WALLET"; password: string };
+
+type Onboard = { mnemonic: string; words: 12 | 24; createdAt: number };
+
+async function bundle() {
+  const got = await kv.get([HEALTH_KEY, LOCKINFO_KEY, PRICE_KEY, PREFS_KEY, ACTIVITY_KEY]);
+  return {
+    state: await wallet.state(),
+    prefs: normalizePrefs(got[PREFS_KEY]),
+    health: (got[HEALTH_KEY] as Health | undefined) ?? null,
+    lockinfo: (got[LOCKINFO_KEY] as LockInfo | undefined) ?? null,
+    price: (got[PRICE_KEY] as PriceCache | undefined) ?? null,
+    activity: (got[ACTIVITY_KEY] as ActivityState | undefined) ?? null,
+    waiting: await wallet.waitingPayjoin(),
+  };
+}
+
+async function birthdayForNewWallet(): Promise<number> {
+  try {
+    const tip = await wallet.source().getTip();
+    await noteHealth();
+    return tip.height > DEFAULT_BIRTHDAY ? tip.height : DEFAULT_BIRTHDAY;
+  } catch (e) {
+    await noteHealth(e);
+    return DEFAULT_BIRTHDAY;
+  }
+}
+
+async function planOf(m: PlanArgs) {
+  return { amount: BigInt(m.amount || "0"), opts: { feeRate: m.feeRate, coins: m.coins, max: m.max } };
+}
+
+async function handle(msg: Msg): Promise<unknown> {
+  switch (msg.type) {
+    case "STATE":
+      return wallet.state();
+    case "BUNDLE":
+      return bundle();
+    case "NEW_MNEMONIC": {
+      const words = msg.words === 24 ? 24 : 12;
+      const ob: Onboard = { mnemonic: createMnemonic(words === 24 ? 256 : 128), words, createdAt: Date.now() };
+      await kv.set({ [ONBOARD_KEY]: ob });
+      return ob;
+    }
+    case "ONBOARD_GET":
+      return (await kv.get([ONBOARD_KEY]))[ONBOARD_KEY] ?? null;
+    case "ONBOARD_CLEAR":
+      await kv.remove([ONBOARD_KEY]);
+      return null;
+    case "CREATE_CHECKED": {
+      const ob = (await kv.get([ONBOARD_KEY]))[ONBOARD_KEY] as Onboard | undefined;
+      if (!ob) throw new Error("Start again: the recovery words were cleared.");
+      const birthday = await birthdayForNewWallet();
+      await wallet.createChecked({ mnemonic: ob.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday });
+      await kv.remove([ONBOARD_KEY, LOCKINFO_KEY]);
+      await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
+      void refreshPrice(true);
+      return bundle();
+    }
+    case "RESTORE":
+      await wallet.restore(msg);
+      await kv.remove([LOCKINFO_KEY]);
+      await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
+      void refreshPrice(true);
+      return bundle();
+    case "UNLOCK":
+      await wallet.unlock(msg.password);
+      await kv.remove([LOCKINFO_KEY]);
+      await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
+      void pumpPayjoin();
+      void refreshPrice();
+      return bundle();
+    case "LOCK":
+      await wallet.lock();
+      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
+      return null;
+    case "ACTIVITY": {
+      const got = (await kv.get([ACTIVITY_KEY]))[ACTIVITY_KEY] as ActivityState | undefined;
+      await kv.set({ [ACTIVITY_KEY]: touch(got, Date.now()) });
+      return null;
+    }
+    case "SCAN": {
+      try {
+        const progress = await wallet.scanOnce();
+        await noteHealth();
+        return { ...(await bundle()), progress };
+      } catch (e) {
+        await noteHealth(e);
+        throw e;
+      }
+    }
+    case "FOLLOW_TIP": {
+      try {
+        const progress = await wallet.followTip();
+        await noteHealth();
+        return { ...(await bundle()), progress };
+      } catch (e) {
+        await noteHealth(e);
+        throw e;
+      }
+    }
+    case "TIP":
+      return wallet.source().getTip();
+    case "PLAN": {
+      const { amount, opts } = await planOf(msg);
+      return wallet.plan(msg.destination, amount, opts);
+    }
+    case "BROADCAST": {
+      await wallet.assertNotOwnLink(msg.destination);
+      const { amount, opts } = await planOf(msg);
+      const built = await wallet.planSend(msg.destination, amount, opts);
+      const intent = msg.intent === "payjoin" ? INTENT_PAYJOIN : INTENT_SIMPLE_SEND;
+      const result = await wallet.broadcast(intent, built, { label: msg.label, feeRate: opts.feeRate });
+      if (result.kind === "payjoin-pending") schedulePayjoinWake();
+      return { ...(result.kind === "txid" ? { txid: result.txid } : { pending: true }), fee: built.fee.toString() };
+    }
+    case "MAX_AMOUNT":
+      return wallet.maxAmount(msg.feeRate, msg.coins);
+    case "FEE_RATES": {
+      const cached = (await kv.get([FEES_KEY]))[FEES_KEY] as (FeeRates & { fetchedAt: number }) | undefined;
+      if (cached && !msg.force && Date.now() - cached.fetchedAt < 60_000) return cached;
+      try {
+        const r = await wallet.feeRates();
+        const next = { ...r, fetchedAt: Date.now() };
+        await kv.set({ [FEES_KEY]: next });
+        await noteHealth();
+        return next;
+      } catch (e) {
+        await noteHealth(e);
+        throw e;
+      }
+    }
+    case "PRICE":
+      return refreshPrice(!!msg.force);
+    case "PREFS_SET": {
+      const prev = await getPrefs();
+      const next = normalizePrefs({ ...prev, ...msg.prefs });
+      await kv.set({ [PREFS_KEY]: next });
+      if (!next.usd) await kv.remove([PRICE_KEY]);
+      else if (!prev.usd) void refreshPrice(true);
+      return next;
+    }
+    case "COINS":
+      return wallet.coins();
+    case "SET_COIN_META":
+      await wallet.setCoinMeta(msg.outpoint, msg.patch);
+      return wallet.coins();
+    case "HISTORY":
+      return wallet.history();
+    case "SET_LABEL":
+      await wallet.setActivityLabel(msg.txid, msg.label);
+      return wallet.history();
+    case "ONETIME_ISSUE":
+      return wallet.issueOneTime();
+    case "ONETIME_VIEW":
+      return wallet.oneTimeView();
+    case "SWEEP_PLAN": {
+      const b = await wallet.planSweep(msg.index, msg.feeRate);
+      return { fee: b.fee.toString(), amount: b.amount.toString(), vbytes: b.vbytes };
+    }
+    case "SWEEP_ONETIME":
+      return wallet.sweepOneTime(msg.index, msg.feeRate);
+    case "MIGRATE_START":
+      await wallet.startMigration();
+      return wallet.migrationStatus();
+    case "MIGRATE_STATUS":
+      return wallet.migrationStatus();
+    case "MIGRATE_FINISH":
+      await wallet.finishMigration(msg.label);
+      return null;
+    case "MIGRATE_CANCEL":
+      await wallet.cancelMigration();
+      return null;
+    case "SESSIONS":
+      return wallet.sessions();
+    case "CANCEL_LINK":
+      await wallet.cancelLink(msg.id);
+      return wallet.sessions();
+    case "SAVE_CHAIN":
+      await wallet.saveChain(msg.chain);
+      await kv.remove([FEES_KEY]);
+      return redactChain(await wallet.loadChain());
+    case "LOAD_CHAIN":
+      return redactChain(await wallet.loadChain());
+    case "TEST_CHAIN": {
+      const prev = await wallet.loadChain();
+      const cfg: ChainConfig = {
+        ...msg.chain,
+        rpcPassword: msg.chain.rpcPassword === "********" ? prev.rpcPassword : msg.chain.rpcPassword,
+        unisatToken: msg.chain.unisatToken === "********" ? prev.unisatToken : msg.chain.unisatToken,
+      };
+      return openChain(cfg).getTip();
+    }
+    case "SET_BIRTHDAY":
+      await wallet.setBirthday(msg.birthday);
+      return bundle();
+    case "OFFER_PAYJOIN": {
+      const session = await wallet.offerPayjoin(BigInt(msg.amount || "0"));
+      schedulePayjoinWake();
+      void pumpPayjoin();
+      return { id: session.id, bip21: session.bip21 };
+    }
+    case "SERVICE_PAYJOIN":
+      return wallet.servicePayjoin();
+    case "SHOW_WORDS": {
+      const v = await wallet.checkPassword(msg.password);
+      return { mnemonic: v.mnemonic };
+    }
+    case "CHANGE_PASSWORD":
+      await wallet.changePassword(msg.current, msg.next);
+      return null;
+    case "REMOVE_WALLET": {
+      await wallet.removeWallet(msg.password);
+      await chrome.alarms.clear(PJ_ALARM);
+      await chrome.alarms.clear(PJ_SOON);
+      await chrome.storage.local.clear();
+      await chrome.storage.session.clear();
+      const left = { ...(await chrome.storage.local.get(null)), ...(await chrome.storage.session.get(null)) };
+      return { left: Object.keys(left).length };
+    }
+    default:
+      throw new Error("unknown");
+  }
+}
 
 chrome.runtime.onMessage.addListener((msg: Msg, sender, send) => {
-  const reply = (payload: { ok: boolean; data?: unknown; error?: string }): void => {
+  const reply = (payload: { ok: boolean; data?: unknown; error?: string; code?: string }): void => {
     send(jsonSafe(payload));
   };
   void (async () => {
@@ -86,88 +434,13 @@ chrome.runtime.onMessage.addListener((msg: Msg, sender, send) => {
         return;
       }
       await wallet.loadChain();
-      switch (msg.type) {
-        case "STATE":
-          reply({ ok: true, data: await wallet.state() });
-          break;
-        case "CREATE": {
-          const mnemonic = await wallet.create(msg);
-          reply({ ok: true, data: { mnemonic } });
-          break;
-        }
-        case "RESTORE":
-          await wallet.restore(msg);
-          reply({ ok: true });
-          break;
-        case "UNLOCK":
-          await wallet.unlock(msg.password);
-          reply({ ok: true, data: await wallet.state() });
-          break;
-        case "LOCK":
-          await wallet.lock();
-          reply({ ok: true });
-          break;
-        case "SCAN": {
-          const progress = await wallet.scanOnce();
-          reply({ ok: true, data: { ...(await wallet.state()), progress } });
-          break;
-        }
-        case "TIP":
-          reply({ ok: true, data: await wallet.source().getTip() });
-          break;
-        case "PLAN": {
-          const data = await wallet.plan(msg.destination, BigInt(msg.amount || "0"));
-          reply({ ok: true, data });
-          break;
-        }
-        case "BROADCAST": {
-          const built = await wallet.planSend(msg.destination, BigInt(msg.amount || "0"));
-          const intent = msg.intent === "payjoin" ? INTENT_PAYJOIN : INTENT_SIMPLE_SEND;
-          const result = await wallet.broadcast(intent, built);
-          if (result.kind === "payjoin-pending") schedulePayjoinWake();
-          reply({
-            ok: true,
-            data: {
-              ...(result.kind === "txid" ? { txid: result.txid } : { pending: true }),
-              ...(await wallet.state()),
-            },
-          });
-          break;
-        }
-        case "SAVE_CHAIN":
-          await wallet.saveChain(msg.chain);
-          reply({ ok: true });
-          break;
-        case "LOAD_CHAIN":
-          reply({ ok: true, data: redactChain(await wallet.loadChain()) });
-          break;
-        case "SET_BIRTHDAY":
-          await wallet.setBirthday(msg.birthday);
-          reply({ ok: true, data: await wallet.state() });
-          break;
-        case "FOLLOW_TIP": {
-          const progress = await wallet.followTip();
-          reply({ ok: true, data: { ...(await wallet.state()), progress } });
-          break;
-        }
-        case "OFFER_PAYJOIN": {
-          const session = await wallet.offerPayjoin(BigInt(msg.amount || "0"));
-          schedulePayjoinWake();
-          void pumpPayjoin();
-          reply({ ok: true, data: { session, ...(await wallet.state()) } });
-          break;
-        }
-        case "SERVICE_PAYJOIN": {
-          const serviced = await wallet.servicePayjoin();
-          reply({ ok: true, data: { ...serviced, ...(await wallet.state()) } });
-          break;
-        }
-        default:
-          reply({ ok: false, error: "unknown" });
-      }
+      reply({ ok: true, data: await handle(msg) });
     } catch (e) {
-      reply({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      reply({ ok: false, error: e instanceof Error ? e.message : String(e), code: errorCode(e) });
     }
   })();
   return true;
 });
+
+export type { Prefs };
+export { DEFAULT_PREFS };

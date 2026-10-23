@@ -1,6 +1,15 @@
 import type { Kv } from "./lib/vault.ts";
 
-const SESSION_KEYS = new Set(["privatebit.session", "privatebit.pj.hpke", "privatebit.pj.send"]);
+const SESSION_KEYS = new Set([
+  "privatebit.session",
+  "privatebit.pj.hpke",
+  "privatebit.pj.send",
+  "privatebit.activity",
+  "privatebit.lockinfo",
+  "privatebit.health",
+  "privatebit.onboard",
+  "privatebit.fees",
+]);
 
 export function chromeKv(): Kv {
   return {

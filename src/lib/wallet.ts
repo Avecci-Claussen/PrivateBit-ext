@@ -196,6 +196,8 @@ export const ALL_KEYS = [
   "privatebit.activity",
   "privatebit.lockinfo",
   "privatebit.health",
+  "privatebit.onboard",
+  "privatebit.fees",
   "privatebit.pj.sessions",
   "privatebit.pj.send",
   "privatebit.pj.hpke",
