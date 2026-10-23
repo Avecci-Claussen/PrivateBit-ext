@@ -132,6 +132,10 @@ describe("remove wallet", () => {
     await expect(w.removeWallet("nope")).rejects.toThrow();
     await w.removeWallet("pw");
     expect(Object.keys(kv.dump())).toEqual([]);
+    // The screens keep asking for state after removal; that must not write defaults back.
+    await w.state();
+    await w.loadChain();
+    expect(Object.keys(kv.dump())).toEqual([]);
     expect(ALL_KEYS).toContain("privatebit.history");
   });
 });

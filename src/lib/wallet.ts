@@ -944,7 +944,7 @@ export class PrivateBit {
     const migrated = migrateChainConfig(stored ?? DEFAULT_CHAIN);
     const { plain } = splitChainSecrets(migrated);
     const secretsInPlain = !!(stored?.unisatToken || stored?.rpcPassword);
-    if (!secretsInPlain && JSON.stringify(stored ?? null) !== JSON.stringify(plain)) {
+    if (stored && !secretsInPlain && JSON.stringify(stored) !== JSON.stringify(plain)) {
       await this.kv.set({ [CHAIN_KEY]: plain });
     }
     let secrets: ChainSecrets = {};
