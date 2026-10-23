@@ -16,6 +16,12 @@ export type LabeledUtxo = {
   k: number;
   height: number;
   spent: boolean;
+  /** "bip86" for a migration one-time address coin (m/86'/8228'/0'/0/index). Absent means Silent Payment. */
+  kind?: "sp" | "bip86";
+  index?: number;
+  /** Txid that spent this coin, when the scan saw it. Used to rebuild activity history. */
+  spentBy?: string;
+  spentHeight?: number;
 };
 
 export type ScanInflight = {
@@ -30,6 +36,8 @@ export type WatchedOutput = {
   tweak: string;
   label: number | null;
   k: number;
+  kind?: "sp" | "bip86";
+  index?: number;
 };
 
 export type ScanStore = {
@@ -79,7 +87,7 @@ export async function scanTransaction(
   source: ChainSource,
   txHex: string,
   _height: number,
-): Promise<DetectedOutput & { txid: string; value: bigint }[]> {
+): Promise<(DetectedOutput & { txid: string; value: bigint })[]> {
   const tx = parseTxHex(txHex);
   const taps = taprootOutputs(tx);
   if (taps.length === 0) return [];
@@ -163,6 +171,7 @@ function applyWatch(store: ScanStore, txHex: string, height: number): void {
       k: w.k,
       height,
       spent: false,
+      ...(w.kind === "bip86" ? { kind: "bip86" as const, index: w.index } : {}),
     });
   }
 }
@@ -182,10 +191,17 @@ export function upsertUtxo(utxos: LabeledUtxo[], u: LabeledUtxo): void {
   };
 }
 
-export function markSpent(utxos: LabeledUtxo[], tx: ReturnType<typeof parseTxHex>): void {
+export function markSpent(utxos: LabeledUtxo[], tx: ReturnType<typeof parseTxHex>, height = 0): void {
   for (const vin of tx.vin) {
     const u = utxos.find((x) => x.txid === vin.txid && x.vout === vin.vout && !x.spent);
-    if (u) u.spent = true;
+    if (u) {
+      u.spent = true;
+      u.spentBy = tx.txid;
+      u.spentHeight = height;
+    } else {
+      const seen = utxos.find((x) => x.txid === vin.txid && x.vout === vin.vout && x.spentBy === tx.txid);
+      if (seen && height > 0) seen.spentHeight = height;
+    }
   }
 }
 
@@ -216,7 +232,7 @@ export async function applyTxHex(
 ): Promise<ScanStore> {
   const next = cloneStore(store);
   const parsed = parseTxHex(txHex);
-  markSpent(next.utxos, parsed);
+  markSpent(next.utxos, parsed, height);
   applyWatch(next, txHex, height);
   try {
     const hits = await scanTransaction(account, source, txHex, height);
@@ -297,7 +313,7 @@ export async function scanStep(
       const hits = await scanTransaction(account, source, hexTx, height);
       for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));
       applyWatch(next, hexTx, height);
-      markSpent(next.utxos, parseTxHex(hexTx));
+      markSpent(next.utxos, parseTxHex(hexTx), height);
     } catch {
       skipped += 1;
     }
