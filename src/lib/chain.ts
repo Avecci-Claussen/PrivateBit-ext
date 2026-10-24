@@ -3,6 +3,7 @@ import { netFetch, noteRateLimited } from "./net.ts";
 import { rejectAddressUtxoAsSot } from "./policy.ts";
 import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
 import { FRACTAL, migrateChainConfig, type ChainConfig, type ChainKind } from "./network.ts";
+import { mempoolBlockHash, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
 
 export type Tip = { height: number; hash: string };
 
@@ -379,7 +380,55 @@ export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): Ch
 export function openChain(cfg: ChainConfig): ChainSource {
   const migrated = migrateChainConfig(cfg);
   if (migrated.kind === "core") return coreSource(migrated);
-  return unisatSource(migrated);
+  return withExplorerBlocks(unisatSource(migrated));
+}
+
+/**
+ * Public mode: tip, block hashes and fee rates come from the block explorer that already serves
+ * the raw blocks. These are the same for every wallet, so the explorer learns nothing new.
+ * The data service is asked only when the explorer fails. Without a key the data service now
+ * refuses almost every request, which stopped the scan at its first step (the tip).
+ */
+export function withExplorerBlocks(source: ChainSource): ChainSource {
+  const first = async <T>(primary: () => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
+    try {
+      return await primary();
+    } catch (e) {
+      try {
+        return await fallback();
+      } catch (e2) {
+        // A limit on either side is what the user can act on (wait, or add a key), so report that.
+        throw e instanceof RateLimitedError || !(e2 instanceof RateLimitedError) ? e : e2;
+      }
+    }
+  };
+  return {
+    ...source,
+    getTip: () => first(mempoolTip, () => source.getTip()),
+    getTxHex: (txid) =>
+      first(
+        async () => {
+          const got = await mempoolTxHex(txid);
+          if (!got) throw new Error("mempool tx not found");
+          return got;
+        },
+        () => source.getTxHex(txid),
+      ),
+    getBlockHash: (height) => first(() => mempoolBlockHash(height), () => source.getBlockHash(height)),
+    estimateFeeSatPerVb: () =>
+      first(
+        async () => {
+          const r = parseRecommendedFees(await mempoolFees());
+          return Math.max(1, Math.ceil(r.normal));
+        },
+        () => source.estimateFeeSatPerVb(),
+      ),
+    feeRates: () =>
+      first(
+        async () => parseRecommendedFees(await mempoolFees()),
+        () => (source.feeRates ? source.feeRates() : feeRatesOf({ ...source, feeRates: undefined })),
+      ),
+  };
 }
 
 export type WatchHint = { txid: string; height: number; vout?: number; value?: string; scriptPubKey?: string };
