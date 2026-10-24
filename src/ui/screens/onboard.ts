@@ -1,5 +1,5 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, refreshUntilReady, fv, busy, err, toast } from "../app.ts";
-import { call } from "../api.ts";
+import { call, type Bundle } from "../api.ts";
 import { html, I, MARK, NETLOGO, codeHi, num, type Safe } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { wordlist } from "@scure/bip39/wordlists/english";
@@ -299,15 +299,15 @@ screens.import = () => {
   const showErr = !!c.msg && (S.f.mnTried === true || c.count >= 12);
   const custom = S.f.bdMode === "custom";
   const hasVault = S.b?.state.hasVault;
-  const adding = S.f.adding === true;
+  const forgot = S.f.forgot === true;
+  const openName = (S.b?.state.wallets ?? []).find((w) => w.active)?.name ?? "this wallet";
   const tip = typeof S.d.tipHeight === "number" ? S.d.tipHeight : DEFAULT_BIRTHDAY;
   return {
     title: "Import wallet",
     solo: true,
     header: hdr({ title: "Import wallet" }),
     main: html`
-  ${hasVault && !adding ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">This replaces the open wallet</span>The other wallets on this computer stay. Only continue if you have the recovery words for the one you are replacing.</div></div>` : ""}
-  ${adding ? html`<div class="banner">${I("info", "s16")}<div>This adds a wallet. The one you have open stays on this computer. You will switch to the new one after the password.</div></div>` : ""}
+  ${forgot ? html`<div class="banner">${I("info", "s16")}<div><span class="bt">Open ${openName} with its words</span>Type its recovery words. It opens with them and gets the password you choose next. Its coins, labels and history stay.</div></div>` : hasVault ? html`<div class="banner">${I("info", "s16")}<div>This adds a wallet. The wallets on this computer stay. If these words are already here, that wallet opens instead and nothing is replaced.</div></div>` : ""}
   <div class="field"><label class="label" for="mn">Recovery words</label><textarea class="textarea" id="mn" data-f="mn" data-live rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" ${showErr ? html`aria-invalid="true" aria-describedby="mn-e"` : html`aria-describedby="mn-h"`}>${mn}</textarea>
   ${showErr ? html`<p class="err" id="mn-e" role="alert">${I("circle-alert", "s16")}<span>${c.msg}</span></p>` : c.ok ? html`<p class="help" id="mn-h">${I("circle-check", "s16")} ${c.count} words, checksum valid.${c.count === 24 ? "" : " New wallets are 24 words. This older backup still restores."}</p>` : html`<p class="help" id="mn-h">24 words, separated by spaces. An older 12-word backup still restores.</p>`}</div>
   <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Start reading the chain at</legend>
@@ -358,13 +358,29 @@ actions["import-finish"] = async () => {
   if (!checkPasswords()) return;
   const mnemonic = fv("mn").trim().toLowerCase().split(/\s+/).join(" ");
   const ok = await run("restore", async () => {
-    S.b = await call({ type: "RESTORE", mnemonic, password: fv("pw"), passphrase: fv("pp"), birthday: birthdayValue() ?? DEFAULT_BIRTHDAY, add: S.f.adding === true, name: fv("wname") });
-    return true;
+    const r = await call<Bundle & { imported?: ImportResult }>({ type: "RESTORE", mnemonic, password: fv("pw"), passphrase: fv("pp"), birthday: birthdayValue() ?? DEFAULT_BIRTHDAY, add: S.f.adding === true, name: fv("wname"), forgot: S.f.forgot === true });
+    S.b = r;
+    return r.imported ?? true;
   });
   if (!ok) return;
   S.f = {};
   S.d = {};
   go("home", {}, { reset: true });
+  if (ok !== true) toast(importMessage(ok));
+};
+
+type ImportResult = { result: "created" | "added" | "existing"; name: string; passwordChanged: boolean };
+export function importMessage(r: ImportResult): string {
+  if (r.result === "existing") {
+    return r.passwordChanged
+      ? `${r.name} was already on this computer. It is open now with your new password. Nothing was replaced.`
+      : `${r.name} is already on this computer, so it is open now. Nothing was replaced. Its password did not change.`;
+  }
+  return r.result === "added" ? `${r.name} added and open. The other wallets stay on this computer.` : `${r.name} is ready.`;
+}
+actions["import-forgot"] = () => {
+  S.f.forgot = true;
+  go("import");
 };
 
 /* ---------- unlock ---------- */
@@ -390,7 +406,7 @@ screens.unlock = () => {
       cls: "plain",
       html: loading
         ? html`<button class="btn btn-primary btn-block" type="button" aria-disabled="true">${I("loader-circle", "s16 spin")}Unlocking…</button><p class="cap" style="text-align:center">Decrypting takes about a second on purpose. It slows down password guessing.</p>`
-        : html`<button class="btn btn-primary btn-block" type="button" data-act="unlock">Unlock</button><button class="btn btn-ghost btn-block" type="button" data-act="go" data-to="import">Forgot password? Restore from words</button>`,
+        : html`<button class="btn btn-primary btn-block" type="button" data-act="unlock">Unlock</button><button class="btn btn-ghost btn-block" type="button" data-act="import-forgot">Forgot password? Open with recovery words</button>`,
     },
   };
 };

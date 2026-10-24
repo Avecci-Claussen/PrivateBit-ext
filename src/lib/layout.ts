@@ -78,6 +78,8 @@ export type WalletEntry = {
   hasPassphrase?: boolean;
   /** Last block this wallet has matched. */
   checked?: number;
+  /** One-way id of the keys (walletFingerprint), to spot a second import of the same words. */
+  fp?: string;
 };
 
 export type WalletIndex = { v: 2; active: string; wallets: WalletEntry[] };

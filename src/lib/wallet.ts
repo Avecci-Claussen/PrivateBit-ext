@@ -2,6 +2,7 @@ import * as btc from "@scure/btc-signer";
 import { spendSecret, taprootScriptPubKey } from "./bip352.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
+import { sha256 } from "@noble/hashes/sha256";
 import { forgetSharedFrom, IncompleteBlock, loadSharedBlock, pruneSharedBelow, UnsupportedBlock, type SharedBlock } from "./blockshare.ts";
 import { cancellable, openChain, type ChainSource } from "./chain.ts";
 import type { Account, ScanAccount } from "./keys.ts";
@@ -782,6 +783,50 @@ export class WalletCore {
     const blob = await loadVaultBlob(this.kv);
     if (!blob) throw new Error("no vault");
     return unlockVault(blob, password);
+  }
+
+  /** This wallet's fingerprint, from the session or the scan grant. Unknown when neither is there. */
+  async fingerprint(): Promise<string | undefined> {
+    const s = await this.session();
+    if (s) return walletFingerprint(this.keysFor(s).spendPub);
+    const g = await loadScanGrant(this.kv);
+    return g ? walletFingerprint(g.spendPub) : undefined;
+  }
+
+  /** True when this seed opens this wallet's coin list (works while locked, no fingerprint needed). */
+  async ownsSeed(seed: Uint8Array): Promise<boolean> {
+    const raw = (await this.kv.get([SCAN_KEY]))[SCAN_KEY];
+    if (!raw || !isSealed(raw)) return false;
+    for (const key of [deriveScanKey(seed), deriveDataKey(seed)]) {
+      try {
+        openJson(key, SCAN_KEY, raw);
+        return true;
+      } catch {
+        /* not this one */
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Open this wallet with its recovery words, which prove ownership. Coins, labels and history
+   * stay. The password changes only when newPassword is given (forgot password).
+   */
+  async openWithWords(args: { mnemonic: string; passphrase?: string; newPassword?: string }): Promise<void> {
+    const blob = await loadVaultBlob(this.kv);
+    if (!blob) throw new Error("no vault");
+    const unlocked = vaultFromMnemonic({ mnemonic: args.mnemonic, passphrase: args.passphrase, birthday: blob.birthday });
+    const known = await this.fingerprint();
+    const fp = walletFingerprint(hex(accountFromVault(unlocked).spendPub));
+    if (known ? known !== fp : !(await this.ownsSeed(unlocked.seed))) throw new Error("These words belong to a different wallet.");
+    this.sideWorkAt = 0;
+    if (args.newPassword) {
+      await persistVault(this.kv, lockVault(unlocked, args.newPassword));
+      await this.retireStaleBackup(unlocked, args.newPassword);
+    }
+    await saveSession(this.kv, unlocked);
+    await this.writeGrant(unlocked);
+    await this.migrateAtRest();
   }
 
   /**
@@ -2181,6 +2226,19 @@ export class WalletCore {
 /** Every storage key PrivateBit may write: per-wallet names (before scoping) and shared ones. */
 export const ALL_KEYS: string[] = [...WALLET_SCOPED, ...GLOBAL_KEYS];
 
+/**
+ * Short one-way id of a wallet's keys (hash of its spend public key). Kept in the directory to
+ * spot the same words imported twice. It cannot be turned back into a key or an address.
+ */
+export function walletFingerprint(spendPubHex: string): string {
+  const tag = new TextEncoder().encode("PrivateBit wallet fingerprint v1:");
+  const pub = fromHex(spendPubHex);
+  const msg = new Uint8Array(tag.length + pub.length);
+  msg.set(tag);
+  msg.set(pub, tag.length);
+  return hex(sha256(msg)).slice(0, 16);
+}
+
 function newWalletId(): string {
   return hex(randomBytes(8));
 }
@@ -2295,6 +2353,8 @@ export class PrivateBit {
       ...(st.unlocked ? { hasPassphrase: !!st.hasPassphrase } : prev?.hasPassphrase !== undefined ? { hasPassphrase: prev.hasPassphrase } : {}),
       ...(prev?.checked !== undefined ? { checked: prev.checked } : {}),
     };
+    const fp = (await core.fingerprint()) ?? prev?.fp;
+    if (fp) entry.fp = fp;
     const wallets = prev ? index.wallets.map((w) => (w.id === entry.id ? entry : w)) : [...index.wallets, entry];
     await saveIndex(this.root, { v: 2, active: index.active, wallets });
   }
@@ -2331,6 +2391,61 @@ export class PrivateBit {
     const core = await this.core();
     await core.restore(args);
     await this.remember(core, args.name);
+  }
+
+  /**
+   * Import recovery words. Never replaces a wallet: with no wallet it creates the first one,
+   * otherwise it adds one. Words already on this computer open that wallet instead (nothing is
+   * deleted or rescanned); with resetPassword its password becomes the one just typed.
+   */
+  async importWallet(args: {
+    mnemonic: string;
+    password: string;
+    passphrase?: string;
+    birthday: number;
+    name?: string;
+    resetPassword?: boolean;
+  }): Promise<{ result: "created" | "added" | "existing"; id: string; name: string; passwordChanged: boolean }> {
+    if (args.birthday <= 0) throw new Error("birthday height required (Fractal tip is past 2M; 0 is genesis)");
+    const probe = vaultFromMnemonic({ mnemonic: args.mnemonic, passphrase: args.passphrase, birthday: args.birthday });
+    const fp = walletFingerprint(hex(accountFromVault(probe).spendPub));
+    const index = await this.index();
+    if (!index) {
+      await this.restore(args);
+      const core = await this.core();
+      const entry = (await this.index())?.wallets.find((w) => w.id === core.walletId);
+      return { result: "created", id: core.walletId, name: entry?.name ?? "Wallet", passwordChanged: false };
+    }
+    const match = await this.findWallet(index, fp, probe.seed);
+    if (match) {
+      if (match.id !== (await this.core()).walletId) await this.openWallet(match.id);
+      const core = await this.core();
+      await core.openWithWords({ mnemonic: args.mnemonic, passphrase: args.passphrase, newPassword: args.resetPassword ? args.password : undefined });
+      await this.remember(core);
+      return { result: "existing", id: match.id, name: match.name, passwordChanged: args.resetPassword === true };
+    }
+    await this.addWallet({ ...args, kind: "import" });
+    const core = await this.core();
+    const entry = (await this.index())?.wallets.find((w) => w.id === core.walletId);
+    return { result: "added", id: core.walletId, name: entry?.name ?? "Wallet", passwordChanged: false };
+  }
+
+  /** The wallet these keys belong to, by fingerprint, or by opening its coin list (older entries). */
+  private async findWallet(index: WalletIndex, fp: string, seed: Uint8Array): Promise<WalletEntry | undefined> {
+    for (const w of index.wallets) {
+      if (w.fp) {
+        if (w.fp === fp) return w;
+        continue;
+      }
+      const core = w.id === this.current?.walletId ? this.current : this.coreFor(w.id);
+      try {
+        const known = await core.fingerprint();
+        if (known ? known === fp : await core.ownsSeed(seed)) return w;
+      } finally {
+        if (core !== this.current) core.close();
+      }
+    }
+    return undefined;
   }
 
   /**

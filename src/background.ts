@@ -227,7 +227,7 @@ type Msg =
   | { type: "ONBOARD_GET" }
   | { type: "ONBOARD_CLEAR" }
   | { type: "CREATE_CHECKED"; password: string; passphrase?: string; add?: boolean; name?: string }
-  | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number; add?: boolean; name?: string }
+  | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number; add?: boolean; name?: string; forgot?: boolean }
   | { type: "SWITCH_WALLET"; id: string }
   | { type: "UNLOCK"; password: string }
   | { type: "RESTORE_BACKUP"; password: string }
@@ -343,17 +343,23 @@ async function handle(msg: Msg): Promise<unknown> {
       kickCatchup(0);
       return bundle();
     }
-    case "RESTORE":
-      if (msg.add) {
-        await wallet.addWallet({ mnemonic: msg.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday: msg.birthday, name: msg.name, kind: "import" });
-      } else {
-        await wallet.restore(msg);
-      }
-      await kv.remove([LOCKINFO_KEY]);
+    case "RESTORE": {
+      // Import never replaces a wallet (audit M5): it adds one, or opens the same words already here.
+      const imported = await wallet.importWallet({
+        mnemonic: msg.mnemonic,
+        password: msg.password,
+        passphrase: msg.passphrase,
+        birthday: msg.birthday,
+        name: msg.name,
+        resetPassword: msg.forgot === true,
+      });
+      await kv.remove([LOCKINFO_KEY, FEES_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
+      void pumpPayjoin();
       void refreshPrice(true);
       kickCatchup(0);
-      return bundle();
+      return { ...(await bundle()), imported };
+    }
     case "SWITCH_WALLET":
       await wallet.openWallet(msg.id);
       await kv.remove([ACTIVITY_KEY, FEES_KEY]);
