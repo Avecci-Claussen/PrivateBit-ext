@@ -37,6 +37,7 @@ import {
 import { hpkeKeyPairFromSecret } from "./bip77-hpke.ts";
 import { RateLimitedError } from "./requests.ts";
 import { buildPayjoinProposal, validatePayjoinProposal } from "./payjoin-proposal.ts";
+import { CoinStore, StaleWriteError } from "./coinstore.ts";
 import { mailboxUrls, type MailboxTransport } from "./mailbox.ts";
 import type { OhttpKeyConfig } from "./ohttp.ts";
 import {
@@ -57,6 +58,7 @@ import {
   scanStep,
   withTxHexCache,
   type LabeledUtxo,
+  type WatchedOutput,
   type ScanProgress,
   type ScanStore,
 } from "./scan.ts";
@@ -219,6 +221,8 @@ export type SessionView = {
 export type BroadcastResult = { kind: "txid"; txid: string } | { kind: "payjoin-pending" };
 
 export const FOLLOW_TIP_STEPS = 24;
+/** During a scan, history is rebuilt at most this often. */
+const HISTORY_EVERY_MS = 10_000;
 
 const PJ_SESSIONS = "privatebit.pj.sessions";
 
@@ -251,6 +255,13 @@ function encodeP2tr(xonly: Uint8Array): string {
 }
 
 type ScanMark = { epoch: number; spendPub: string };
+
+class ScanStopped extends Error {
+  constructor() {
+    super("scan stopped: wallet changed");
+    this.name = "ScanStopped";
+  }
+}
 
 /** Test hooks shared by every wallet on one PrivateBit. */
 export type CoreHooks = {
@@ -290,6 +301,7 @@ export class WalletCore {
 
   /** Lock and drop the scan grant: only the open wallet matches blocks. */
   async closeForSwitch(): Promise<void> {
+    await this.settle().catch(() => undefined);
     await this.lock();
     await this.kv.remove([SCAN_GRANT_KEY]);
     this.close();
@@ -297,6 +309,7 @@ export class WalletCore {
 
   /** Bumped by PrivateBit when this wallet is closed, so its scan stops at the next check. */
   close(): void {
+    this.coins_.close();
     this.walletEpoch += 1;
     this.keyCache = undefined;
     this.grantCache = undefined;
@@ -327,8 +340,8 @@ export class WalletCore {
     return this.scanHex.source;
   }
 
+  /** One scan run at a time per wallet. Writes to the coin list are serialized by CoinStore. */
   private enqueueScan<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.scanDepth > 0) return fn();
     const run = this.scanTail.then(async () => {
       this.scanDepth += 1;
       try {
@@ -427,6 +440,7 @@ export class WalletCore {
       birthday: unlocked.birthday,
     });
     this.grantCache = undefined;
+    this.coins_.invalidate();
   }
 
   private async keyFor(name: string): Promise<Uint8Array | null> {
@@ -725,7 +739,7 @@ export class WalletCore {
     const prev = await this.loadScan();
     let next = emptyScanStore(birthday);
     for (const w of prev.watch ?? []) next = addWatch(next, w);
-    await this.saveScan(next);
+    await this.coins_.replace(next);
   }
 
   async unlock(password: string): Promise<void> {
@@ -791,6 +805,7 @@ export class WalletCore {
   async lock(): Promise<void> {
     if (await this.dataKey()) {
       try {
+        await this.coins_.flush();
         await this.onScanSaved(await this.loadScan());
       } catch {
         /* history is rebuilt at the next unlock */
@@ -832,6 +847,19 @@ export class WalletCore {
   }
 
   private async scanOnceUnlocked(): Promise<ScanProgress> {
+    try {
+      return await this.scanRun();
+    } catch (e) {
+      // Another writer moved the list on, or the wallet was switched: stop; the next run starts fresh.
+      if (e instanceof StaleWriteError || e instanceof ScanStopped) {
+        const s = await this.loadScan().catch(() => undefined);
+        return { done: false, lastHeight: s?.lastHeight ?? 0, tip: s?.tip ?? 0, height: s?.lastHeight ?? 0, txIndex: 0, txCount: 0, skipped: 0 };
+      }
+      throw e;
+    }
+  }
+
+  private async scanRun(): Promise<ScanProgress> {
     const epoch = this.walletEpoch;
     const idle: ScanProgress = { done: false, lastHeight: 0, tip: 0, height: 0, txIndex: 0, txCount: 0, skipped: 0 };
     const session = await this.session();
@@ -866,11 +894,9 @@ export class WalletCore {
       store = await retryDeferred(account, source, store);
       store = await confirmPendingUtxos(source, store);
       if (!(await this.scanStillHere(mark))) return stopped();
-      await this.saveScan(store, mark);
+      store = await this.scanCommit(store, mark);
     }
     let progress: ScanProgress | undefined;
-    let saved = true;
-    let lastPersist = started;
     let sharedHeight = -1;
     let shared: Awaited<ReturnType<typeof loadSharedBlock>> | undefined;
     let ahead: { height: number; block: Promise<Awaited<ReturnType<typeof loadSharedBlock>>> } | undefined;
@@ -884,7 +910,7 @@ export class WalletCore {
         try {
           if (store.inflight?.height !== height) {
             store = { ...store, tip: tip.height, inflight: { height, nextTx: 0, txids: [], txCount: 0 } };
-            if (await this.scanStillHere(mark)) await this.saveScan(store, mark);
+            store = await this.scanCommit(store, mark);
           }
           const queued = ahead?.height === height ? ahead.block : undefined;
           if (ahead?.height === height) ahead = undefined;
@@ -916,20 +942,19 @@ export class WalletCore {
       store = step.store;
       progress = step.progress;
       if (mark.epoch !== this.walletEpoch) return progress;
-      const nowMs = Date.now();
-      if (progress.done || nowMs - lastPersist >= 1_000 || nowMs - started >= SCAN_BUDGET_MS) {
-        await this.saveScan(store, mark);
-        lastPersist = nowMs;
-        saved = true;
-      } else {
-        saved = false;
-      }
+      store = await this.scanCommit(store, mark);
       const now = `${store.lastHeight}:${store.inflight?.height ?? ""}:${store.inflight?.nextTx ?? ""}`;
       if (now === cursor) break;
     } while (!progress.done && Date.now() - started < SCAN_BUDGET_MS);
-    if (!saved && (await this.scanStillHere(mark))) await this.saveScan(store, mark);
+    await this.settle();
     return progress ?? stopped();
     }
+  }
+
+  /** Commit a scan step to memory (persisted by CoinStore shortly). Throws if the wallet changed. */
+  private async scanCommit(store: ScanStore, mark: ScanMark): Promise<ScanStore> {
+    if (!(await this.scanStillHere(mark))) throw new ScanStopped();
+    return this.coins_.commit(store.rev ?? 0, store, { flush: false });
   }
 
   /** Known scripts (one-time, Payjoin) via indexer hints, then raw tx hex. SP scan stays sequential. */
@@ -1011,6 +1036,24 @@ export class WalletCore {
   }
 
   /** Needs the previous wallet's password. */
+  /**
+   * Apply a transaction we just broadcast. Parents are fetched outside the writer queue, then
+   * committed against the rev they were prepared from; a concurrent write means try again.
+   */
+  private async applyOwnTx(account: ScanAccount, txHex: string): Promise<void> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const snap = await this.coins_.read();
+      const next = await applyTxHex(account, this.source(), snap.store, txHex, 0);
+      try {
+        await this.coins_.commit(snap.rev, next, { flush: true });
+        return;
+      } catch (e) {
+        if (!(e instanceof StaleWriteError)) throw e;
+      }
+    }
+    throw new Error("could not record the broadcast payment; it will appear after the next block");
+  }
+
   async restoreBackup(password: string): Promise<void> {
     await restoreVaultBackup(this.kv, password);
     this.keyCache = undefined;
@@ -1140,24 +1183,10 @@ export class WalletCore {
     const hexTx = built.txHex;
     void psbtForBroadcast(INTENT_SIMPLE_SEND, null, built.psbtBase64);
     const txid = await this.source().broadcast(hexTx);
-    await this.enqueueScan(async () => {
-      await this.afterBroadcast(txid, built, extra?.kind ?? "sent", extra?.label, extra?.feeRate ?? 0);
-      const fresh = await this.loadScan();
-      let next = applyBuiltSend(fresh, hexTx, built.ourOutputs);
-      const readHeight = this.source().getTxHeight;
-      const height = readHeight ? await readHeight.call(this.source(), txid).catch(() => null) : null;
-      if (height && height > 0) {
-        next = {
-          ...next,
-          utxos: next.utxos.map((u) => {
-            if (u.txid === txid) return { ...u, height };
-            if (u.spentBy === txid) return { ...u, spentHeight: height };
-            return u;
-          }),
-        };
-      }
-      await this.saveScan(next);
-    });
+    await this.afterBroadcast(txid, built, extra?.kind ?? "sent", extra?.label, extra?.feeRate ?? 0);
+    // Re-read inside the writer queue so a scan step prepared earlier cannot undo this.
+    // Confirmation comes from our own block scan; the txid is not looked up anywhere.
+    await this.coins_.update((fresh) => applyBuiltSend(fresh, hexTx, built.ourOutputs), { flush: true });
     return { kind: "txid", txid };
   }
 
@@ -1233,40 +1262,108 @@ export class WalletCore {
     await saveIndex(this.kv, index);
   }
 
-  async loadScan(): Promise<ScanStore> {
+  /** Raw read from storage. Only CoinStore calls this; everything else uses loadScan. */
+  private async readScanFromDisk(): Promise<ScanStore> {
     const session = await this.session();
     const grant = session ? null : await this.grant();
     const birthday = session?.birthday ?? grant?.birthday ?? DEFAULT_BIRTHDAY;
     const got = await this.loadSealed<ScanStore>(SCAN_KEY, () => emptyScanStore(birthday));
-    if (got.status === "missing" || got.status === "unreadable") return emptyScanStore(birthday);
+    if (got.status === "missing") return emptyScanStore(birthday);
+    if (got.status === "unreadable") {
+      // Never let an empty list be written over a list we merely cannot read right now.
+      throw new Error("locked");
+    }
     return got.value;
   }
 
-  /** Seals the scan store and keeps history in step with it. Requires the wallet to be unlocked. */
-  async saveScan(scan: ScanStore, mark?: ScanMark): Promise<void> {
-    if (mark && !(await this.scanStillHere(mark))) return;
-    if (!(await this.dataKey())) {
-      // Locked: the coin list moves on; history and one-time records catch up at unlock.
-      await this.saveSealed(SCAN_KEY, scan);
-      await this.noteChecked(scan.lastHeight);
-      return;
-    }
+  private async scanMarker(): Promise<unknown> {
+    const raw = (await this.kv.get([SCAN_KEY]))[SCAN_KEY];
+    if (raw === undefined || raw === null) return null;
+    return isSealed(raw) ? raw.nonce : JSON.stringify(raw);
+  }
+
+  /** One-time records decide which bip86 coins count as moved. Needs the data key. */
+  private async syncOneTime(scan: ScanStore): Promise<ScanStore> {
+    if (!(await this.dataKey())) return scan;
     const ot = await this.loadOneTime();
     const synced = syncOneTimeWithScan(scan, ot);
-    const next: ScanStore = synced.changedOt || synced.utxosSpent.some((s, i) => s !== scan.utxos[i]?.spent)
-      ? { ...scan, utxos: scan.utxos.map((u, i) => (synced.utxosSpent[i] === u.spent ? u : { ...u, spent: synced.utxosSpent[i]! })) }
-      : scan;
-    if (mark && !(await this.scanStillHere(mark))) return;
     if (synced.changedOt) await this.saveOneTime({ ...ot, records: synced.records });
-    if (mark && !(await this.scanStillHere(mark))) return;
-    await this.saveSealed(SCAN_KEY, next);
-    if (mark && !(await this.scanStillHere(mark))) return;
-    await this.noteChecked(next.lastHeight);
-    if (mark && !(await this.scanStillHere(mark))) return;
-    await this.onScanSaved(next);
+    if (!synced.changedOt && !synced.utxosSpent.some((sp, i) => sp !== scan.utxos[i]?.spent)) return scan;
+    return { ...scan, utxos: scan.utxos.map((u, i) => (synced.utxosSpent[i] === u.spent ? u : { ...u, spent: synced.utxosSpent[i]! })) };
+  }
+
+  /** History is rebuilt at most every HISTORY_EVERY_MS during a scan; at once after a user action. */
+  private historyAt = 0;
+  private historyStale = false;
+  private async afterScanPersist(scan: ScanStore, urgent: boolean): Promise<void> {
+    await this.noteChecked(scan.lastHeight);
+    if (!(await this.dataKey())) {
+      this.historyStale = true;
+      return;
+    }
+    if (!urgent && Date.now() - this.historyAt < HISTORY_EVERY_MS) {
+      this.historyStale = true;
+      return;
+    }
+    await this.onScanSaved(scan);
+  }
+
+  /** The single writer for this wallet's coin list. */
+  readonly coins_ = new CoinStore({
+    load: async () => {
+      const marker = await this.scanMarker();
+      return { store: await this.readScanFromDisk(), marker };
+    },
+    marker: () => this.scanMarker(),
+    persist: async (store) => {
+      const synced = await this.syncOneTime(store);
+      await this.saveSealed(SCAN_KEY, synced);
+      return { store: synced, marker: await this.scanMarker() };
+    },
+    afterPersist: (store, urgent) => this.afterScanPersist(store, urgent),
+  });
+
+  /** Write anything pending and bring history up to date. End of a scan run, Lock, switch. */
+  async settle(): Promise<void> {
+    await this.coins_.flush();
+    if (this.historyStale && (await this.dataKey())) {
+      await this.onScanSaved(await this.loadScan());
+    }
+  }
+
+  async loadScan(): Promise<ScanStore> {
+    if (!(await this.scanKey())) {
+      // No key at all (browser restarted while locked): nothing is readable, not even from memory.
+      this.coins_.invalidate();
+      const session = await this.session();
+      return emptyScanStore(session?.birthday ?? DEFAULT_BIRTHDAY);
+    }
+    try {
+      return (await this.coins_.read()).store;
+    } catch (e) {
+      if (e instanceof Error && e.message === "locked") {
+        const session = await this.session();
+        const grant = session ? null : await this.grant();
+        return emptyScanStore(session?.birthday ?? grant?.birthday ?? DEFAULT_BIRTHDAY);
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Save a list read with loadScan. Refused with StaleWriteError if the list changed since
+   * (its rev moved on). A list without a rev replaces whatever is stored.
+   */
+  async saveScan(scan: ScanStore, mark?: ScanMark): Promise<ScanStore | undefined> {
+    if (mark && !(await this.scanStillHere(mark))) return undefined;
+    if (!(await this.scanKey())) throw new Error("locked");
+    if (scan.rev === undefined) return this.coins_.replace(scan);
+    return this.coins_.commit(scan.rev, scan, { flush: true });
   }
 
   private async onScanSaved(scan: ScanStore): Promise<void> {
+    this.historyAt = Date.now();
+    this.historyStale = false;
     const hist = await this.loadHistory();
     const meta = await this.loadCoinMeta();
     const next = deriveHistory(scan, hist, { now: Date.now(), meta });
@@ -1284,15 +1381,18 @@ export class WalletCore {
         const session = await this.session();
         if (session) {
           const account = this.accountOf(session);
-          let sc = scan;
+          const watches: WatchedOutput[] = [];
           let o = ot;
           for (let i = have; i <= want; i++) {
             const k = account.oneTime(i);
-            sc = addWatch(sc, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index: i });
+            watches.push({ scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index: i });
             o = setOneTimeStatus(issueRecord(o, k.address, Date.now(), i), i, "swept");
           }
-          await this.saveSealed(SCAN_KEY, sc);
           await this.saveOneTime(o);
+          // May run inside a CoinStore write; queue the change instead of waiting on it.
+          void this.coins_
+            .update((cur) => watches.reduce((acc, w) => addWatch(acc, w), cur))
+            .catch(() => undefined);
         }
       }
     }
@@ -1396,13 +1496,9 @@ export class WalletCore {
     const k = account.oneTime(index);
     const next = open ? ot : issueRecord(ot, k.address, Date.now(), index);
     if (!open) await this.saveOneTime(next);
-    const watched = addWatch(scan, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index });
-    await this.saveScan(watched);
-    try {
-      await this.saveScan(await this.recoverWatches(account, this.source(), watched));
-    } catch {
-      /* sequential scan still runs */
-    }
+    void scan;
+    // Watched locally by the block scan. The address is never sent to a lookup service.
+    await this.coins_.update((cur) => addWatch(cur, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index }));
     return next.records.find((r) => r.index === index)!;
   }
 
@@ -1464,12 +1560,8 @@ export class WalletCore {
     const k = account.oneTime(index);
     next = issueRecord(next, k.address, Date.now(), index);
     await this.saveOneTime(next);
-    await this.saveScan(addWatch(scan, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index }));
-    try {
-      await this.saveScan(await this.recoverWatches(account, this.source(), await this.loadScan()));
-    } catch {
-      /* the new address stays watched for the next scan */
-    }
+    void scan;
+    await this.coins_.update((cur) => addWatch(cur, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index }));
     return (await this.loadOneTime()).records.find((r) => r.index === index)!;
   }
 
@@ -1729,9 +1821,14 @@ export class WalletCore {
       k: coin.k,
       height: coin.height,
     };
-    let nextScan = addWatch(scan, { scriptPubKey: hex(payScript), tweak: hex(payTweak), label: null, k: 0 });
-    nextScan = addWatch(nextScan, { scriptPubKey: hex(extraScript), tweak: hex(extraTweak), label: null, k: 0 });
-    await this.saveScan(nextScan);
+    await this.coins_.update((cur) =>
+      addWatch(addWatch(cur, { scriptPubKey: hex(payScript), tweak: hex(payTweak), label: null, k: 0 }), {
+        scriptPubKey: hex(extraScript),
+        tweak: hex(extraTweak),
+        label: null,
+        k: 0,
+      }),
+    );
     await this.saveHpkeSecret(session.id, hpke.sk);
     const sessions = await this.loadPayjoinSessions();
     sessions.push(session);
@@ -1905,7 +2002,6 @@ export class WalletCore {
           continue;
         }
         const proposal = psbtForBroadcast(INTENT_PAYJOIN, got, null);
-        const scan = await this.loadScan();
         const signed = signPayjoinProposal({
           proposalB64: proposal,
           account,
@@ -1933,7 +2029,7 @@ export class WalletCore {
         } catch {
           /* history is best effort; the payment is already broadcast */
         }
-        await this.saveScan(await applyTxHex(account, this.source(), scan, signed.txHex, 0));
+        await this.applyOwnTx(account, signed.txHex);
         processed += 1;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);

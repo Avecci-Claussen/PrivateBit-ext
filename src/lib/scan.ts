@@ -53,6 +53,10 @@ export type ScanStore = {
   watch?: WatchedOutput[];
   /** Tx hex fetches that failed often enough to stop blocking the block. Retried later. */
   deferred?: ScanHole[];
+  /** Write counter kept by CoinStore. A change prepared from an older rev is refused. */
+  rev?: number;
+  /** Hashes of the last matched blocks, newest last, to notice a reorg. */
+  recent?: [number, string][];
 };
 
 export type ScanProgress = {
@@ -243,6 +247,8 @@ function cloneStore(store: ScanStore): ScanStore {
       : undefined,
     watch: store.watch?.map((w) => ({ ...w })),
     deferred: store.deferred?.map((d) => ({ ...d })),
+    ...(store.rev !== undefined ? { rev: store.rev } : {}),
+    ...(store.recent ? { recent: store.recent.map((r) => [r[0], r[1]] as [number, string]) } : {}),
   };
 }
 
