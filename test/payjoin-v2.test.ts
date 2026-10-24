@@ -113,7 +113,7 @@ async function fundedWallet(dir: MemoryDirectory, coinTxid: string, value: strin
 }
 
 describe("BIP77 two-party Payjoin", () => {
-  it("is exactly two interactive parties — not a waiting-room mix", () => {
+  it("is exactly two interactive parties: not a waiting-room mix", () => {
     expect(PAYJOIN_PARTIES).toBe(2);
     const uri = encodeBip21({
       address: "bc1ptest",
@@ -359,7 +359,7 @@ describe("BIP77 two-party Payjoin", () => {
     expect(destinationNeedsPayjoin(r)).toBe(false);
   });
 
-  it("a plain sp1 destination cannot Payjoin — RK lives on the payment link", async () => {
+  it("a plain sp1 destination cannot Payjoin: RK lives on the payment link", async () => {
     const dir = new MemoryDirectory();
     const bob = await fundedWallet(dir, "11".repeat(32), "10300");
     const outcome = await sendPayjoinV2({

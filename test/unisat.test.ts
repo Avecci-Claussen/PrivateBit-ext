@@ -83,7 +83,7 @@ describe("UniSat envelope and block-tx pages", () => {
     expect(migrated.payjoinDirectory).toBe("https://payjo.in");
   });
 
-  it("migrates ntfy.sh off the default — it cannot carry 7168-byte HPKE bodies", () => {
+  it("migrates ntfy.sh off the default: it cannot carry 7168-byte HPKE bodies", () => {
     const migrated = migrateChainConfig({
       kind: "unisat",
       url: "https://open-api-fractal.unisat.io",

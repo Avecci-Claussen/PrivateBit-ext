@@ -7,7 +7,7 @@ import { scanTransaction } from "../src/lib/scan.ts";
 import { parseTxHex, scureIdHex, taprootOutputs, voutFromParentHex } from "../src/lib/tx.ts";
 import { createMnemonic, vaultFromMnemonic } from "../src/lib/vault.ts";
 
-/** Fractal 2228749 / 0a601319… — P2WPKH → unique SP P2TR + change. */
+/** Fractal 2228749 / 0a601319…: P2WPKH → unique SP P2TR + change. */
 const SP_SEND_HEX =
   "020000000001016adc76da1ae0abb6050662c118f37341ffdddb7a32cc85ba3ef61418542fc26d0000000000ffffffff0240420f00000000002251203c8284b9fa541f6187f688982ac1a0e91c3de19a0f69d1bd069ac27c3847a6cdb453890000000000160014ee4fbefa4054af754130fbc8d71999e132ce5c8402473044022044d57365294352ca4ab4c0d7fa3a4f13142cde3fb9bad8e9a2ce24f2ae7476a502207002cf6e791bc6992901be2bcad942a192f34f69f1c300f67eba6549d8f305b401210328633a52a04265a2fe17b75b34211fcbf8f05f8b8fa7c10ce4bbe2f2d20e616800000000";
 const PARENT_HEX =
