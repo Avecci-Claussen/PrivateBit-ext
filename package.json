@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Private Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
   "scripts": {
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-dist.mjs dist",
+    "check:dist": "node scripts/check-dist.mjs dist",
     "test": "vitest run",
     "test:watch": "vitest",
     "directory": "node --experimental-strip-types directory/server.ts"

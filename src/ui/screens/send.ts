@@ -252,7 +252,7 @@ function toLeg(d: Dest, lbl?: string): PathLeg {
   if (d.kind === "none") return { title: "Not set yet", sub: "Paste a receive code, payment link, or address" };
   if (d.kind === "error") return { title: "Cannot pay this", sub: d.msg };
   if (d.kind === "sp") return { title: who || "Their receive code", sub: mid(d.address, 10, 8) };
-  if (d.kind === "paylink") return { title: who || "Their payment link", sub: "Payjoin — they add a coin" };
+  if (d.kind === "paylink") return { title: who || "Their payment link", sub: "Payjoin: they add a coin" };
   if (d.kind === "notpb") return { title: who || "Payment request", sub: mid(d.address, 10, 8) };
   return { title: who || "This address", sub: mid(d.address, 10, 8) };
 }

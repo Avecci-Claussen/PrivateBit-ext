@@ -196,7 +196,7 @@ type Msg =
   | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number; add?: boolean; name?: string }
   | { type: "SWITCH_WALLET"; id: string }
   | { type: "UNLOCK"; password: string }
-  | { type: "RESTORE_BACKUP" }
+  | { type: "RESTORE_BACKUP"; password: string }
   | { type: "LOCK" }
   | { type: "ACTIVITY" }
   | { type: "SCAN" }
@@ -333,7 +333,7 @@ async function handle(msg: Msg): Promise<unknown> {
       kickCatchup(0);
       return bundle();
     case "RESTORE_BACKUP":
-      await wallet.restoreBackup();
+      await wallet.restoreBackup(msg.password);
       await kv.remove([ACTIVITY_KEY, FEES_KEY]);
       await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       return bundle();
@@ -473,13 +473,19 @@ async function handle(msg: Msg): Promise<unknown> {
       await wallet.changePassword(msg.current, msg.next);
       return null;
     case "REMOVE_WALLET": {
-      await wallet.removeWallet(msg.password);
+      // Only the open wallet goes. Storage is cleared completely only when it was the last one.
+      const { wiped } = await wallet.removeWallet(msg.password);
       await chrome.alarms.clear(PJ_ALARM);
       await chrome.alarms.clear(PJ_SOON);
+      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      if (!wiped) {
+        await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
+        return { wiped: false, left: (await wallet.state()).wallets?.length ?? 0 };
+      }
       await chrome.storage.local.clear();
       await chrome.storage.session.clear();
       const left = { ...(await chrome.storage.local.get(null)), ...(await chrome.storage.session.get(null)) };
-      return { left: Object.keys(left).length };
+      return { wiped: true, left: Object.keys(left).length };
     }
     default:
       throw new Error("unknown");

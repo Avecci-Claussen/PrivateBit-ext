@@ -1,6 +1,6 @@
 import { detectOurUtxos, type DetectedOutput } from "./bip352.ts";
 import type { SharedBlock } from "./blockshare.ts";
-import type { Account } from "./keys.ts";
+import type { ScanAccount } from "./keys.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
 import type { ChainSource, TxInputScript } from "./chain.ts";
 import { parseTxHex, taprootOutputs, voutFromParentHex, type ParsedTx } from "./tx.ts";
@@ -156,7 +156,7 @@ function toRawVin(
 }
 
 export async function scanTransaction(
-  account: Account,
+  account: ScanAccount,
   source: ChainSource,
   txHex: string,
   _height: number,
@@ -277,7 +277,7 @@ export function markAbsentWatchSpent(store: ScanStore, scriptPubKey: string, liv
 
 /** Retry txids we stepped past. Does not block the sequential scan. */
 export async function retryDeferred(
-  account: Account,
+  account: ScanAccount,
   source: ChainSource,
   store: ScanStore,
   limit = 8,
@@ -425,7 +425,7 @@ function ingestSeenTx(store: ScanStore, txHex: string, height: number): void {
  * Does not replace Silent Payment sequential scan: hints are only candidate txids.
  */
 export async function recoverWatchedFromHints(
-  account: Account,
+  account: ScanAccount,
   source: ChainSource,
   store: ScanStore,
   hints: { txid: string; height: number }[],
@@ -448,7 +448,7 @@ export async function recoverWatchedFromHints(
 
 /** Apply a tx we already have (broadcast or mempool) without waiting for its block. */
 export async function applyTxHex(
-  account: Account,
+  account: ScanAccount,
   source: ChainSource,
   store: ScanStore,
   txHex: string,
@@ -493,7 +493,7 @@ export async function confirmPendingUtxos(source: ChainSource, store: ScanStore)
 
 /** Match one slice of a saved block to this wallet. No network. */
 export function applySharedSlice(
-  account: Account,
+  account: ScanAccount,
   store: ScanStore,
   block: SharedBlock,
   from: number,
@@ -582,7 +582,7 @@ export function applySharedSlice(
 
 /** One batch so a Chrome MV3 worker can persist before it is killed. */
 export async function scanStep(
-  account: Account,
+  account: ScanAccount,
   source: ChainSource,
   store: ScanStore,
   tip: number,
@@ -728,7 +728,7 @@ export async function scanStep(
 }
 
 export async function scanRange(
-  account: Account,
+  account: ScanAccount,
   source: ChainSource,
   store: ScanStore,
   toHeight: number,

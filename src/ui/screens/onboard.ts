@@ -49,7 +49,7 @@ screens.welcome = () => ({
     <li class="row small">${I("route", "s16")}<span>Payment links hide which coins are yours (Payjoin).</span></li>
     <li class="row small">${I("scan-line", "s16")}<span>Your coins are found locally. No server learns which are yours.</span></li>
   </ul>`,
-  foot: { cls: "plain", html: html`${S.b?.state.hasBackup ? html`<button class="btn btn-primary btn-block" type="button" data-act="restore-backup">Recover the previous wallet</button>` : ""}<button class="btn ${S.b?.state.hasBackup ? "btn-secondary" : "btn-primary"} btn-block" type="button" data-act="go" data-to="create-password">Create a new wallet</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="import">I already have recovery words</button>` },
+  foot: { cls: "plain", html: html`${S.b?.state.hasBackup ? html`<button class="btn btn-primary btn-block" type="button" data-act="go" data-to="restore-backup">Recover the previous wallet</button>` : ""}<button class="btn ${S.b?.state.hasBackup ? "btn-secondary" : "btn-primary"} btn-block" type="button" data-act="go" data-to="create-password">Create a new wallet</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="import">I already have recovery words</button>` },
 });
 
 /* ---------- set password (create and import) ---------- */
@@ -461,13 +461,30 @@ actions["boot-retry"] = async () => {
   const ok = await run("boot", async () => refreshUntilReady(12));
   if (ok) await boot();
 };
-actions["restore-backup"] = async () => {
-  const ok = await run("boot", async () => {
-    S.b = await call({ type: "RESTORE_BACKUP" });
-    return true;
-  });
-  if (ok) {
-    toast("Previous wallet restored. Unlock it.");
-    go("unlock", {}, { reset: true });
+screens["restore-backup"] = () => ({
+  title: "Recover previous wallet",
+  main: html`<div class="state" style="padding-top:var(--s-2)"><div class="big neutral">${I("key-round")}</div><h1>Recover the previous wallet</h1><p>Enter the password that wallet used. The wallet that is here now is kept as the previous one, so you can switch back the same way.</p></div>
+  <div data-enter="restore-backup-go">${pwField("bkpw", "Previous wallet's password", "current-password")}</div>
+  ${err("bk") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("bk")}</span></p>` : ""}`,
+  foot: html`<button class="btn btn-primary btn-block" type="button" data-act="restore-backup-go">${busy("bk") ? html`${I("loader-circle", "s16 spin")}Checking…` : "Recover"}</button><button class="btn btn-ghost btn-block" type="button" data-act="back">Cancel</button>`,
+});
+actions["restore-backup-go"] = async () => {
+  const password = fv("bkpw");
+  if (!password) {
+    S.err.bk = "Enter that wallet's password.";
+    return render();
   }
+  const ok = await run(
+    "bk",
+    async () => {
+      S.b = await call({ type: "RESTORE_BACKUP", password });
+      return true;
+    },
+    "bk",
+  );
+  if (S.err.bk && /wrong password/i.test(S.err.bk)) S.err.bk = "Wrong password for the previous wallet.";
+  if (!ok) return render();
+  S.f = {};
+  toast("Previous wallet restored. Unlock it.");
+  go("unlock", {}, { reset: true });
 };

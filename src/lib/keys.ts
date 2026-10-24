@@ -25,6 +25,16 @@ export type Account = {
   oneTime: (index: number) => OneTimeKey;
 };
 
+/**
+ * What block matching needs and nothing more. This is what stays in memory after Lock:
+ * it can recognize incoming payments but cannot spend, sign or show the recovery words.
+ */
+export type ScanAccount = Pick<Account, "scanSecret" | "spendPub" | "labels">;
+
+export function scanAccountFrom(scanSecret: Uint8Array, spendPub: Uint8Array): ScanAccount {
+  return { scanSecret, spendPub, labels: precomputeLabels(scanSecret, []) };
+}
+
 /** BIP86 key-path Taproot under the Fractal coin type. Never m/86'/0'/..., which other wallets use. */
 export const ONE_TIME_ACCOUNT_PATH = `m/86'/${FRACTAL.coinType}'/0'/0`;
 export const ONE_TIME_PATH_LABEL = "m/86'/8228'/0'/0/i";

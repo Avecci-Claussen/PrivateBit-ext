@@ -84,11 +84,13 @@ describe("vault", () => {
     const second = vaultFromMnemonic({ mnemonic: createMnemonic(128), birthday: 1 });
     await persistVault(kv, lockVault(first, "pw"));
     expect(await loadVaultBackup(kv)).toBeNull();
-    await persistVault(kv, lockVault(second, "pw2"));
+    await persistVault(kv, lockVault(second, "pw2"), { keepPrevious: true });
     const bak = await loadVaultBackup(kv);
     expect(bak).toBeTruthy();
     expect(unlockVault(bak!, "pw").mnemonic).toBe(first.mnemonic);
-    await restoreVaultBackup(kv);
+    await expect(restoreVaultBackup(kv, "wrong")).rejects.toThrow(/wrong password/);
+    expect(unlockVault((await loadVaultBlob(kv))!, "pw2").mnemonic).toBe(second.mnemonic);
+    await restoreVaultBackup(kv, "pw");
     expect(unlockVault((await loadVaultBlob(kv))!, "pw").mnemonic).toBe(first.mnemonic);
     expect(unlockVault((await loadVaultBackup(kv))!, "pw2").mnemonic).toBe(second.mnemonic);
   });

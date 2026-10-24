@@ -20,6 +20,19 @@ export function deriveDataKey(seed: Uint8Array): Uint8Array {
   return hkdf(sha256, seed, SALT, INFO, 32);
 }
 
+const SCAN_INFO = new TextEncoder().encode("privatebit.scan");
+
+/**
+ * Second key from the same seed for what block matching must read and write after Lock:
+ * the coin list and the chain settings. History, labels, frozen marks, one-time records and
+ * Payjoin sessions stay under the data key, which is dropped at Lock.
+ * Same HKDF construction as deriveDataKey, different info string.
+ */
+export function deriveScanKey(seed: Uint8Array): Uint8Array {
+  if (seed.length < 16) throw new Error("seed too short");
+  return hkdf(sha256, seed, SALT, SCAN_INFO, 32);
+}
+
 export function isSealed(value: unknown): value is SealedBlob {
   return (
     !!value &&

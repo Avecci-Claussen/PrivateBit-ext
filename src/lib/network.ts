@@ -62,16 +62,6 @@ export const DEFAULT_PAYJOIN_DIRECTORY = "https://payjo.in";
 /** Default OHTTP relay used with payjo.in (BIP77 ecosystem). */
 export const DEFAULT_OHTTP_RELAY = "https://pj.bobspacebkk.com";
 
-/**
- * No API key is ever baked into the build. The key is optional, entered by the user in
- * Settings and stored encrypted. Node tests may pass PRIVATEBIT_LIVE_TEST_UNISAT_KEY through the process
- * environment to run the live tests; the extension has no process and reads nothing here.
- */
-export function envUnisatToken(): string {
-  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
-  return (env?.PRIVATEBIT_LIVE_TEST_UNISAT_KEY ?? "").trim();
-}
-
 export function envUnisatBase(): string {
   return FRACTAL.defaultUnisat;
 }
@@ -79,7 +69,9 @@ export function envUnisatBase(): string {
 export const DEFAULT_CHAIN: ChainConfig = {
   kind: "unisat",
   url: FRACTAL.defaultUnisat,
-  unisatToken: envUnisatToken() || undefined,
+  // Never set here. The key is optional, typed by the user in Settings and stored encrypted.
+  // scripts/check-dist.mjs fails the build if a value ever shows up in this object.
+  unisatToken: undefined,
   payjoinDirectory: DEFAULT_PAYJOIN_DIRECTORY,
   ohttpRelay: DEFAULT_OHTTP_RELAY,
 };

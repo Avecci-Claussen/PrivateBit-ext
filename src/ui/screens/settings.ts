@@ -369,7 +369,7 @@ loaders["set-backup"] = () => {
 screens["set-backup"] = () => {
   const st = S.b!.state;
   const w = S.d.backupWords as string[] | undefined;
-  const kv = html`<div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Words</span><span class="v">${st.mnemonicWords ?? "—"}</span></div><div class="r"><span class="k">Extra passphrase</span><span class="v">${st.hasPassphrase ? "Set" : "Not set"}</span></div><div class="r"><span class="k">Keys path</span><span class="v mono">m/352'/8228'/0'</span></div><div class="r"><span class="k">One-time addresses</span><span class="v mono">m/86'/8228'/0'/0/i</span></div></div></div>`;
+  const kv = html`<div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Words</span><span class="v">${st.mnemonicWords ?? "Unknown"}</span></div><div class="r"><span class="k">Extra passphrase</span><span class="v">${st.hasPassphrase ? "Set" : "Not set"}</span></div><div class="r"><span class="k">Keys path</span><span class="v mono">m/352'/8228'/0'</span></div><div class="r"><span class="k">One-time addresses</span><span class="v mono">m/86'/8228'/0'/0/i</span></div></div></div>`;
   if (w) {
     return {
       title: "Backup",

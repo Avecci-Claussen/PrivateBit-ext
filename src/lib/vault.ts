@@ -140,12 +140,30 @@ const VAULT_KEY = "privatebit.vault";
 /** Previous vault, one generation. Reloading the extension must never destroy this. */
 export const VAULT_BAK_KEY = "privatebit.vault.bak";
 const SESSION_KEY = "privatebit.session";
-/** Scan secret for the open wallet. Survives Lock. Cleared on browser quit, switch, or remove. Not packed to disk. */
+/**
+ * What block matching needs after Lock: the scan secret, the public spend key and the key that
+ * seals the coin list. Never the recovery words, the seed or the spend secret. Session storage only
+ * (memory, cleared when the browser quits), and removed on switch and remove.
+ */
 export const SCAN_GRANT_KEY = "privatebit.scan.grant";
 
-export async function persistVault(kv: Kv, blob: VaultBlob): Promise<void> {
+export type ScanGrant = {
+  v: 2;
+  scanSecret: string;
+  spendPub: string;
+  /** Seals the coin list and the chain settings, not history or labels. */
+  scanKey: string;
+  birthday: number;
+};
+
+/**
+ * Write the vault. The previous vault is kept only when a different wallet replaces it
+ * (keepPrevious). A password change or a birthday edit never leaves an older copy behind,
+ * so the old password stops working.
+ */
+export async function persistVault(kv: Kv, blob: VaultBlob, opts: { keepPrevious?: boolean } = {}): Promise<void> {
   const prev = await loadVaultBlob(kv);
-  if (prev && JSON.stringify(prev) !== JSON.stringify(blob)) {
+  if (opts.keepPrevious && prev && JSON.stringify(prev) !== JSON.stringify(blob)) {
     await kv.set({ [VAULT_BAK_KEY]: prev });
   }
   await kv.set({ [VAULT_KEY]: blob });
@@ -161,10 +179,14 @@ export async function loadVaultBackup(kv: Kv): Promise<VaultBlob | null> {
   return (got[VAULT_BAK_KEY] as VaultBlob) ?? null;
 }
 
-/** Put the previous vault back. The wallet that was current becomes the backup. */
-export async function restoreVaultBackup(kv: Kv): Promise<void> {
+/**
+ * Put the previous vault back. Its own password is required, so whoever is at the computer
+ * cannot swap wallets without knowing it. The wallet that was current becomes the backup.
+ */
+export async function restoreVaultBackup(kv: Kv, password: string): Promise<void> {
   const bak = await loadVaultBackup(kv);
   if (!bak) throw new Error("No previous wallet is saved on this computer.");
+  unlockVault(bak, password);
   const cur = await loadVaultBlob(kv);
   await clearSession(kv);
   await clearScanGrant(kv);
@@ -179,10 +201,7 @@ export async function saveSession(kv: Kv, vault: UnlockedVault): Promise<void> {
     passphrase: vault.passphrase,
     birthday: vault.birthday,
   };
-  await kv.set({
-    [SESSION_KEY]: body,
-    [SCAN_GRANT_KEY]: body,
-  });
+  await kv.set({ [SESSION_KEY]: body });
 }
 
 export async function loadSession(kv: Kv): Promise<UnlockedVault | null> {
@@ -196,12 +215,23 @@ export async function clearSession(kv: Kv): Promise<void> {
   await kv.remove([SESSION_KEY]);
 }
 
-/** Words for finding coins while the wallet is locked. Absent after a switch or a browser quit. */
-export async function loadScanGrant(kv: Kv): Promise<UnlockedVault | null> {
+export async function saveScanGrant(kv: Kv, grant: ScanGrant): Promise<void> {
+  await kv.set({ [SCAN_GRANT_KEY]: grant });
+}
+
+/**
+ * Keys for finding coins while the wallet is locked. Absent after a switch or a browser quit.
+ * An older build stored the recovery words here; that copy is deleted on sight and not used.
+ */
+export async function loadScanGrant(kv: Kv): Promise<ScanGrant | null> {
   const got = await kv.get([SCAN_GRANT_KEY]);
-  const s = got[SCAN_GRANT_KEY] as { mnemonic: string; passphrase: string; birthday: number } | undefined;
-  if (!s?.mnemonic) return null;
-  return vaultFromMnemonic(s);
+  const s = got[SCAN_GRANT_KEY] as Partial<ScanGrant> & { mnemonic?: string } | undefined;
+  if (!s) return null;
+  if (s.mnemonic !== undefined || s.v !== 2 || typeof s.scanSecret !== "string" || typeof s.scanKey !== "string") {
+    await kv.remove([SCAN_GRANT_KEY]);
+    return null;
+  }
+  return s as ScanGrant;
 }
 
 export async function clearScanGrant(kv: Kv): Promise<void> {

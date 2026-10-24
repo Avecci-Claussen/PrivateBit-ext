@@ -108,7 +108,7 @@ export function healthBanner(): Safe | string {
 
 function backupBanner(): Safe | string {
   if (!S.b?.state.hasBackup) return "";
-  return html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">A previous wallet is still on this computer</span>Creating a new one did not erase the last vault. <button class="link" type="button" data-act="restore-backup">Recover it</button></div></div>`;
+  return html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">A previous wallet is still on this computer</span>Creating a new one did not erase the last vault. <button class="link" type="button" data-act="go" data-to="restore-backup">Recover it</button></div></div>`;
 }
 actions.retry = async () => {
   await run("retry", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PrivateBit } from "../src/lib/wallet.ts";
-import { DEFAULT_CHAIN, envUnisatToken } from "../src/lib/network.ts";
+import { DEFAULT_CHAIN } from "../src/lib/network.ts";
+import { envUnisatToken } from "./live-env.ts";
 import { memoryKv } from "../src/lib/vault.ts";
 import { emptyScanStore, scanRange } from "../src/lib/scan.ts";
 import { accountFromVault } from "../src/lib/keys.ts";
@@ -10,7 +11,7 @@ const live = !!envUnisatToken();
 
 describe.skipIf(!live)("PrivateBit first-run against UniSat", () => {
   it("creates a vault, shows an sp1 receive code, talks to UniSat, scans a small block", { timeout: 120_000 }, async () => {
-    const w = new PrivateBit(memoryKv(), DEFAULT_CHAIN);
+    const w = new PrivateBit(memoryKv(), { ...DEFAULT_CHAIN, unisatToken: envUnisatToken() || undefined });
     const tip = await w.source().getTip();
     expect(tip.height).toBeGreaterThan(2_000_000);
 

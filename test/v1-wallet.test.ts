@@ -68,8 +68,13 @@ describe("encryption at rest", () => {
     const st = await w.state();
     expect(st.balance).toBe("50000");
     expect((await w.loadChain()).unisatToken).toBe("user-token-123");
-    // Locked: sealed data is unreadable and state shows nothing.
+    // Locked: state shows nothing and history is unreadable. Only the scan grant (no words,
+    // no seed, no spend key) can still read the coin list so new payments are found.
     await w.lock();
+    expect((await w.state()).balance).toBeUndefined();
+    await expect(w.history()).rejects.toThrow(/locked/);
+    // After the browser quits the grant is gone too: nothing is readable.
+    await kv.remove(["privatebit.scan.grant"]);
     expect((await w.loadScan()).utxos).toHaveLength(0);
     await expect(w.saveScan(legacyScan)).rejects.toThrow(/locked/);
   });

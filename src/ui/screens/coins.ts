@@ -242,7 +242,7 @@ screens["coin-split"] = () => {
   <div class="field"><p class="label" id="sn">How many pieces</p><div class="seg tall" role="radiogroup" aria-labelledby="sn">${seg(2, "Two")}${seg(3, "Three")}${seg(4, "Four")}</div></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">Network fee</span><span class="v mono">${sats(st.fee)}</span></div>
-    <div class="r"><span class="k">To assign</span><span class="v mono">${st.spendable !== null ? fb(st.spendable) : "—"}</span></div>
+    <div class="r"><span class="k">To assign</span><span class="v mono">${st.spendable !== null ? fb(st.spendable) : "Waiting for the fee"}</span></div>
     <div class="r"><span class="k">Assigned</span><span class="v mono">${fb(st.assigned)}</span></div></div></div>
   ${rows}${meter}
   ${errMsg ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${errMsg}</span></p>` : ""}

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { openChain } from "../src/lib/chain.ts";
-import { DEFAULT_CHAIN, envUnisatToken } from "../src/lib/network.ts";
+import { DEFAULT_CHAIN } from "../src/lib/network.ts";
+import { envUnisatToken } from "./live-env.ts";
 
 const live = !!envUnisatToken();
 
 describe.skipIf(!live)("UniSat Fractal Open API (live)", () => {
   it("reads tip, fees, one block page, and rawtx", async () => {
-    const src = openChain(DEFAULT_CHAIN);
+    const src = openChain({ ...DEFAULT_CHAIN, unisatToken: envUnisatToken() || undefined });
     const tip = await src.getTip();
     expect(tip.height).toBeGreaterThan(2_000_000);
     expect(tip.hash.length).toBe(64);
