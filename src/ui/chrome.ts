@@ -149,7 +149,7 @@ export const sheets: Record<string, () => Safe> = {
   privacy: () => {
     const h = S.b?.health;
     const own = S.b?.state.chain.kind === "core";
-    const down = h && h.state !== "ok";
+    const down = h && (h.state === "offline" || h.state === "rate-limited");
     const usdOn = S.b?.prefs.usd !== false;
     return sheet(
       "ps-h",

@@ -2,7 +2,7 @@ import { S, screens, actions, loaders, go, render, refresh, run, toast } from ".
 import { call, type HistoryEntry, type SessionView } from "../api.ts";
 import { html, I, NETLOGO, fbShort, num, hm, when, dayLabel, left, type Safe } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
-import { scanning, health, price, usd, hidden, syncLine } from "../derive.ts";
+import { scanning, health, price, usd, hidden, syncLine, retryIn, retryText } from "../derive.ts";
 
 export async function loadHistory(): Promise<void> {
   S.d.history = await call({ type: "HISTORY" });
@@ -99,10 +99,12 @@ export function healthBanner(): Safe | string {
   const h = health();
   const b = S.b!;
   const since = b.health?.since ? hm(b.health.since) : "";
+  const wait = retryIn();
+  const again = wait ? `${retryText(wait).replace(/^r/, "R")}.` : "Retrying every minute.";
   if (h === "offline")
-    return html`<div class="banner danger" role="alert">${I("unplug", "s16")}<div><span class="bt">Cannot reach the block data service</span><p>Balance may be out of date${since ? ` since ${since}` : ""}. Sending is paused. Retrying every minute.</p><p><button class="link" type="button" data-act="retry">Retry now</button> or <button class="link" type="button" data-act="go" data-to="set-node">use my own node</button></p></div></div>`;
+    return html`<div class="banner danger" role="alert">${I("unplug", "s16")}<div><span class="bt">Cannot reach the block data service</span><p>Balance may be out of date${since ? ` since ${since}` : ""}. Sending is paused. ${again}</p><p><button class="link" type="button" data-act="retry">Retry now</button> or <button class="link" type="button" data-act="go" data-to="set-node">use my own node</button></p></div></div>`;
   if (h === "rate-limited")
-    return html`<div class="banner warn" role="alert">${I("unplug", "s16")}<div><span class="bt">The block data service is limiting requests</span><p>Without an API key it often refuses to answer${since ? `, since ${since}` : ""}. Finding coins is slower until it answers again. Retrying every minute.</p><p><button class="link" type="button" data-act="retry">Retry now</button>, <button class="link" type="button" data-act="go" data-to="set-network">add your own key</button> or <button class="link" type="button" data-act="go" data-to="set-node">use my own node</button></p></div></div>`;
+    return html`<div class="banner warn" role="alert">${I("unplug", "s16")}<div><span class="bt">The block data service is limiting requests</span><p>Without an API key it often refuses to answer${since ? `, since ${since}` : ""}. Finding coins is slower until it answers again. ${again}</p><p><button class="link" type="button" data-act="retry">Retry now</button>, <button class="link" type="button" data-act="go" data-to="set-network">add your own key</button> or <button class="link" type="button" data-act="go" data-to="set-node">use my own node</button></p></div></div>`;
   return "";
 }
 

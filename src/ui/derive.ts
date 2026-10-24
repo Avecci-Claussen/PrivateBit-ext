@@ -56,12 +56,26 @@ export function usd(sats: bigint | string | number, o: { approx?: boolean } = {}
 export const hidden = (): boolean => S.f.hideBal === true;
 
 /** One line about how far the wallet has looked. Never claims "up to date" without a known tip. */
+/** Seconds until the block download tries again, when it is waiting after a failure. */
+export function retryIn(now = Date.now()): number | undefined {
+  const r = S.b?.health?.retryAt;
+  if (!r || r <= now) return undefined;
+  return Math.max(1, Math.ceil((r - now) / 1000));
+}
+
+export function retryText(secs: number): string {
+  return secs >= 90 ? `retrying in ${Math.round(secs / 60)} min` : `retrying in ${secs} s`;
+}
+
 export function syncLine(): string {
   const st = S.b?.state;
   const sc = scanning();
   const at = st?.lastHeight ?? 0;
   const checked = !!st && at >= (st.birthday ?? 0);
   const h = health();
+  const wait = retryIn();
+  if (sc.on && wait)
+    return `Waiting for the data service, ${retryText(wait)}. Block ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`;
   if (sc.on) return `Downloading blocks, ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`;
   if (!st?.tip) {
     if (h !== "ok") return checked ? `Last checked block ${at.toLocaleString("en-US")}` : "Waiting for block data";

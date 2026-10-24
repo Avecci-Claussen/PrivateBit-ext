@@ -7,7 +7,7 @@ import type { PlanPayload } from "../lib/send.ts";
 import type { ChainConfig } from "../lib/network.ts";
 import type { OneTimeRecord } from "../lib/onetime.ts";
 
-export type Health = { state: "ok" | "rate-limited" | "offline" | "error"; since?: number; at: number };
+export type Health = { state: "ok" | "rate-limited" | "offline" | "error"; since?: number; at: number; retryAt?: number };
 export type PriceCache = { usd?: number; at?: number; fetchedAt?: number; failedAt?: number };
 export type LockInfo = { by: "auto" | "user"; minutes?: number; at: number };
 export type Bundle = {

@@ -8,7 +8,7 @@ import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/pref
 import { getPrice, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates } from "./lib/requests.ts";
 import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
 import { openChain } from "./lib/chain.ts";
-import { clearSharedChain } from "./lib/blockshare.ts";
+import { clearSharedChain, formatBlockStats, onBlockStats } from "./lib/blockshare.ts";
 import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
 
@@ -30,7 +30,14 @@ const PRICE_KEY = "privatebit.price";
 const ONBOARD_KEY = "privatebit.onboard";
 const FEES_KEY = "privatebit.fees";
 
-export type Health = { state: "ok" | "rate-limited" | "offline" | "error"; since?: number; at: number; detail?: string };
+export type Health = {
+  state: "ok" | "rate-limited" | "offline" | "error";
+  since?: number;
+  at: number;
+  detail?: string;
+  /** When the block download tries again after a failure or a run with no progress. */
+  retryAt?: number;
+};
 export type PriceCache = { usd?: number; at?: number; fetchedAt?: number; failedAt?: number };
 export type LockInfo = { by: "auto" | "user"; minutes?: number; at: number };
 
@@ -46,17 +53,18 @@ function errorCode(e: unknown): "rate-limited" | "offline" | undefined {
   return undefined;
 }
 
-async function noteHealth(e?: unknown): Promise<void> {
+async function noteHealth(e?: unknown, retryInMs?: number): Promise<void> {
   const prev = (await kv.get([HEALTH_KEY]))[HEALTH_KEY] as Health | undefined;
   const now = Date.now();
+  const retryAt = retryInMs !== undefined ? now + retryInMs : undefined;
   if (!e) {
-    await kv.set({ [HEALTH_KEY]: { state: "ok", at: now } satisfies Health });
+    await kv.set({ [HEALTH_KEY]: { state: "ok", at: now, ...(retryAt ? { retryAt } : {}) } satisfies Health });
     return;
   }
-  const code = errorCode(e);
+  const code = errorCode(e) ?? (retryAt ? "error" : undefined);
   if (!code) return; // locked, no vault, or a logic error: not a reachability problem
   const since = prev && prev.state === code ? (prev.since ?? prev.at) : now;
-  await kv.set({ [HEALTH_KEY]: { state: code, since, at: now } satisfies Health });
+  await kv.set({ [HEALTH_KEY]: { state: code, since, at: now, ...(retryAt ? { retryAt } : {}) } satisfies Health });
 }
 
 function ensureAlarms(): void {
@@ -154,6 +162,9 @@ chrome.runtime.onStartup.addListener(() => {
 ensureAlarms();
 void pumpPayjoin();
 
+// One line per downloaded block in the service worker console: counts only, never keys or coins.
+onBlockStats((s) => console.info(`[PrivateBit] ${formatBlockStats(s)}`));
+
 let catchupTimer: ReturnType<typeof setTimeout> | undefined;
 let catchupRunning = false;
 /** Failed or stuck runs in a row. Drives exponential backoff with jitter; reset on progress. */
@@ -179,20 +190,23 @@ async function runCatchup(): Promise<void> {
       await bumpLegacyBirthday();
       await wallet.loadChain();
       const progress = await wallet.followTip();
-      await noteHealth();
       const mark = `${progress.lastHeight}:${progress.height}:${progress.txIndex}`;
       const moved = mark !== lastProgress;
       lastProgress = mark;
       if (moved) catchupFailures = 0;
+      const wait = progress.done || moved ? undefined : backoffMs(++catchupFailures, 2_000, 120_000);
+      await noteHealth(undefined, wait);
+      console.info(`[PrivateBit] scan: block ${progress.lastHeight} of ${progress.tip}${wait ? `, no progress, retrying in ${Math.round(wait / 1000)} s` : ""}`);
       if (!progress.done) {
-        if (!moved) catchupFailures++;
-        kickCatchup(moved ? 0 : backoffMs(catchupFailures, 2_000, 120_000));
+        kickCatchup(wait ?? 0);
         chrome.alarms.create(CATCHUP_ALARM, { delayInMinutes: 0.5 });
       }
     } catch (e) {
-      await noteHealth(e);
       catchupFailures++;
-      kickCatchup(backoffMs(catchupFailures, 5_000, 300_000));
+      const wait = backoffMs(catchupFailures, 5_000, 300_000);
+      await noteHealth(e, wait);
+      console.warn(`[PrivateBit] scan paused: ${e instanceof Error ? e.message : String(e)}. Retrying in ${Math.round(wait / 1000)} s`);
+      kickCatchup(wait);
     }
   } finally {
     catchupRunning = false;
