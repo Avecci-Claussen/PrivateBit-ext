@@ -28,6 +28,12 @@ const RULES = [
     hit: (m) => m[2].trim().length > 0,
   },
   { kind: "bearer token literal", re: /Bearer\s+[0-9a-zA-Z._-]{20,}/g },
+  {
+    // A data service key compiled in as a bare constant (what a private test build does on purpose).
+    kind: "long hex string constant",
+    re: /(["'`])([0-9a-fA-F]{40,128})\1/g,
+    hit: (m) => !PUBLIC_HEX.has(m[2].toLowerCase()),
+  },
   { kind: "env variable name for the live test key", re: /PRIVATEBIT_LIVE_TEST_UNISAT_KEY/g },
   { kind: "process.env read", re: /process\.env\.[A-Z_]{3,}/g },
   { kind: "end-to-end test hook in a release build", re: /__pbE2E/g },
