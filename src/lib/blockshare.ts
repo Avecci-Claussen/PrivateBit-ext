@@ -22,6 +22,33 @@ export type SharedBlock = {
   txs: SharedTx[];
 };
 
+/** What building one block took. Logged by the worker, read by the live probe. */
+export type BlockStats = {
+  height: number;
+  /** Earlier blocks downloaded to learn this block's input scripts. */
+  lookbackBlocks: number;
+  bytes: number;
+  txs: number;
+  /** Transactions with a taproot output: the only ones a payment to us can be in. */
+  taprootTxs: number;
+  parentsNeeded: number;
+  parentsFetched: number;
+  parentsNotFound: number;
+  /** Transactions kept with a usable set of inputs (one BIP352 tweak each when matched). */
+  eligibleTxs: number;
+  eligibleInputs: number;
+  incomplete: number;
+  ms: { lookback: number; raw: number; parents: number; total: number };
+};
+let statsListener: ((s: BlockStats) => void) | undefined;
+export function onBlockStats(fn: ((s: BlockStats) => void) | undefined): void {
+  statsListener = fn;
+}
+/** One line per block for the service worker console. Counts only, nothing about the wallet. */
+export function formatBlockStats(s: BlockStats): string {
+  return `block ${s.height}: ${s.txs} txs, ${s.taprootTxs} with taproot outputs, ${s.parentsNeeded} parents needed (${s.parentsFetched} fetched, ${s.parentsNotFound} not found), ${s.eligibleTxs} eligible txs, ${s.eligibleInputs} inputs, lookback ${s.lookbackBlocks} blocks, ${Math.round(s.bytes / 1024)} KB, ${s.ms.total} ms (lookback ${s.ms.lookback}, raw ${s.ms.raw}, parents ${s.ms.parents})${s.incomplete ? `, waiting for ${s.incomplete} input transactions` : ""}`;
+}
+
 export class UnsupportedBlock extends Error {
   constructor() {
     super("block layout");
@@ -285,13 +312,13 @@ async function mapLimited<T>(items: T[], limit: number, fn: (item: T) => Promise
   );
 }
 
-async function indexHeight(height: number, source: ChainSource): Promise<void> {
-  if (indexedHeights.has(height)) return;
+async function indexHeight(height: number, source: ChainSource): Promise<boolean> {
+  if (indexedHeights.has(height)) return false;
   const existing = await backend().getScripts(height);
   if (existing) {
     for (const [key, script] of Object.entries(existing)) cacheScript(key, script);
     indexedHeights.add(height);
-    return;
+    return false;
   }
   const raw = await fetchRaw(source, height);
   const txs = parseBlockTransactions(raw);
@@ -301,14 +328,19 @@ async function indexHeight(height: number, source: ChainSource): Promise<void> {
   }
   await backend().putScripts(height, added);
   indexedHeights.add(height);
+  return true;
 }
 
-/** Output scripts for recent blocks, so this block's inputs are already known. */
-async function ensureLookback(height: number, source: ChainSource): Promise<void> {
+/** Output scripts for recent blocks, so this block's inputs are already known. Returns blocks downloaded. */
+async function ensureLookback(height: number, source: ChainSource): Promise<number> {
   const from = Math.max(1, height - SCRIPT_LOOKBACK);
   const heights: number[] = [];
   for (let h = from; h < height; h++) heights.push(h);
-  await mapLimited(heights, 4, (h) => indexHeight(h, source));
+  let fetched = 0;
+  await mapLimited(heights, 4, async (h) => {
+    if (await indexHeight(h, source)) fetched++;
+  });
+  return fetched;
 }
 
 function rememberOutput(tx: LightTx, added: Record<string, string>): void {
@@ -339,6 +371,7 @@ export async function buildSharedBlock(
   raw: Uint8Array,
   height: number,
   fetchParent: (txid: string) => Promise<string | undefined>,
+  stats?: Partial<BlockStats>,
 ): Promise<{ block: SharedBlock; scripts: Record<string, string> }> {
   const txs = parseBlockTransactions(raw);
   if (!txs) throw new UnsupportedBlock();
@@ -352,10 +385,24 @@ export async function buildSharedBlock(
       if (!scriptCache.has(`${vin.txid}:${vin.vout}`)) missingParents.add(vin.txid);
     }
   }
+  const t0 = Date.now();
+  let fetched = 0;
+  let notFound = 0;
   await mapLimited([...missingParents], 8, async (txid) => {
     const parent = await fetchParent(txid);
-    if (parent) rememberParent(parent, added);
+    if (parent) {
+      fetched++;
+      rememberParent(parent, added);
+    } else notFound++;
   });
+  if (stats) {
+    stats.bytes = raw.length;
+    stats.txs = txs.length;
+    stats.parentsNeeded = missingParents.size;
+    stats.parentsFetched = fetched;
+    stats.parentsNotFound = notFound;
+    stats.ms = { lookback: 0, raw: 0, parents: Date.now() - t0, total: 0 };
+  }
   const kept: SharedTx[] = [];
   const stillMissing = new Set<string>();
   for (const tx of txs) {
@@ -398,6 +445,12 @@ export async function buildSharedBlock(
         })) ?? [],
     });
   }
+  if (stats) {
+    stats.taprootTxs = kept.filter((t) => t.taps.length > 0).length;
+    stats.eligibleTxs = kept.filter((t) => t.eligible.length > 0 && t.taps.length > 0).length;
+    stats.eligibleInputs = kept.reduce((n, t) => n + (t.taps.length > 0 ? t.eligible.length : 0), 0);
+    stats.incomplete = stillMissing.size;
+  }
   if (stillMissing.size > 0) throw new IncompleteBlock(height, [...stillMissing]);
   return { block: { height, hash, prev, txs: kept }, scripts: added };
 }
@@ -425,13 +478,25 @@ export async function pruneSharedBelow(height: number): Promise<void> {
 }
 
 async function buildAndStore(height: number, source: ChainSource): Promise<SharedBlock> {
-  await ensureLookback(height, source);
-  const raw = await fetchRaw(source, height);
-  const built = await buildSharedBlock(raw, height, (txid) => fetchParent(source, txid));
-  await backend().putBlock(height, built.block);
-  await backend().putScripts(height, built.scripts);
-  indexedHeights.add(height);
-  return built.block;
+  const t0 = Date.now();
+  const stats: Partial<BlockStats> = { height };
+  try {
+    stats.lookbackBlocks = await ensureLookback(height, source);
+    const t1 = Date.now();
+    const raw = await fetchRaw(source, height);
+    const t2 = Date.now();
+    const built = await buildSharedBlock(raw, height, (txid) => fetchParent(source, txid), stats);
+    await backend().putBlock(height, built.block);
+    await backend().putScripts(height, built.scripts);
+    indexedHeights.add(height);
+    stats.ms = { lookback: t1 - t0, raw: t2 - t1, parents: stats.ms?.parents ?? 0, total: Date.now() - t0 };
+    return built.block;
+  } finally {
+    if (statsListener && stats.txs !== undefined) {
+      stats.ms = { lookback: 0, raw: 0, parents: 0, ...stats.ms, total: Date.now() - t0 };
+      statsListener(stats as BlockStats);
+    }
+  }
 }
 
 /** Download a block once. Later wallets read the saved copy. */
