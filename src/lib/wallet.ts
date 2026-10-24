@@ -67,7 +67,7 @@ import {
   type ScanStore,
 } from "./scan.ts";
 import { evenPriv, sessionTweak, tweakSpend } from "./schnorr-util.ts";
-import { buildSend, buildSplit, destinationNeedsPayjoin, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
+import { buildSend, buildSplit, destinationNeedsPayjoin, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
 import {
   clearSession,
   loadScanGrant,
@@ -138,7 +138,7 @@ import { ONE_TIME_RESTORE_WINDOW } from "./keys.ts";
 import { feeRatesOf } from "./chain.ts";
 import type { FeeRates } from "./requests.ts";
 import { maxSendable } from "./coinselect.ts";
-import { splitChainSecrets, type ChainSecrets } from "./network.ts";
+import { FRACTAL_CHAIN_ID, splitChainSecrets, type ChainSecrets } from "./network.ts";
 import { parseBip21 } from "./bip21.ts";
 
 export type WalletState = {
@@ -229,6 +229,8 @@ export type SessionView = {
 };
 
 export type BroadcastResult = { kind: "txid"; txid: string } | { kind: "payjoin-pending" };
+
+type BuiltPlan = Awaited<ReturnType<typeof buildSend>>;
 
 export const FOLLOW_TIP_STEPS = 24;
 /** During a scan, history is rebuilt at most this often. */
@@ -1256,7 +1258,31 @@ export class WalletCore {
 
   async plan(destination: string, amount: bigint, opts: PlanOptions = {}): Promise<PlanPayload> {
     await this.assertNotOwnLink(destination);
-    return planPayload(await this.planSend(destination, amount, opts));
+    return this.payloadOf(await this.planSend(destination, amount, opts));
+  }
+
+  private payloadOf(built: BuiltPlan): PlanPayload {
+    return { ...planPayload(built), planId: planDigest(built.psbtBase64, { chain: `fractal:${FRACTAL_CHAIN_ID}`, wallet: this.walletId }) };
+  }
+
+  /**
+   * Confirm binds to the reviewed plan (audit M10). The plan is built again from the same
+   * request; it is sent only if its id matches the one reviewed. Otherwise nothing is signed
+   * for broadcast and the new plan comes back for a second review.
+   */
+  async confirmPlan(
+    planId: string,
+    destination: string,
+    amount: bigint,
+    opts: PlanOptions & { feeRate: number },
+  ): Promise<{ ok: true; built: BuiltPlan } | { ok: false; plan: PlanPayload }> {
+    if (!/^[0-9a-f]{64}$/.test(planId)) throw new PolicyError("Review the payment first.");
+    if (!Number.isFinite(opts.feeRate) || opts.feeRate <= 0) throw new PolicyError("Review the payment first.");
+    await this.assertNotOwnLink(destination);
+    const built = await this.planSend(destination, amount, opts);
+    const now = this.payloadOf(built);
+    if (now.planId !== planId) return { ok: false, plan: now };
+    return { ok: true, built };
   }
 
   async maxAmount(feeRate: number, coins?: string[]): Promise<{ amount: string; fee: string }> {
@@ -2684,6 +2710,7 @@ export class PrivateBit {
   blockedOutpoints = this.d("blockedOutpoints");
   planSend = this.d("planSend");
   plan = this.d("plan");
+  confirmPlan = this.d("confirmPlan");
   assertNotOwnLink = this.d("assertNotOwnLink");
   maxAmount = this.d("maxAmount");
   feeRates = this.d("feeRates");

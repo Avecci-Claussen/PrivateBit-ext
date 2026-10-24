@@ -237,7 +237,7 @@ type Msg =
   | { type: "SCAN_KICK" }
   | { type: "TIP" }
   | ({ type: "PLAN" } & PlanArgs)
-  | ({ type: "BROADCAST"; intent: "payjoin" | "simple-send"; label?: string } & PlanArgs)
+  | ({ type: "BROADCAST"; intent: "payjoin" | "simple-send"; label?: string; planId?: string } & PlanArgs)
   | { type: "MAX_AMOUNT"; feeRate: number; coins?: string[] }
   | { type: "FEE_RATES"; force?: boolean }
   | { type: "PRICE"; force?: boolean }
@@ -402,9 +402,12 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.plan(msg.destination, amount, opts);
     }
     case "BROADCAST": {
-      await wallet.assertNotOwnLink(msg.destination);
+      // Only the reviewed plan is sent (audit M10). A changed plan comes back for review.
       const { amount, opts } = await planOf(msg);
-      const built = await wallet.planSend(msg.destination, amount, opts);
+      if (typeof msg.planId !== "string" || typeof opts.feeRate !== "number") throw new Error("Review the payment first.");
+      const checked = await wallet.confirmPlan(msg.planId, msg.destination, amount, { ...opts, feeRate: opts.feeRate });
+      if (!checked.ok) return { changed: true, plan: checked.plan };
+      const built = checked.built;
       const intent = msg.intent === "payjoin" ? INTENT_PAYJOIN : INTENT_SIMPLE_SEND;
       const result = await wallet.broadcast(intent, built, { label: msg.label, feeRate: opts.feeRate });
       if (result.kind === "payjoin-pending") schedulePayjoinWake();

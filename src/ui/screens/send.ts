@@ -9,6 +9,7 @@ import { estimateVbytes } from "../../lib/coinselect.ts";
 import { mixesLinkedAndPrivate, type CoinStatus } from "../../lib/coinmeta.ts";
 import { loadCoins, coins } from "./coins.ts";
 import { copyText } from "../copy.ts";
+import { planChanges } from "../plan-changes.ts";
 import { explorerBlock, pathPreview, txidLine, type PathLeg } from "../path.ts";
 
 const DUST = 330n;
@@ -206,6 +207,7 @@ actions.review = async () => {
   try {
     const p = await call<PlanPayload>({ type: "PLAN", destination: fv("to").trim(), amount: (amt.sats ?? 0n).toString(), feeRate: rate, coins: coinsArg, max: S.f.max === true && d.kind !== "paylink" ? true : undefined });
     S.d.plan = p;
+    S.d.planChanged = undefined;
     S.d.planArgs = { destination: fv("to").trim(), amount: (amt.sats ?? 0n).toString(), feeRate: rate, coins: coinsArg, max: S.f.max === true ? true : undefined, kind: d.kind };
     S.f.ack = false;
     S.busy = null;
@@ -422,7 +424,9 @@ screens.review = () => {
     : legacy
       ? html`<div class="r"><span class="k">Privacy</span><span class="v"><span class="badge warn">${I("triangle-alert")}Less private</span><span class="cap">Visible to anyone who knows this address</span></span></div>`
       : html`<div class="r"><span class="k">Privacy</span><span class="v"><span class="badge ok">${I("shield-check")}Private</span><span class="cap">New address only ${who === "them" ? "they" : who} can find</span></span></div>`;
+  const changed = S.d.planChanged as string[] | undefined;
   const main = html`
+  ${changed?.length ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">Nothing was sent. The payment changed since you reviewed it</span>${changed.join(" ")} Check it again below before you confirm.</div></div>` : ""}
   <div class="hero-amt"><p class="cap">${pj ? "You pay" : "You send"}</p><p class="a">${fbShort(amt, { unit: false })}<span class="unit"> FB</span></p>${usd(amt) || (lbl && !legacy) ? html`<p class="fiat">${usd(amt)}${lbl && !legacy ? ` to ${lbl}` : ""}${pj ? " with a PrivateBit payment link" : ""}</p>` : ""}</div>
   ${pathPreview(fromLeg(), toLeg(to, lbl))}
   <div class="card"><div class="kv">
@@ -435,8 +439,9 @@ screens.review = () => {
     ? html`<div class="banner">${I("info", "s16")}<div><span class="bt">What happens next</span>Your signed payment goes to the other person, encrypted. When they add their coin, PrivateBit checks it and broadcasts. If they never answer, nothing is broadcast.</div></div>`
     : html`<details class="card pad-sm" ${S.f.det ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle-k" data-k="det">Transaction details</summary><div class="stack" style="margin-top:12px">${details}<button class="btn btn-ghost btn-sm" type="button" data-act="copy-psbt" style="align-self:flex-start">${I("copy", "s16")}Copy PSBT</button></div></details>`}
   ${legacy ? html`<label class="check"><input type="checkbox" data-f="ack" ${S.f.ack ? html`checked` : ""}> <span>I understand this payment can be linked to this address.</span></label>` : ""}
+  ${changed?.length ? html`<label class="check"><input type="checkbox" data-f="ackChange" ${S.f.ackChange ? html`checked` : ""}> <span>I checked the new amounts and coins.</span></label>` : ""}
   ${p.preview.warnings.length ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div>${p.preview.warnings.join(" ")}</div></div>` : ""}`;
-  const can = !legacy || S.f.ack === true;
+  const can = (!legacy || S.f.ack === true) && (!changed?.length || S.f.ackChange === true);
   return {
     title: "Review",
     header: hdr({ title: "Review", net: true }),
@@ -478,8 +483,9 @@ actions.broadcast = async () => {
   S.sheet = null;
   go("sending", {}, { replace: true });
   try {
-    const r = await call<{ txid?: string; pending?: boolean; fee: string }>({
+    const r = await call<{ txid?: string; pending?: boolean; fee: string; changed?: boolean; plan?: PlanPayload }>({
       type: "BROADCAST",
+      planId: p.planId,
       intent: a.kind === "paylink" ? "payjoin" : "simple-send",
       destination: a.destination,
       amount: a.amount,
@@ -488,6 +494,17 @@ actions.broadcast = async () => {
       max: a.max,
       label: fv("lbl") || undefined,
     });
+    if (r.changed && r.plan) {
+      // Audit M10: the reviewed plan is no longer what would be sent. Nothing was sent.
+      S.d.planChanged = planChanges(p, r.plan);
+      S.d.plan = r.plan;
+      S.f.ack = false;
+      S.f.ackChange = false;
+      await refresh();
+      go("review", {}, { replace: true });
+      return;
+    }
+    S.d.planChanged = undefined;
     await refresh();
     if (r.pending) {
       go("pj-waiting", {}, { replace: true });
@@ -505,8 +522,9 @@ actions.broadcast = async () => {
   }
 };
 function clearForm(): void {
-  for (const k of ["to", "amt", "lbl", "max", "coinMode", "coinsSel", "feeCustom", "feeMode", "ack", "det"]) delete S.f[k];
+  for (const k of ["to", "amt", "lbl", "max", "coinMode", "coinsSel", "feeCustom", "feeMode", "ack", "ackChange", "det"]) delete S.f[k];
   S.d.plan = undefined;
+  S.d.planChanged = undefined;
   S.d.max = undefined;
 }
 

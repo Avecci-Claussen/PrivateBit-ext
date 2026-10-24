@@ -9,6 +9,7 @@ import {
 } from "./bip352.ts";
 import { evenPriv } from "./schnorr-util.ts";
 import { concatBytes, fromHex, hex } from "./bytes.ts";
+import { sha256 } from "@noble/hashes/sha256";
 import { coinSelect, estimateVbytes, maxSendable } from "./coinselect.ts";
 import { checkSplit, splitBudget } from "./split.ts";
 import type { Account } from "./keys.ts";
@@ -75,6 +76,8 @@ export type BuiltSend = {
 };
 
 export type PlanPayload = {
+  /** Digest of exactly what Confirm will send (planDigest). Confirm is refused if it changed. */
+  planId?: string;
   psbtBase64: string;
   previewNote: string;
   request: { address: string; silent: boolean; pj?: string; amount?: string };
@@ -94,6 +97,31 @@ export type PlanPayload = {
     fee: string | null;
   };
 };
+
+/**
+ * Immutable id of a planned payment (audit M10): network, wallet, every input (outpoint,
+ * value, script) and every output (script, value) in order. The fee follows from those.
+ * Signatures are left out, so the same plan signed twice has the same id.
+ */
+export function planDigest(psbtBase64: string, ctx: { chain: string; wallet: string }): string {
+  const bin = atob(psbtBase64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const tx = btc.Transaction.fromPSBT(bytes);
+  const inputs: string[] = [];
+  for (let i = 0; i < tx.inputsLength; i++) {
+    const inp = tx.getInput(i);
+    const w = inp.witnessUtxo;
+    inputs.push(`${hex(inp.txid!)}:${inp.index}:${w ? w.amount.toString() : "?"}:${w ? hex(w.script) : "?"}:${inp.sequence ?? ""}`);
+  }
+  const outputs: string[] = [];
+  for (let i = 0; i < tx.outputsLength; i++) {
+    const o = tx.getOutput(i);
+    outputs.push(`${hex(o.script!)}:${o.amount!.toString()}`);
+  }
+  const text = JSON.stringify({ v: 1, chain: ctx.chain, wallet: ctx.wallet, version: tx.version, lockTime: tx.lockTime, inputs, outputs });
+  return hex(sha256(new TextEncoder().encode(text)));
+}
 
 /** JSON-safe PLAN reply. Chrome cannot clone bigint; that was the Preview "no response". */
 export function planPayload(built: BuiltSend): PlanPayload {
