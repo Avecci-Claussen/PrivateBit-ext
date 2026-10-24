@@ -126,12 +126,12 @@ function payjoinCard(): Safe | string {
   let what = `Waiting for them to pay${amt ? ` ${amt}` : ""}. You don't confirm anything. Stay unlocked and this wallet adds your coin when they do.`;
   if (p.role === "receive" && p.status === "proposed") {
     title = "They paid";
-    what = "Your coin was added. Waiting for them to finish. Stay unlocked. Nothing to press.";
+    what = "Your coin was added. Waiting for them to broadcast. Nothing to press.";
   } else if (p.role === "send") {
     title = "Payjoin payment waiting";
     what = `Waiting for them to add their coin${amt ? ` to your ${amt} payment` : ""}. Stay unlocked. Nothing else to press.`;
   }
-  return html`<button class="card pad-sm" type="button" data-act="go" data-to="${p.role === "send" ? "pj-waiting" : "paylink"}" style="text-align:left;font:inherit;color:inherit;cursor:pointer;border-color:var(--c-warn-border);background:var(--c-warn-subtle)"><div class="row">${I("hourglass", "s16")}<span class="strong grow">${title}</span><span class="countdown small">${left(p.expiresAt - Date.now())}</span></div>
+  return html`<button class="card pad-sm" type="button" data-act="go" data-to="${p.role === "send" ? "pj-waiting" : "paylink"}" style="text-align:left;font:inherit;color:inherit;cursor:pointer;border-color:var(--c-warn-border);background:var(--c-warn-subtle)"><div class="row">${I("hourglass", "s16")}<span class="strong grow">${title}</span><span class="countdown small">${left((p.deadline ?? p.expiresAt) - Date.now())}</span></div>
     <p class="small">${what} Closing this window is fine. Finished and cancelled links stay in Payment link history.</p></button>`;
 }
 

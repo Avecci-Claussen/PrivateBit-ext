@@ -36,7 +36,7 @@ import {
 } from "./payjoin.ts";
 import { hpkeKeyPairFromSecret } from "./bip77-hpke.ts";
 import { RateLimitedError } from "./requests.ts";
-import { buildPayjoinProposal, validatePayjoinProposal } from "./payjoin-proposal.ts";
+import { buildPayjoinProposal, checkOriginal, proposalTxid, validatePayjoinProposal } from "./payjoin-proposal.ts";
 import { CoinStore, StaleWriteError } from "./coinstore.ts";
 import { mailboxUrls, type MailboxTransport } from "./mailbox.ts";
 import type { OhttpKeyConfig } from "./ohttp.ts";
@@ -168,6 +168,8 @@ export type WalletState = {
     status: string;
     amount?: string;
     expiresAt: number;
+    /** When this open state ends by itself (link expiry, or the payer's time to broadcast). */
+    deadline: number;
     createdAt: number;
     error?: string;
     id: string;
@@ -219,6 +221,10 @@ export type SessionView = {
   checkedAt?: number;
   /** Send role: coins the signed original spends. Sending without Payjoin must reuse them. */
   inputs?: string[];
+  /** When this open session ends by itself if nothing happens. */
+  deadline?: number;
+  /** Cancel is offered in every open state. */
+  cancellable?: boolean;
 };
 
 export type BroadcastResult = { kind: "txid"; txid: string } | { kind: "payjoin-pending" };
@@ -246,6 +252,19 @@ const PJ_SEND = "privatebit.pj.send";
 const PJ_HPKE = "privatebit.pj.hpke";
 const SEND_HPKE_PREFIX = "send:";
 const ORIGINAL_PREFIX = "orig:";
+/** After we post a proposal, the payer has this long to broadcast it. Then the link ends as "not sent". */
+export const PROPOSAL_DEADLINE_MS = 60 * 60 * 1000;
+/** A closed link may still be paid late (the payer broadcasts after all); we look for it this long. */
+const LATE_PAYMENT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Receive states: waiting (link open, deadline expiresAt), proposed (deadline proposalDeadline), done, failed. */
+function receiveOpen(s: PayjoinReceiveSession): boolean {
+  return s.status === "waiting" || s.status === "proposed";
+}
+
+function receiveDeadline(s: PayjoinReceiveSession): number {
+  return s.status === "proposed" ? (s.proposalDeadline ?? (s.proposedAt ?? s.createdAt) + PROPOSAL_DEADLINE_MS) : s.expiresAt;
+}
 const P2TR_NETWORK: typeof btc.NETWORK = {
   bech32: FRACTAL.bech32,
   pubKeyHash: FRACTAL.pubKeyHash,
@@ -305,6 +324,8 @@ export class WalletCore {
   /** Lock and drop the scan grant: only the open wallet matches blocks. */
   async closeForSwitch(): Promise<void> {
     this.cancelScan();
+    // Session-only Payjoin secrets are deleted, never carried over (audit H9). The UI asks first.
+    await this.cancelOpenPayjoins("wallet switched").catch(() => undefined);
     await this.settle().catch(() => undefined);
     await this.lock();
     await this.kv.remove([SCAN_GRANT_KEY]);
@@ -594,9 +615,7 @@ export class WalletCore {
     const pending = sum(notFrozen.filter((u) => u.height === 0));
     const confirmed = sum(notFrozen.filter((u) => u.height > 0));
     await this.closeExpired();
-    const receive = (await this.loadPayjoinSessions()).filter(
-      (s) => s.status === "proposed" || (s.status === "waiting" && s.expiresAt > Date.now()),
-    );
+    const receive = (await this.loadPayjoinSessions()).filter(receiveOpen);
     const live = receive[receive.length - 1];
     const sending = (await this.loadPayjoinSends()).filter((s) => s.status === "waiting" && s.expiresAt > Date.now()).pop();
     const hist = await this.loadHistory();
@@ -642,14 +661,14 @@ export class WalletCore {
         live?.status === "waiting"
           ? "Waiting for them to pay. Stay unlocked. Don't lock. You don't confirm anything."
           : live?.status === "proposed"
-            ? "They paid. Your coin is added. Stay unlocked. Don't lock."
+            ? "They paid. Your coin is added. Waiting for them to broadcast."
             : sending
               ? "Waiting for them to add an input. Stay unlocked. Don't lock."
               : undefined,
       payjoin: live
-        ? { role: "receive", status: live.status, amount: live.amount, expiresAt: live.expiresAt, createdAt: live.createdAt, id: live.id, error: live.error }
+        ? { role: "receive", status: live.status, amount: live.amount, expiresAt: live.expiresAt, deadline: receiveDeadline(live), createdAt: live.createdAt, id: live.id, error: live.error }
         : sending
-          ? { role: "send", status: sending.status, amount: sending.amount, expiresAt: sending.expiresAt, createdAt: sending.createdAt, id: sending.id, error: sending.error }
+          ? { role: "send", status: sending.status, amount: sending.amount, expiresAt: sending.expiresAt, deadline: sending.expiresAt, createdAt: sending.createdAt, id: sending.id, error: sending.error }
           : undefined,
       oneTimeFunded,
       historyRebuilding: hist.rebuilding === true,
@@ -1123,7 +1142,7 @@ export class WalletCore {
     const receive = await this.loadPayjoinSessions();
     const reserved = new Set(
       receive
-        .filter((s) => s.status === "waiting" && s.reserved)
+        .filter((s) => receiveOpen(s) && s.reserved)
         .map((s) => `${s.reserved!.txid}:${s.reserved!.vout}`),
     );
     const sends = await this.loadPayjoinSends();
@@ -1341,6 +1360,7 @@ export class WalletCore {
   private historyStale = false;
   private async afterScanPersist(scan: ScanStore, urgent: boolean): Promise<void> {
     await this.noteChecked(scan.lastHeight);
+    await this.notePayjoinPaid(scan);
     if (!(await this.dataKey())) {
       this.historyStale = true;
       return;
@@ -1350,6 +1370,33 @@ export class WalletCore {
       return;
     }
     await this.onScanSaved(scan);
+  }
+
+  private async notePayjoinPaid(scan: ScanStore): Promise<void> {
+    // Receiver Payjoin: done when the proposal's txid shows up (our reserved coin spent by it,
+    // or one of its outputs found), or when the link's address is paid at all. A link that
+    // ended without payment in the last week is still matched, for a payer who broadcast late.
+    const sessions = await this.loadPayjoinSessions();
+    const weekAgo = Date.now() - LATE_PAYMENT_MS;
+    let dirty = false;
+    for (const s of sessions) {
+      const late = s.status === "failed" && (s.closedAt ?? 0) > weekAgo;
+      if (!receiveOpen(s) && !late) continue;
+      const byTxid = s.proposedTxid
+        ? scan.utxos.find((u) => u.txid === s.proposedTxid) ??
+          scan.utxos.find((u) => s.reserved && u.txid === s.reserved.txid && u.vout === s.reserved.vout && u.spentBy === s.proposedTxid)
+        : undefined;
+      const paid = scan.utxos.find((u) => u.scriptPubKey === s.scriptPubKey);
+      const txid = byTxid ? (byTxid.txid === s.proposedTxid ? byTxid.txid : s.proposedTxid) : paid?.txid;
+      if (txid) {
+        s.status = "done";
+        s.error = undefined;
+        s.txid = txid;
+        s.closedAt = Date.now();
+        dirty = true;
+      }
+    }
+    if (dirty) await this.savePayjoinSessions(sessions);
   }
 
   /** The single writer for this wallet's coin list. */
@@ -1440,19 +1487,6 @@ export class WalletCore {
         }
       }
     }
-    // Receiver Payjoin: proposed sessions are done once their output is seen.
-    const sessions = await this.loadPayjoinSessions();
-    let dirty = false;
-    for (const s of sessions) {
-      if (s.status !== "proposed") continue;
-      const hit = scan.utxos.find((u) => u.scriptPubKey === s.scriptPubKey || u.scriptPubKey === s.extraScriptPubKey);
-      if (hit) {
-        s.status = "done";
-        s.txid = hit.txid;
-        dirty = true;
-      }
-    }
-    if (dirty) await this.savePayjoinSessions(sessions);
   }
 
   async loadHistory(): Promise<HistoryStore> {
@@ -1743,6 +1777,8 @@ export class WalletCore {
       createdAt: s.createdAt,
       expiresAt: s.expiresAt,
       bip21: s.status === "waiting" ? s.bip21 : undefined,
+      deadline: receiveOpen(s) ? receiveDeadline(s) : undefined,
+      cancellable: receiveOpen(s),
       reservedValue: s.reserved?.value,
       reservedOutpoint: s.reserved ? `${s.reserved.txid}:${s.reserved.vout}` : undefined,
       checkedAt: s.checkedAt,
@@ -1760,24 +1796,24 @@ export class WalletCore {
       txid: s.txid,
       inputs: s.signableInputs.map((i) => `${i.txid}:${i.vout}`),
       checkedAt: s.checkedAt,
+      deadline: s.status === "waiting" ? s.expiresAt : undefined,
+      cancellable: s.status === "waiting",
     }));
     return [...rec, ...snd].sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  /** Cancel a waiting payment link: its keys are deleted and its coin is free again. */
+  /**
+   * Cancel a payment link in any open state. Its keys are deleted and its coin is free again.
+   * After a proposal the payer could still broadcast it; that payment is then picked up as late.
+   */
   async cancelLink(id: string): Promise<void> {
     const sessions = await this.loadPayjoinSessions();
     const s = sessions.find((x) => x.id === id);
     if (!s) throw new Error("no such payment link");
-    if (s.status !== "waiting") throw new Error("this payment link is not waiting");
-    s.status = "failed";
-    s.error = "cancelled";
-    s.inputSecret = undefined;
+    if (!receiveOpen(s)) throw new Error("this payment link has already ended");
+    this.endReceive(s, "cancelled");
     await this.savePayjoinSessions(sessions);
-    const all = await this.hpkeSecrets();
-    delete all[id];
-    delete all[ORIGINAL_PREFIX + id];
-    await this.kv.set({ [PJ_HPKE]: all });
+    await this.forgetPayjoinSecrets([id, ORIGINAL_PREFIX + id]);
   }
 
   /** Stop waiting on a Payjoin you started. Nothing is broadcast. */
@@ -1785,13 +1821,44 @@ export class WalletCore {
     const sends = await this.loadPayjoinSends();
     const s = sends.find((x) => x.id === id);
     if (!s) throw new Error("no such payment");
-    if (s.status !== "waiting") throw new Error("this payment is not waiting");
-    s.status = "failed";
-    s.error = "cancelled";
+    if (s.status !== "waiting") throw new Error("this payment has already ended");
+    this.endSend(s, "cancelled");
     await this.savePayjoinSends(sends);
+    await this.forgetPayjoinSecrets([SEND_HPKE_PREFIX + id]);
+  }
+
+  /** Every open link and payment of this wallet ends (used before a wallet switch or removal). */
+  async cancelOpenPayjoins(reason: string): Promise<number> {
+    let n = 0;
+    const sessions = await this.loadPayjoinSessions();
+    for (const s of sessions) if (receiveOpen(s)) (this.endReceive(s, reason), n++);
+    if (n) await this.savePayjoinSessions(sessions);
+    const sends = await this.loadPayjoinSends();
+    let m = 0;
+    for (const s of sends) if (s.status === "waiting") (this.endSend(s, reason), m++);
+    if (m) await this.savePayjoinSends(sends);
+    await this.clearHpkeSecrets();
+    return n + m;
+  }
+
+  private endReceive(s: PayjoinReceiveSession, reason: string): void {
+    s.status = "failed";
+    s.error = reason;
+    s.inputSecret = undefined;
+    s.closedAt = Date.now();
+  }
+
+  private endSend(s: PayjoinSendSession, reason: string): void {
+    s.status = "failed";
+    s.error = reason;
+    s.closedAt = Date.now();
+  }
+
+  private async forgetPayjoinSecrets(ids: string[]): Promise<void> {
     const all = await this.hpkeSecrets();
-    delete all[SEND_HPKE_PREFIX + id];
-    await this.kv.set({ [PJ_HPKE]: all });
+    let dirty = false;
+    for (const id of ids) if (id in all) (delete all[id], (dirty = true));
+    if (dirty) await this.kv.set({ [PJ_HPKE]: all });
   }
 
   /** Delete every key of this wallet's namespace. PrivateBit updates the directory. */
@@ -1818,7 +1885,7 @@ export class WalletCore {
     const directory = this.chainCfg.payjoinDirectory?.trim() || DEFAULT_PAYJOIN_DIRECTORY;
     const reservedOut = new Set(
       (await this.loadPayjoinSessions())
-        .filter((s) => s.status === "waiting" && s.reserved)
+        .filter((s) => receiveOpen(s) && s.reserved)
         .map((s) => `${s.reserved!.txid}:${s.reserved!.vout}`),
     );
     const frozenOut = frozenOutpoints(await this.loadCoinMeta());
@@ -1889,36 +1956,37 @@ export class WalletCore {
     await this.kv.set({ [PJ_SEND]: sessions });
   }
 
+  /** True while a link or a Payjoin send is open. Every open state has a deadline, so this always ends. */
   async waitingPayjoin(): Promise<boolean> {
     await this.closeExpired();
-    const now = Date.now();
-    if ((await this.loadPayjoinSessions()).some((s) => (s.status === "waiting" || s.status === "proposed") && (s.status === "proposed" || s.expiresAt > now))) return true;
-    return (await this.loadPayjoinSends()).some((s) => s.status === "waiting" && s.expiresAt > now);
+    if ((await this.loadPayjoinSessions()).some(receiveOpen)) return true;
+    return (await this.loadPayjoinSends()).some((s) => s.status === "waiting");
   }
 
-  /** A link or payment that ran out of time is history, not an open payment. */
+  /** Open sessions past their deadline end: a link that was never paid, a proposal never broadcast. */
   private async closeExpired(): Promise<void> {
     const now = Date.now();
     const sessions = await this.loadPayjoinSessions();
+    const gone: string[] = [];
     let receiveDirty = false;
     for (const s of sessions) {
-      if (s.status === "waiting" && now > s.expiresAt) {
-        s.status = "failed";
-        s.error = "expired";
-        receiveDirty = true;
-      }
+      if (!receiveOpen(s) || now <= receiveDeadline(s)) continue;
+      this.endReceive(s, s.status === "proposed" ? "not broadcast" : "expired");
+      gone.push(s.id, ORIGINAL_PREFIX + s.id);
+      receiveDirty = true;
     }
     if (receiveDirty) await this.savePayjoinSessions(sessions);
     const sends = await this.loadPayjoinSends();
     let sendDirty = false;
     for (const s of sends) {
       if (s.status === "waiting" && now > s.expiresAt) {
-        s.status = "failed";
-        s.error = "expired";
+        this.endSend(s, "expired");
+        gone.push(SEND_HPKE_PREFIX + s.id);
         sendDirty = true;
       }
     }
     if (sendDirty) await this.savePayjoinSends(sends);
+    if (gone.length) await this.forgetPayjoinSecrets(gone);
   }
 
   async servicePayjoin(): Promise<{ processed: number; errors: string[] }> {
@@ -1949,9 +2017,8 @@ export class WalletCore {
       try {
         const sk = await this.loadHpkeSecret(s.id);
         if (!sk) {
-          s.status = "failed";
-          s.error = "HPKE receiver key is gone (locked or session expired)";
-          errors.push(s.error);
+          this.endReceive(s, "HPKE receiver key is gone (locked or session expired)");
+          errors.push(s.error!);
           continue;
         }
         let original = await this.loadOriginal(s.id);
@@ -1960,8 +2027,7 @@ export class WalletCore {
           const got = await receiverTakeOriginal(s, cfg, sk);
           s.checkedAt = Date.now();
           if ("expired" in got) {
-            s.status = "failed";
-            s.error = "expired";
+            this.endReceive(s, "expired");
             continue;
           }
           if ("empty" in got) {
@@ -1976,6 +2042,26 @@ export class WalletCore {
         }
         if (!s.reserved) {
           throw new Error("payment link is missing its reserved coin; create a new one");
+        }
+        // BIP78 receiver checks on the original, and the reserved coin re-checked, before we sign.
+        const scan = await this.loadScan();
+        const meta = await this.loadCoinMeta();
+        const reservedKey = `${s.reserved.txid}:${s.reserved.vout}`;
+        const stillOurs = scan.utxos.find((u) => `${u.txid}:${u.vout}` === reservedKey && !u.spent);
+        const problems = checkOriginal({
+          originalB64: original,
+          payScript: s.scriptPubKey,
+          amount: s.amount ? BigInt(s.amount) : undefined,
+          ourOutpoints: new Set(scan.utxos.map((u) => `${u.txid}:${u.vout}`)),
+          ourScripts: new Set([...scan.utxos.map((u) => u.scriptPubKey.toLowerCase()), s.extraScriptPubKey.toLowerCase()]),
+        });
+        if (!stillOurs) problems.push("the reserved coin is no longer available");
+        else if (frozenOutpoints(meta).has(reservedKey)) problems.push("the reserved coin is frozen");
+        if (problems.length) {
+          this.endReceive(s, `refused: ${problems.join("; ")}`);
+          errors.push(s.error!);
+          await this.forgetPayjoinSecrets([s.id, ORIGINAL_PREFIX + s.id]);
+          continue;
         }
         const built = buildPayjoinProposal({
           originalB64: original,
@@ -1996,13 +2082,16 @@ export class WalletCore {
         s.status = "proposed";
         s.error = undefined;
         s.checkedAt = Date.now();
+        s.proposedAt = Date.now();
+        s.proposalDeadline = s.proposedAt + PROPOSAL_DEADLINE_MS;
+        s.proposedTxid = proposalTxid(built.proposalB64);
         processed += 1;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         errors.push(message);
         s.checkedAt = Date.now();
         s.error = message;
-        if (!payjoinRetryable(message)) s.status = "failed";
+        if (!payjoinRetryable(message)) this.endReceive(s, message);
       }
     }
     await this.savePayjoinSessions(sessions);
@@ -2020,15 +2109,13 @@ export class WalletCore {
     for (const s of sends) {
       if (s.status !== "waiting") continue;
       if (Date.now() > s.expiresAt) {
-        s.status = "failed";
-        s.error = "expired";
+        this.endSend(s, "expired");
         continue;
       }
       const sk = await this.loadHpkeSecret(SEND_HPKE_PREFIX + s.id);
       if (!sk) {
-        s.status = "failed";
-        s.error = "HPKE sender reply key is gone (locked or session expired)";
-        errors.push(s.error);
+        this.endSend(s, "HPKE sender reply key is gone (locked or session expired)");
+        errors.push(s.error!);
         continue;
       }
       try {
@@ -2054,6 +2141,8 @@ export class WalletCore {
         const txid = await this.source().broadcast(signed.txHex);
         s.status = "done";
         s.txid = txid;
+        s.closedAt = Date.now();
+        await this.forgetPayjoinSecrets([SEND_HPKE_PREFIX + s.id]);
         try {
           const ours = s.signableInputs.map((u) => `${u.txid}:${u.vout}`);
           const hist = recordBroadcast(await this.loadHistory(), {
@@ -2080,7 +2169,7 @@ export class WalletCore {
         errors.push(message);
         s.checkedAt = Date.now();
         s.error = message;
-        if (!payjoinRetryable(message)) s.status = "failed";
+        if (!payjoinRetryable(message)) this.endSend(s, message);
       }
     }
     await this.savePayjoinSends(sends);

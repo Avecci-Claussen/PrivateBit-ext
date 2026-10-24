@@ -44,10 +44,12 @@ export async function loadSessions(): Promise<void> {
   S.d.sessions = await call<SessionView[]>({ type: "SESSIONS" });
 }
 const sessions = (): SessionView[] => (S.d.sessions as SessionView[] | undefined) ?? [];
+/** Open = the background says it can still be cancelled. One rule for every screen. */
+function isOpen(s: SessionView): boolean {
+  return s.cancellable === true && (s.deadline ?? s.expiresAt) > Date.now();
+}
 function liveReceive(): SessionView | undefined {
-  return sessions().find(
-    (s) => s.role === "receive" && (s.status === "proposed" || (s.status === "waiting" && s.expiresAt > Date.now())),
-  );
+  return sessions().find((s) => s.role === "receive" && isOpen(s));
 }
 function opened(): SessionView | undefined {
   const id = typeof S.params.id === "string" ? S.params.id : undefined;
@@ -55,19 +57,15 @@ function opened(): SessionView | undefined {
 }
 function pastSessions(): SessionView[] {
   const live = liveReceive();
-  return sessions().filter((s) => {
-    if (live && s.id === live.id) return false;
-    if (s.role === "send" && s.status === "waiting" && s.expiresAt > Date.now()) return false;
-    if (s.role === "receive" && (s.status === "waiting" || s.status === "proposed") && s.expiresAt > Date.now()) return false;
-    return s.status !== "waiting" && s.status !== "proposed";
-  });
+  return sessions().filter((s) => !(live && s.id === live.id) && !isOpen(s));
 }
 function outcome(s: SessionView): { label: string; cls: string } {
   const e = s.error ?? "";
   if (s.status === "done") return { label: s.role === "send" ? "Sent" : "Received", cls: "ok" };
   if (/cancel/i.test(e)) return { label: "Cancelled", cls: "" };
-  if (/expired/i.test(e) || Date.now() > s.expiresAt) return { label: "Expired", cls: "" };
-  if (/locked|key is gone/i.test(e)) return { label: "Stopped", cls: "" };
+  if (/not broadcast/i.test(e)) return { label: "Not sent", cls: "" };
+  if (/^refused/i.test(e)) return { label: "Refused", cls: "" };
+  if (/expired/i.test(e)) return { label: "Expired", cls: "" };
   return { label: "Stopped", cls: "" };
 }
 function historyList(): Safe {
@@ -80,9 +78,13 @@ function historyList(): Safe {
     return html`<button class="opt" type="button" data-act="pj-open" data-id="${s.id}"><span class="body"><span class="t">${who} · ${amt}</span><span class="d">${when(s.createdAt)}</span></span><span class="badge ${o.cls}">${o.label}</span></button>`;
   })}</div>`;
 }
-function failedReason(s: SessionView): "locked" | "expired" | "cancelled" | "other" {
+type Why = "locked" | "expired" | "cancelled" | "notsent" | "switched" | "refused" | "other";
+function failedReason(s: SessionView): Why {
   const e = s.error ?? "";
-  if (/expired/i.test(e) || (s.status !== "done" && Date.now() > s.expiresAt)) return "expired";
+  if (/not broadcast/i.test(e)) return "notsent";
+  if (/wallet switched/i.test(e)) return "switched";
+  if (/^refused/i.test(e)) return "refused";
+  if (/expired/i.test(e)) return "expired";
   if (/cancel/i.test(e)) return "cancelled";
   if (/locked|key is gone/i.test(e)) return "locked";
   return "other";
@@ -204,11 +206,11 @@ function progress(s: SessionView, H: Safe) {
   <ol class="steps" aria-label="Payment progress">
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Link shared</p><p class="sd">${when(s.createdAt)}</p></div></li>
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Payer sent their part</p><p class="sd">Encrypted. The mailbox could not read it.</p></div></li>
-    <li class="step now" aria-current="step"><span class="n">3</span><div><p class="st">Your coin added and signed</p><p class="sd">Happens in the background, even with the window closed.</p></div></li>
-    <li class="step todo"><span class="n">4</span><div><p class="st">Payer broadcasts</p><p class="sd">Then the payment shows in Activity.</p></div></li>
+    <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Your coin added and signed</p><p class="sd">Done in the background.</p></div></li>
+    <li class="step now" aria-current="step"><span class="n">4</span><div><p class="st">Payer broadcasts</p><p class="sd">They have <span class="countdown">${left((s.deadline ?? s.expiresAt) - Date.now())}</span> left. Then the payment shows in Activity.</p></div></li>
   </ol>
-  <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Keep PrivateBit unlocked</span>Locking now cancels this payment.</div></div>`,
-    foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="home">Back to wallet</button>`,
+  <p class="small muted">If they do not broadcast in time, this link ends and your coin is free again. Cancel link ends it right away. If they broadcast later anyway, the payment still shows up here.</p>`,
+    foot: { cls: "row", html: html`<button class="btn btn-secondary" type="button" data-act="home">Back to wallet</button><button class="btn btn-ghost" type="button" data-act="cancel-link" data-id="${s.id}">Cancel link</button>` },
   };
   void H;
 }
@@ -236,22 +238,33 @@ function done(s: SessionView, H: Safe) {
 function failed(s: SessionView, H: Safe) {
   const why = failedReason(s);
   const coin = s.reservedValue ? `Your ${fbShort(s.reservedValue)} coin` : "Your coin";
-  if (why === "expired") {
+  if (why === "expired" || why === "notsent") {
     return {
       title: "Payment link",
       header: H,
-      main: html`<div class="state"><div class="big neutral">${I("timer")}</div><h1>Link expired</h1><p>Nobody paid within 24 hours. ${coin} is available again.</p></div>`,
+      main: html`<div class="state"><div class="big neutral">${I("timer")}</div><h1>${why === "notsent" ? "Payment not sent" : "Link expired"}</h1><p>${why === "notsent" ? "The payer did not broadcast in time. Nothing was sent." : "Nobody paid within 24 hours."} ${coin} is available again.</p></div>
+  ${why === "notsent" ? html`<p class="small muted">If they broadcast later, the payment still shows up in Activity and this link turns to Received.</p>` : ""}`,
       foot: html`<button class="btn btn-primary btn-block" type="button" data-act="pj-back">Back</button>`,
     };
   }
+  const because: Record<Why, string> = {
+    locked: "PrivateBit was locked while the link was waiting, which deleted its keys.",
+    cancelled: "You cancelled it.",
+    switched: "You switched to another wallet while it was open, which ended it.",
+    refused: "Their payment did not pass PrivateBit's checks, so your coin was not added.",
+    expired: "",
+    notsent: "",
+    other: `It failed: ${s.error ?? "unknown error"}.`,
+  };
+  const reason: Record<Why, string> = { locked: "Keys deleted by Lock", cancelled: "Cancelled", switched: "Wallet switched", refused: "Payment refused", expired: "", notsent: "", other: "Error" };
   return {
     title: "Payment link",
     header: H,
     main: html`
-  <div class="state"><div class="big danger">${I("circle-x")}</div><h1>This payment link stopped working</h1><p>${why === "locked" ? "PrivateBit was locked while the link was waiting, which deleted its keys." : why === "cancelled" ? "You cancelled it." : `It failed: ${s.error ?? "unknown error"}.`} No coins moved.</p></div>
+  <div class="state"><div class="big danger">${I("circle-x")}</div><h1>This payment link stopped working</h1><p>${because[why]} No coins moved.</p></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">Created</span><span class="v">${when(s.createdAt)}</span></div>
-    <div class="r"><span class="k">Reason</span><span class="v">${why === "locked" ? "Keys deleted by Lock" : why === "cancelled" ? "Cancelled" : "Error"}</span></div>
+    <div class="r"><span class="k">Reason</span><span class="v">${reason[why]}</span></div>
     <div class="r"><span class="k">${coin}</span><span class="v">Available again</span></div></div></div>
   <p class="small muted">If the payer already pressed Confirm, ask them to wait for your new link. Their wallet did not send anything. Closing the window is fine.</p>`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="pj-back">Back</button>`,
@@ -268,8 +281,8 @@ function historyScreen() {
 }
 
 function sessionDetail(s: SessionView, H: Safe) {
-  if (s.role === "receive" && s.status === "proposed") return progress(s, H);
-  if (s.role === "receive" && s.status === "waiting" && s.expiresAt > Date.now()) return waiting(s, H);
+  if (s.role === "receive" && s.status === "proposed" && isOpen(s)) return progress(s, H);
+  if (s.role === "receive" && s.status === "waiting" && isOpen(s)) return waiting(s, H);
   if (s.role === "receive" && s.status === "done") return done(s, H);
   if (s.role === "receive") return failed(s, H);
   return sendRecord(s, H);
@@ -331,9 +344,9 @@ function fullReceive(): Safe {
       <p class="code" aria-label="Receive code">${codeHi(code)}</p>
       <p class="small"><strong>Safe to share and reuse.</strong> Each payment lands at a new address only this wallet can find.</p>
       <div class="row"><button class="btn btn-primary" type="button" data-act="copy-receive">${I("copy", "s16")}Copy code</button><button class="btn btn-secondary" type="button" data-act="save-qr">${I("download", "s16")}Save QR</button></div></section>
-    <section class="panel" aria-labelledby="pl-h"><div class="row between"><h2 id="pl-h">Payment link</h2>${s ? html`<span class="badge warn">${I("hourglass")}Waiting</span>` : ""}</div>
+    <section class="panel" aria-labelledby="pl-h"><div class="row between"><h2 id="pl-h">Payment link</h2>${s ? html`<span class="badge warn">${I(s.status === "proposed" ? "loader-circle" : "hourglass", s.status === "proposed" ? "spin" : "")}${s.status === "proposed" ? "Payer is finishing" : "Waiting"}</span>` : ""}</div>
       ${s
-        ? html`<div class="linkcard"><div class="qr sm">${qrSvg(s.bip21 ?? "", "QR code of your payment link")}</div><div class="stack" style="gap:6px">${ntagF("Payment link")}<p style="font:600 22px/28px var(--font-sans)">${amt ? fbShort(amt, { unit: false }) : "Any amount"}${amt ? html`<span class="muted" style="font:var(--t-body-strong)"> FB</span>` : ""}</p>${amt && usd(amt) ? html`<p class="fiat">${usd(amt)}</p>` : ""}<p class="small">Expires in <span class="countdown">${left(s.expiresAt - Date.now())}</span></p></div></div>
+        ? html`<div class="linkcard"><div class="qr sm">${qrSvg(s.bip21 ?? "", "QR code of your payment link")}</div><div class="stack" style="gap:6px">${ntagF("Payment link")}<p style="font:600 22px/28px var(--font-sans)">${amt ? fbShort(amt, { unit: false }) : "Any amount"}${amt ? html`<span class="muted" style="font:var(--t-body-strong)"> FB</span>` : ""}</p>${amt && usd(amt) ? html`<p class="fiat">${usd(amt)}</p>` : ""}<p class="small">${s.status === "proposed" ? "Payer has " : "Expires in "}<span class="countdown">${left((s.deadline ?? s.expiresAt) - Date.now())}</span>${s.status === "proposed" ? " to broadcast" : ""}</p></div></div>
       <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Stay unlocked until they finish</span>You don't confirm this payment. When they pay, this wallet adds your coin by itself, even while it is still finding coins. Locking deletes the link's keys. Closing the window is fine.</div></div>
       ${s.reservedValue ? html`<div class="kv"><div class="r"><span class="k">Coin you add</span><span class="v"><span class="mono">${fb(s.reservedValue)}</span><span class="cap">Reserved</span></span></div></div>` : ""}
       <div class="row"><button class="btn btn-secondary" type="button" data-act="copy-link">${I("copy", "s16")}Copy link</button><button class="btn btn-ghost" type="button" data-act="cancel-link" data-id="${s.id}">Cancel link</button></div>`

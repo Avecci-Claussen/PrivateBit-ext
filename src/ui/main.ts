@@ -102,7 +102,8 @@ async function tick(): Promise<void> {
       scanKicked = false;
     }
     if (S.route === "home" || S.route === "activity" || S.route === "activity-detail") await loadHistory();
-    if (S.route === "paylink" || S.route === "pj-waiting") await loadSessions();
+    // One Payjoin view for every screen that shows it, refreshed together (audit M8).
+    if (S.route === "paylink" || S.route === "pj-waiting" || S.route === "receive" || S.b?.state.payjoin) await loadSessions();
     await pollMigration();
     if (!S.busy && !(document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement)) render();
   } finally {

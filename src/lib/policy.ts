@@ -71,7 +71,18 @@ export const BIP78_CHECKS = [
   "our inputs are unchanged",
   "pjos=0: original outputs were not removed or decreased",
   "no SIGHASH_NONE/SINGLE/ANYONECANPAY on inputs",
+  "receiver inputs match our input type",
   "absolute fee must not decrease",
+] as const;
+
+/** Receiver side, checked on the original before anything is added or signed. */
+export const BIP78_RECEIVER_CHECKS = [
+  "original is a complete signed transaction paying a positive fee",
+  "original pays this payment link at least the requested amount",
+  "original spends none of our coins",
+  "original inputs are all Taproot (the type we add)",
+  "the reserved coin is unspent, not frozen and still ours when we sign",
+  "fee share: our added vbytes at the original fee rate",
 ] as const;
 
 export const BIP77_CHECKS = [

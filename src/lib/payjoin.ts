@@ -307,6 +307,8 @@ export type PayjoinSendSession = {
   error?: string;
   checkedAt?: number;
   txid?: string;
+  /** When the payment reached a final state. */
+  closedAt?: number;
 };
 
 export function createReceiverSession(args: {
