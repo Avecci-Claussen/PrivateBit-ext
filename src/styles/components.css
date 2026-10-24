@@ -424,3 +424,6 @@ ul.list,ul.wrows{list-style:none;margin:0;padding:0}
 .ulist{list-style:none;margin:0;padding:0}
 .ulist .opt[aria-current=true]{border:2px solid var(--c-accent);padding:11px;background:var(--c-accent-subtle)}
 .btn.danger{color:var(--c-danger)}
+
+/* Checkbox rows: the whole label is the target, at least 24 px tall. */
+.check{min-height:24px;padding:2px 0;box-sizing:border-box}

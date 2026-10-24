@@ -76,7 +76,7 @@ function mockChain(): ChainSource {
       return 2;
     },
     async feeRates() {
-      return { fastest: 3, halfHour: 2, hour: 2, economy: 1, minimum: 1 } as never;
+      return { fast: 3, normal: 2, slow: 1, minimum: 1, updatedAt: Date.now(), source: "service" as const };
     },
   };
 }
@@ -97,7 +97,7 @@ export function installE2E(wallet: PrivateBit): void {
     /** Give the open wallet one coin (fake outpoint, test only) so a payment link can be made. */
     async fundOpenWallet(value = "50000") {
       const core = await wallet.core();
-      const coin: LabeledUtxo = { txid: randomHex(32), vout: 0, value, scriptPubKey: "5120" + randomHex(32), tweak: randomHex(32), label: null, k: 0, height: TIP, spent: false };
+      const coin: LabeledUtxo = { txid: randomHex(32), vout: 0, value, scriptPubKey: hex(taprootScriptPubKey(secp256k1.getPublicKey(secp256k1.utils.randomPrivateKey(), true).slice(1))), tweak: randomHex(32), label: null, k: 0, height: TIP, spent: false };
       await core.coins_.update((s) => {
         const next = { ...s, utxos: [...s.utxos] };
         upsertUtxo(next.utxos, coin);

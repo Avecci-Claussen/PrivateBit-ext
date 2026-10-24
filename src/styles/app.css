@@ -3,7 +3,9 @@
 .popup-body #app{width:360px;height:600px}
 .solo{min-height:100dvh;display:grid;place-items:center;padding:var(--s-8) var(--s-4);background:var(--c-bg)}
 .solo .pb-expand{width:360px;border:1px solid var(--c-border);border-radius:var(--r-xl);overflow:hidden;box-shadow:var(--shadow-3)}
-.solo .popup{position:relative}
+.solo .popup{position:relative;width:100%}
+.solo{grid-template-columns:minmax(0,1fr)}
+.solo .pb-expand{width:min(360px,100%);box-sizing:border-box;justify-self:center}
 .flowpanel{max-width:560px}
 .foot.inpanel{position:static;border-top:0;padding:0;background:none;margin-top:var(--s-2)}
 .fp-overlay{position:fixed;inset:0;z-index:var(--z-modal);display:grid;place-items:center}

@@ -74,8 +74,10 @@ export function syncLine(): string {
   const checked = !!st && at >= (st.birthday ?? 0);
   const h = health();
   const wait = retryIn();
-  if (sc.on && wait)
-    return `Waiting for the data service, ${retryText(wait)}. Block ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`;
+  if (wait && (sc.on || (S.b?.health?.state ?? "ok") !== "ok"))
+    return sc.on
+      ? `Waiting for the data service, ${retryText(wait)}. Block ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`
+      : `Waiting for the data service, ${retryText(wait)}. Last checked block ${at.toLocaleString("en-US")}`;
   if (sc.on) return `Downloading blocks, ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`;
   if (!st?.tip) {
     if (h !== "ok") return checked ? `Last checked block ${at.toLocaleString("en-US")}` : "Waiting for block data";

@@ -32,7 +32,10 @@ const minRate = (): number => fees()?.minimum ?? 1;
 export function feeRate(): number | null {
   const m = feeMode();
   const f = fees();
-  if (m !== "custom" && f) return f[m];
+  if (m !== "custom" && f) {
+    const r = f[m];
+    return typeof r === "number" && Number.isFinite(r) && r > 0 ? r : null;
+  }
   const v = Number(fv("feeCustom").replace(",", "."));
   if (!fv("feeCustom")) return null;
   const c = checkCustomFee(v, minRate(), f?.fast ?? 1);
