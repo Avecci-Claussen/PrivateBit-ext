@@ -1,17 +1,18 @@
 import { chromeKv } from "./chrome-kv.ts";
 import { jsonSafe } from "./lib/json.ts";
-import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, redactChain, type ChainConfig } from "./lib/network.ts";
+import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, redactChain, type ChainConfig } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
 import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
 import { getPrice, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates } from "./lib/requests.ts";
-import { createMnemonic } from "./lib/vault.ts";
+import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
 import { openChain } from "./lib/chain.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
 
 const kv = chromeKv();
 const wallet = new PrivateBit(kv, DEFAULT_CHAIN);
 const FOLLOW_ALARM = "privatebit.follow-tip";
+const CATCHUP_ALARM = "privatebit.catchup";
 const PJ_ALARM = "privatebit.payjoin";
 const PJ_SOON = "privatebit.payjoin.soon";
 const LOCK_ALARM = "privatebit.autolock";
@@ -93,6 +94,7 @@ async function checkAutoLock(): Promise<void> {
     await wallet.lock();
     await kv.remove([ACTIVITY_KEY, FEES_KEY]);
     await kv.set({ [LOCKINFO_KEY]: { by: "auto", minutes: prefs.lockMinutes, at: now } satisfies LockInfo });
+    kickCatchup(0);
     return;
   }
   await kv.set({ [ACTIVITY_KEY]: d.next });
@@ -127,6 +129,42 @@ chrome.runtime.onStartup.addListener(() => {
 ensureAlarms();
 void pumpPayjoin();
 
+let catchupTimer: ReturnType<typeof setTimeout> | undefined;
+let catchupRunning = false;
+
+/** Keep reading blocks in this worker. Chrome alarms cannot fire faster than about 30 seconds. */
+function kickCatchup(delayMs: number): void {
+  if (catchupTimer !== undefined) clearTimeout(catchupTimer);
+  catchupTimer = setTimeout(() => {
+    catchupTimer = undefined;
+    void runCatchup();
+  }, delayMs);
+}
+
+async function runCatchup(): Promise<void> {
+  if (catchupRunning) return;
+  catchupRunning = true;
+  try {
+    if (!(await wallet.canIndex())) return;
+    chrome.alarms.create(CATCHUP_ALARM, { delayInMinutes: 0.5 });
+    try {
+      await bumpLegacyBirthday();
+      await wallet.loadChain();
+      const progress = await wallet.followTip();
+      await noteHealth();
+      if (!progress.done) {
+        kickCatchup(0);
+        chrome.alarms.create(CATCHUP_ALARM, { delayInMinutes: 0.5 });
+      }
+    } catch (e) {
+      await noteHealth(e);
+      kickCatchup(15_000);
+    }
+  } finally {
+    catchupRunning = false;
+  }
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === PJ_ALARM || alarm.name === PJ_SOON) {
     void pumpPayjoin();
@@ -140,33 +178,29 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void refreshPrice();
     return;
   }
-  if (alarm.name !== FOLLOW_ALARM) return;
-  void (async () => {
-    if (!(await isUnlocked())) return;
-    try {
-      await wallet.loadChain();
-      await wallet.followTip();
-      await noteHealth();
-    } catch (e) {
-      await noteHealth(e);
-    }
-  })();
+  if (alarm.name !== FOLLOW_ALARM && alarm.name !== CATCHUP_ALARM) return;
+  kickCatchup(0);
 });
+
+kickCatchup(0);
 
 type PlanArgs = { destination: string; amount: string; feeRate?: number; coins?: string[]; max?: boolean };
 
 type Msg =
   | { type: "STATE" }
   | { type: "BUNDLE" }
-  | { type: "NEW_MNEMONIC"; words?: 12 | 24 }
+  | { type: "NEW_MNEMONIC"; add?: boolean }
   | { type: "ONBOARD_GET" }
   | { type: "ONBOARD_CLEAR" }
-  | { type: "CREATE_CHECKED"; password: string; passphrase?: string }
-  | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number }
+  | { type: "CREATE_CHECKED"; password: string; passphrase?: string; add?: boolean; name?: string }
+  | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number; add?: boolean; name?: string }
+  | { type: "SWITCH_WALLET"; id: string }
   | { type: "UNLOCK"; password: string }
+  | { type: "RESTORE_BACKUP" }
   | { type: "LOCK" }
   | { type: "ACTIVITY" }
   | { type: "SCAN" }
+  | { type: "SCAN_KICK" }
   | { type: "TIP" }
   | ({ type: "PLAN" } & PlanArgs)
   | ({ type: "BROADCAST"; intent: "payjoin" | "simple-send"; label?: string } & PlanArgs)
@@ -179,15 +213,19 @@ type Msg =
   | { type: "HISTORY" }
   | { type: "SET_LABEL"; txid: string; label?: string }
   | { type: "ONETIME_ISSUE" }
+  | { type: "ONETIME_REPLACE" }
   | { type: "ONETIME_VIEW" }
   | { type: "SWEEP_PLAN"; index: number; feeRate: number }
   | { type: "SWEEP_ONETIME"; index: number; feeRate: number }
+  | { type: "SPLIT_PLAN"; outpoint: string; amounts: string[]; feeRate: number }
+  | { type: "SPLIT_COIN"; outpoint: string; amounts: string[]; feeRate: number }
   | { type: "MIGRATE_START" }
   | { type: "MIGRATE_STATUS" }
   | { type: "MIGRATE_FINISH"; label: string }
   | { type: "MIGRATE_CANCEL" }
   | { type: "SESSIONS" }
   | { type: "CANCEL_LINK"; id: string }
+  | { type: "CANCEL_SEND"; id: string }
   | { type: "SAVE_CHAIN"; chain: ChainConfig }
   | { type: "LOAD_CHAIN" }
   | { type: "TEST_CHAIN"; chain: ChainConfig }
@@ -199,7 +237,7 @@ type Msg =
   | { type: "CHANGE_PASSWORD"; current: string; next: string }
   | { type: "REMOVE_WALLET"; password: string };
 
-type Onboard = { mnemonic: string; words: 12 | 24; createdAt: number };
+type Onboard = { mnemonic: string; words: 24; createdAt: number };
 
 async function bundle() {
   const got = await kv.get([HEALTH_KEY, LOCKINFO_KEY, PRICE_KEY, PREFS_KEY, ACTIVITY_KEY]);
@@ -225,6 +263,14 @@ async function birthdayForNewWallet(): Promise<number> {
   }
 }
 
+/** Move wallets still on the previous shipped start so the first scan is not thousands of blocks. */
+async function bumpLegacyBirthday(): Promise<void> {
+  const st = await wallet.state();
+  if (st.unlocked && st.birthday === LEGACY_DEFAULT_BIRTHDAY) {
+    await wallet.setBirthday(DEFAULT_BIRTHDAY);
+  }
+}
+
 async function planOf(m: PlanArgs) {
   return { amount: BigInt(m.amount || "0"), opts: { feeRate: m.feeRate, coins: m.coins, max: m.max } };
 }
@@ -236,8 +282,8 @@ async function handle(msg: Msg): Promise<unknown> {
     case "BUNDLE":
       return bundle();
     case "NEW_MNEMONIC": {
-      const words = msg.words === 24 ? 24 : 12;
-      const ob: Onboard = { mnemonic: createMnemonic(words === 24 ? 256 : 128), words, createdAt: Date.now() };
+      if (!msg.add && (await loadVaultBlob(kv))) throw new Error("A wallet is already on this computer. Unlock it, or restore from recovery words.");
+      const ob: Onboard = { mnemonic: createMnemonic(256), words: 24, createdAt: Date.now() };
       await kv.set({ [ONBOARD_KEY]: ob });
       return ob;
     }
@@ -250,55 +296,63 @@ async function handle(msg: Msg): Promise<unknown> {
       const ob = (await kv.get([ONBOARD_KEY]))[ONBOARD_KEY] as Onboard | undefined;
       if (!ob) throw new Error("Start again: the recovery words were cleared.");
       const birthday = await birthdayForNewWallet();
-      await wallet.createChecked({ mnemonic: ob.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday });
+      if (msg.add) {
+        await wallet.addWallet({ mnemonic: ob.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday, name: msg.name, kind: "create" });
+      } else {
+        await wallet.createChecked({ mnemonic: ob.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday, name: msg.name });
+      }
       await kv.remove([ONBOARD_KEY, LOCKINFO_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void refreshPrice(true);
+      kickCatchup(0);
       return bundle();
     }
     case "RESTORE":
-      await wallet.restore(msg);
+      if (msg.add) {
+        await wallet.addWallet({ mnemonic: msg.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday: msg.birthday, name: msg.name, kind: "import" });
+      } else {
+        await wallet.restore(msg);
+      }
       await kv.remove([LOCKINFO_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void refreshPrice(true);
+      kickCatchup(0);
+      return bundle();
+    case "SWITCH_WALLET":
+      await wallet.openWallet(msg.id);
+      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       return bundle();
     case "UNLOCK":
       await wallet.unlock(msg.password);
+      await bumpLegacyBirthday();
       await kv.remove([LOCKINFO_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void pumpPayjoin();
       void refreshPrice();
+      kickCatchup(0);
+      return bundle();
+    case "RESTORE_BACKUP":
+      await wallet.restoreBackup();
+      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       return bundle();
     case "LOCK":
       await wallet.lock();
       await kv.remove([ACTIVITY_KEY, FEES_KEY]);
       await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
+      kickCatchup(0);
       return null;
     case "ACTIVITY": {
       const got = (await kv.get([ACTIVITY_KEY]))[ACTIVITY_KEY] as ActivityState | undefined;
       await kv.set({ [ACTIVITY_KEY]: touch(got, Date.now()) });
       return null;
     }
-    case "SCAN": {
-      try {
-        const progress = await wallet.scanOnce();
-        await noteHealth();
-        return { ...(await bundle()), progress };
-      } catch (e) {
-        await noteHealth(e);
-        throw e;
-      }
-    }
-    case "FOLLOW_TIP": {
-      try {
-        const progress = await wallet.followTip();
-        await noteHealth();
-        return { ...(await bundle()), progress };
-      } catch (e) {
-        await noteHealth(e);
-        throw e;
-      }
-    }
+    case "SCAN_KICK":
+    case "SCAN":
+    case "FOLLOW_TIP":
+      kickCatchup(0);
+      return msg.type === "SCAN_KICK" ? null : bundle();
     case "TIP":
       return wallet.source().getTip();
     case "PLAN": {
@@ -352,14 +406,20 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.history();
     case "ONETIME_ISSUE":
       return wallet.issueOneTime();
+    case "ONETIME_REPLACE":
+      return wallet.replaceOneTime();
     case "ONETIME_VIEW":
       return wallet.oneTimeView();
     case "SWEEP_PLAN": {
       const b = await wallet.planSweep(msg.index, msg.feeRate);
-      return { fee: b.fee.toString(), amount: b.amount.toString(), vbytes: b.vbytes };
+      return { fee: b.fee.toString(), amount: b.amount.toString(), vbytes: b.vbytes, count: b.signableInputs.length };
     }
     case "SWEEP_ONETIME":
       return wallet.sweepOneTime(msg.index, msg.feeRate);
+    case "SPLIT_PLAN":
+      return wallet.planSplit(msg.outpoint, msg.amounts, msg.feeRate);
+    case "SPLIT_COIN":
+      return wallet.splitCoin(msg.outpoint, msg.amounts, msg.feeRate);
     case "MIGRATE_START":
       await wallet.startMigration();
       return wallet.migrationStatus();
@@ -375,6 +435,9 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.sessions();
     case "CANCEL_LINK":
       await wallet.cancelLink(msg.id);
+      return wallet.sessions();
+    case "CANCEL_SEND":
+      await wallet.cancelSend(msg.id);
       return wallet.sessions();
     case "SAVE_CHAIN":
       await wallet.saveChain(msg.chain);

@@ -2,6 +2,7 @@ import type { Kv } from "./lib/vault.ts";
 
 const SESSION_KEYS = new Set([
   "privatebit.session",
+  "privatebit.scan.grant",
   "privatebit.pj.hpke",
   "privatebit.pj.send",
   "privatebit.activity",

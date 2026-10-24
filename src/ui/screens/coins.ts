@@ -1,9 +1,13 @@
-import { S, screens, actions, loaders, back, render, run, fv, busy, err, toast } from "../app.ts";
-import { call, type CoinView } from "../api.ts";
-import { html, I, fb, fbShort, sats, mid, num, type Safe } from "../kit.ts";
+import { S, screens, actions, loaders, back, go, render, run, fv, busy, err, toast } from "../app.ts";
+import { call, type CoinView, type Fees } from "../api.ts";
+import { html, I, fb, fbShort, sats, parseFb, mid, num, type Safe } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { usd, hidden } from "../derive.ts";
+import { explorerBlock, pathPreview, txidLine } from "../path.ts";
 import { cleanLabel } from "../../lib/coinmeta.ts";
+import { randomBytes } from "../../lib/bytes.ts";
+import { DUST } from "../../lib/coinselect.ts";
+import { SPLIT_MAX, SPLIT_MIN, checkSplit, shufflePieces, splitBudget } from "../../lib/split.ts";
 
 export async function loadCoins(): Promise<void> {
   S.d.coins = await call<CoinView[]>({ type: "COINS" });
@@ -103,8 +107,272 @@ screens["coin-detail"] = () => {
   <div class="li" style="padding:0;min-height:auto;cursor:default"><span class="body"><label class="t" for="fz">Freeze this coin</label><span class="d" style="white-space:normal">Frozen coins are never picked for a payment, not even by Max.</span></span><input class="switch" type="checkbox" role="switch" id="fz" data-act="coin-freeze" data-v="1" ${reserved ? html`disabled` : ""}></div>
   ${c.kind === "bip86" ? "" : html`<div class="li" style="padding:0;min-height:auto;cursor:default"><span class="body"><label class="t" for="lk">Mark as linked</label><span class="d" style="white-space:normal">Turn on if this coin came from an address other people know. Spending it with private coins then shows a warning.</span></span><input class="switch" type="checkbox" role="switch" id="lk" data-act="coin-linked" ${c.linked ? html`checked` : ""}></div>`}
   ${kv}
+  ${canSplit(c) ? html`<button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="coin-split" data-op="${c.outpoint}">${I("coins", "s16")}Break into pieces</button>` : ""}
   ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="coin-save" ${busy("coin") ? html`aria-disabled="true"` : ""}>Save label</button>`,
+  };
+};
+
+function canSplit(c: CoinView): boolean {
+  return c.kind !== "bip86" && c.status !== "frozen" && c.status !== "reserved" && !c.pending && BigInt(c.value) >= 100_000n;
+}
+
+/* ---------- break into pieces (user-set amounts, optional shuffle) ---------- */
+type SplitPlan = { pieces: string[]; userAmounts: string[]; fee: string; amount: string; vbytes: number; note: string; rate: number };
+
+function splitN(): number {
+  const n = Number(fv("splitN") || "2");
+  return n >= SPLIT_MIN && n <= SPLIT_MAX ? n : SPLIT_MIN;
+}
+function splitRate(): number {
+  const f = S.d.fees as Fees | undefined;
+  return f?.normal ?? 1;
+}
+function pieceFb(i: number): string {
+  return fv(`sp${i}`);
+}
+function pieceSats(i: number): bigint | null {
+  const t = pieceFb(i).trim();
+  if (!t) return null;
+  return parseFb(t);
+}
+function readPieces(n: number): { raw: string[]; sats: (bigint | null)[] } {
+  const raw: string[] = [];
+  const satsV: (bigint | null)[] = [];
+  for (let i = 0; i < n; i++) {
+    raw.push(pieceFb(i));
+    satsV.push(pieceSats(i));
+  }
+  return { raw, sats: satsV };
+}
+function splitState(c: CoinView): {
+  n: number;
+  fee: bigint;
+  spendable: bigint | null;
+  filled: bigint[];
+  assigned: bigint;
+  left: bigint | null;
+  check: ReturnType<typeof checkSplit> | null;
+  incomplete: boolean;
+  parseErr: string | undefined;
+} {
+  const n = splitN();
+  let fee = 0n;
+  let spendable: bigint | null = null;
+  try {
+    const b = splitBudget(BigInt(c.value), n, splitRate());
+    fee = b.fee;
+    spendable = b.spendable;
+  } catch (e) {
+    return {
+      n,
+      fee: 0n,
+      spendable: null,
+      filled: [],
+      assigned: 0n,
+      left: null,
+      check: null,
+      incomplete: true,
+      parseErr: (e as Error).message,
+    };
+  }
+  const { sats: parsed } = readPieces(n);
+  const parseErr = parsed.some((v, i) => pieceFb(i).trim() !== "" && v === null)
+    ? "Enter amounts like 0.1, with up to 8 decimals."
+    : parsed.some((v) => v !== null && v < DUST)
+      ? "Each piece must be at least 330 sats so it can be spent later."
+      : undefined;
+  const filled = parsed.flatMap((v) => (v === null ? [] : [v]));
+  const assigned = filled.reduce((a, b) => a + b, 0n);
+  const incomplete = parsed.some((v) => v === null);
+  const check = !incomplete && !parseErr && spendable !== null ? checkSplit(filled, spendable) : null;
+  return { n, fee, spendable, filled, assigned, left: spendable === null ? null : spendable - assigned, check, incomplete, parseErr };
+}
+
+async function loadSplitFees(): Promise<void> {
+  try {
+    S.d.fees = await call<Fees>({ type: "FEE_RATES" });
+  } catch {
+    /* relay minimum */
+  }
+}
+
+loaders["coin-split"] = async () => {
+  await Promise.all([loadCoins(), S.d.fees ? Promise.resolve() : loadSplitFees()]);
+  if (!fv("splitN")) S.f.splitN = "2";
+};
+loaders["coin-split-review"] = loadCoins;
+
+screens["coin-split"] = () => {
+  const c = cur();
+  if (!c || !canSplit(c)) {
+    return { title: "Break into pieces", header: hdr({ title: "Break into pieces", net: true }), main: html`<p class="muted">This coin cannot be broken up.</p>` };
+  }
+  const st = splitState(c);
+  const ready = st.check?.ok === true;
+  const errMsg = st.parseErr || (st.check && !st.check.ok ? st.check.reason : undefined);
+  const seg = (n: number, l: string) =>
+    html`<button type="button" role="radio" data-act="split-n" data-v="${String(n)}" aria-checked="${String(st.n === n)}">${l}<small>${n} coins</small></button>`;
+  const rows = Array.from({ length: st.n }, (_, i) => {
+    const v = pieceFb(i);
+    const parsed = pieceSats(i);
+    const bad = v.trim() !== "" && (parsed === null || parsed < DUST);
+    return html`<div class="field"><div class="row between"><label class="label" for="sp${i}">Piece ${i + 1}</label><button class="link small" type="button" data-act="split-rest" data-i="${String(i)}" ${st.spendable === null ? html`disabled` : ""}>Put rest here</button></div>
+  <div class="input-wrap"><input class="input mono" id="sp${i}" data-f="sp${i}" data-live inputmode="decimal" autocomplete="off" placeholder="0.00" value="${v}" ${bad ? html`aria-invalid="true"` : ""}><span class="unit">FB</span></div>
+  ${parsed !== null && parsed > 0n ? html`<p class="help">${sats(parsed)}</p>` : ""}</div>`;
+  });
+  const left = st.left;
+  const meter =
+    st.spendable === null
+      ? ""
+      : left === 0n && ready
+        ? html`<div class="card flat pad-sm"><p class="small strong">All ${fbShort(st.spendable)} assigned. Shuffle the order if you want, then review.</p></div>`
+        : left !== null && left > 0n
+          ? html`<div class="card flat pad-sm"><p class="small">${fbShort(left)} still unassigned of ${fbShort(st.spendable)} after the fee.</p></div>`
+          : left !== null && left < 0n
+            ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div>${fbShort(-left)} over what this coin can hold after the fee.</div></div>`
+            : "";
+  return {
+    title: "Break into pieces",
+    header: hdr({ title: "Break into pieces", net: true }),
+    main: html`
+  <div class="hero-amt"><p class="cap">This coin</p><p class="a">${fbShort(c.value, { unit: false })}<span class="unit"> FB</span></p><p class="fiat">${sats(c.value)} before the network fee</p></div>
+  ${pathPreview({ title: name(c), sub: fbShort(c.value) }, { title: "Your receive code", sub: `${st.n} pieces you still own` })}
+  <div class="banner">${I("info", "s16")}<div><span class="bt">You set every amount</span>PrivateBit does not pick the sizes. Equal amounts are blocked because they look like a mix. Anyone who sees this transaction can tell the pieces were created together. Later you can spend one without spending the others.</div></div>
+  <div class="field"><p class="label" id="sn">How many pieces</p><div class="seg tall" role="radiogroup" aria-labelledby="sn">${seg(2, "Two")}${seg(3, "Three")}${seg(4, "Four")}</div></div>
+  <div class="card"><div class="kv">
+    <div class="r"><span class="k">Network fee</span><span class="v mono">${sats(st.fee)}</span></div>
+    <div class="r"><span class="k">To assign</span><span class="v mono">${st.spendable !== null ? fb(st.spendable) : "—"}</span></div>
+    <div class="r"><span class="k">Assigned</span><span class="v mono">${fb(st.assigned)}</span></div></div></div>
+  ${rows}${meter}
+  ${errMsg ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${errMsg}</span></p>` : ""}
+  ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}
+  <p class="small muted">Shuffle only changes the order of the amounts you already typed. It does not invent new ones.</p>`,
+    foot: html`<div class="stack"><button class="btn btn-secondary btn-block" type="button" data-act="split-shuffle" ${st.filled.length < 2 ? html`disabled aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Shuffle order</button><button class="btn btn-primary btn-block" type="button" data-act="split-review" ${ready && !busy("split") ? "" : html`disabled aria-disabled="true"`}>${busy("split") ? html`${I("loader-circle", "s16 spin")}Checking…` : "Review split"}</button></div>`,
+  };
+};
+
+screens["coin-split-review"] = () => {
+  const c = cur();
+  const p = S.d.splitPlan as SplitPlan | undefined;
+  if (!c || !p) {
+    return { title: "Review split", header: hdr({ title: "Review split", net: true }), main: html`<p class="muted">Go back and set the amounts first.</p>` };
+  }
+  const pieces = p.pieces.map((v, i) => html`<div class="r"><span class="k">On-chain ${i + 1}</span><span class="v mono">${fb(v)}</span></div>`);
+  return {
+    title: "Review split",
+    header: hdr({ title: "Review split", net: true }),
+    main: html`
+  <div class="hero-amt"><p class="cap">Break into ${p.pieces.length} coins</p><p class="a">${fbShort(p.amount, { unit: false })}<span class="unit"> FB</span></p><p class="fiat">${sats(p.amount)} after a ${sats(p.fee)} fee</p></div>
+  ${pathPreview({ title: name(c), sub: fbShort(c.value) }, { title: "Your receive code", sub: `${p.pieces.length} pieces you still own` })}
+  <div class="card"><div class="kv">${pieces}
+    <div class="r"><span class="k">Network fee</span><span class="v"><span class="mono">${sats(p.fee)}</span><span class="cap">${p.rate} sat/vB, ${num(p.vbytes)} vB</span></span></div>
+    <div class="r total"><span class="k">This coin</span><span class="v">${fb(c.value)}</span></div></div></div>
+  <p class="small muted">Sizes you chose. On-chain order follows the Silent Payment output keys, not the list you typed.</p>
+  <div class="banner">${I("info", "s16")}<div><span class="bt">Not a mix</span>${p.note}</div></div>
+  ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
+    foot: { cls: "row", html: html`<button class="btn btn-secondary" type="button" data-act="back">Edit</button><button class="btn btn-primary" type="button" data-act="split-go" ${busy("split") ? html`aria-disabled="true"` : ""}>${busy("split") ? html`${I("loader-circle", "s16 spin")}Breaking…` : "Break this coin"}</button>` },
+  };
+};
+
+actions["split-n"] = (el) => {
+  S.f.splitN = el.dataset.v!;
+  render();
+};
+actions["split-rest"] = (el) => {
+  const c = cur();
+  if (!c) return;
+  const i = Number(el.dataset.i);
+  const st = splitState(c);
+  if (st.spendable === null || Number.isNaN(i)) return;
+  const others = st.n === 0 ? 0n : Array.from({ length: st.n }, (_, j) => (j === i ? 0n : pieceSats(j) ?? 0n)).reduce((a, b) => a + b, 0n);
+  const rest = st.spendable - others;
+  if (rest < DUST) {
+    S.err.form = "Not enough left for this piece after the others.";
+    render();
+    return;
+  }
+  delete S.err.form;
+  S.f[`sp${i}`] = fb(rest, { unit: false, trim: true });
+  render();
+};
+actions["split-shuffle"] = () => {
+  const n = splitN();
+  const { raw } = readPieces(n);
+  if (raw.filter((x) => x.trim()).length < 2) return;
+  const next = shufflePieces(raw, randomBytes(32));
+  next.forEach((v, i) => {
+    S.f[`sp${i}`] = v;
+  });
+  toast("Order shuffled. Check each piece, then review.");
+  render();
+};
+actions["split-review"] = async () => {
+  const c = cur();
+  if (!c) return;
+  const st = splitState(c);
+  if (!st.check || !st.check.ok) return;
+  const userAmounts = st.check.amounts.map((a) => a.toString());
+  const ok = await run("split", async () => {
+    const plan = await call<Omit<SplitPlan, "rate" | "userAmounts">>({
+      type: "SPLIT_PLAN",
+      outpoint: c.outpoint,
+      amounts: userAmounts,
+      feeRate: splitRate(),
+    });
+    S.d.splitPlan = { ...plan, userAmounts, rate: splitRate() };
+    return true;
+  });
+  if (ok) go("coin-split-review", { op: c.outpoint });
+};
+actions["split-go"] = async () => {
+  const c = cur();
+  const p = S.d.splitPlan as SplitPlan | undefined;
+  if (!c || !p) return;
+  const r = await run("split", async () =>
+    call<{ kind?: string; txid?: string }>({
+      type: "SPLIT_COIN",
+      outpoint: c.outpoint,
+      amounts: p.userAmounts,
+      feeRate: p.rate,
+    }),
+  );
+  if (!r) return;
+  const txid = r.txid;
+  S.d.splitDone = {
+    txid,
+    pieces: p.pieces,
+    fee: p.fee,
+    amount: p.amount,
+    from: { title: name(c), sub: fbShort(c.value) },
+    to: { title: "Your receive code", sub: `${p.pieces.length} pieces you still own` },
+  };
+  if (txid) S.d.exploreTxid = txid;
+  S.d.splitPlan = undefined;
+  await loadCoins();
+  go("coin-split-done", {}, { replace: true });
+};
+
+screens["coin-split-done"] = () => {
+  const d = S.d.splitDone as
+    | { txid?: string; pieces: string[]; fee: string; amount: string; from: { title: string; sub?: string }; to: { title: string; sub?: string } }
+    | undefined;
+  if (!d) {
+    return { title: "Broke into pieces", header: hdr({ title: "Broke into pieces", net: true }), main: html`<p class="muted">This split is no longer on this screen. Check Activity.</p>` };
+  }
+  const ask = S.b!.prefs.askExplorer !== false;
+  return {
+    title: "Broke into pieces",
+    header: hdr({ title: "Broke into pieces", back: false, net: true, close: true }),
+    main: html`
+  <div class="state"><div class="big">${I("circle-check")}</div><h1>Broke into ${d.pieces.length} coins</h1><p>${fbShort(d.amount)} under your receive code. Anyone who sees this transaction can tell the pieces were created together.</p></div>
+  ${pathPreview(d.from, d.to)}
+  <div class="card"><div class="kv">
+    ${d.txid ? txidLine(d.txid) : ""}
+    <div class="r"><span class="k">Network fee</span><span class="v mono">${sats(d.fee)}</span></div>
+    ${d.pieces.map((v, i) => html`<div class="r"><span class="k">Piece ${i + 1}</span><span class="v mono">${fb(v)}</span></div>`)}</div></div>
+  ${d.txid ? explorerBlock(S.f.explorerAsk === true, ask) : ""}`,
+    foot: html`<button class="btn btn-primary btn-block" type="button" data-act="home">Done</button><button class="btn btn-ghost btn-block" type="button" data-act="tab" data-to="coins">See coins</button>`,
   };
 };
 actions["coin-save"] = async () => {
@@ -165,7 +433,6 @@ function fullCoins(): Safe {
     <div class="r"><span class="k"><span class="badge">${I("lock-keyhole")}Reserved</span></span><span class="v">Set aside for an open payment link.</span></div>
     <div class="r"><span class="k"><span class="badge frozen">${I("snowflake")}Frozen</span></span><span class="v">Never spent by PrivateBit until you unfreeze it.</span></div></div></section>`;
 }
-import { go } from "../app.ts";
 actions["send-selected"] = () => {
   S.f.coinMode = "choose";
   go("send");

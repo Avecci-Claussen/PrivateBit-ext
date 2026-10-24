@@ -1,7 +1,7 @@
 import { HDKey } from "@scure/bip32";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 import * as btc from "@scure/btc-signer";
-import { hex } from "./bytes.ts";
+import { fromHex, hex } from "./bytes.ts";
 import { ser256, scalar } from "./schnorr-util.ts";
 import {
   encodeSilentAddress,
@@ -73,6 +73,23 @@ export function oneTimeKeyFromHd(hd: HDKey, index: number): OneTimeKey {
 
 export function oneTimeKey(seed: Uint8Array, index: number): OneTimeKey {
   return oneTimeKeyFromHd(HDKey.fromMasterSeed(seed), index);
+}
+
+const TAPROOT_NET: typeof btc.NETWORK = {
+  bech32: FRACTAL.bech32,
+  pubKeyHash: FRACTAL.pubKeyHash,
+  scriptHash: FRACTAL.scriptHash,
+  wif: FRACTAL.wif,
+};
+
+/** bc1p from a 34-byte P2TR script. Used to ask the indexer for a watched one-time address. */
+export function p2trAddressFromScriptHex(scriptPubKey: string): string | null {
+  if (!/^5120[0-9a-fA-F]{64}$/i.test(scriptPubKey)) return null;
+  try {
+    return btc.Address(TAPROOT_NET).encode({ type: "tr", pubkey: fromHex(scriptPubKey.slice(4)) });
+  } catch {
+    return null;
+  }
 }
 
 export function accountFromVault(vault: UnlockedVault, extraLabels = 0): Account {

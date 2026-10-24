@@ -13,11 +13,13 @@ import "./screens/coins.ts";
 import "./screens/activity.ts";
 import { pollMigration } from "./screens/migrate.ts";
 import "./screens/settings.ts";
+import "./screens/wallets.ts";
 import { loadHistory } from "./screens/home.ts";
 import { loadSessions } from "./screens/receive.ts";
-import { scanning, health } from "./derive.ts";
+import { scanning } from "./derive.ts";
+import { hydrateTheme } from "./theme.ts";
 
-const LOCKED_ROUTES = new Set(["welcome", "create-password", "seed", "verify", "import", "import-password", "unlock", "boot"]);
+const LOCKED_ROUTES = new Set(["welcome", "create-password", "seed", "verify", "import", "import-password", "unlock", "boot", "starting"]);
 
 /* ---------- navigation ---------- */
 function params(el: HTMLElement): Record<string, unknown> {
@@ -25,7 +27,10 @@ function params(el: HTMLElement): Record<string, unknown> {
   for (const [k, v] of Object.entries(el.dataset)) if (k !== "act" && k !== "to") p[k] = v;
   return p;
 }
-actions.go = (el) => go(el.dataset.to!, params(el));
+actions.go = (el) => {
+  if (el.dataset.to === "paylink") S.f.pjHist = false;
+  go(el.dataset.to!, params(el));
+};
 actions.tab = (el) => go(el.dataset.to!, params(el), { reset: true });
 actions.back = () => back(S.b?.state.unlocked ? "home" : S.b?.state.hasVault ? "unlock" : "welcome");
 actions.home = () => go("home", {}, { reset: true });
@@ -58,14 +63,26 @@ actions["lock-force"] = () => doLock();
 
 /* ---------- background sync while open ---------- */
 let syncing = false;
-let lastFollow = 0;
-let backoffUntil = 0;
+let scanKicked = false;
+let openWalletId = "";
 async function tick(): Promise<void> {
   if (syncing) return;
   syncing = true;
   try {
     const before = S.b?.state.unlocked;
     await refresh();
+    const openId = S.b?.state.wallets?.find((w) => w.active)?.id ?? "";
+    if (openId !== openWalletId) {
+      openWalletId = openId;
+      S.d.history = undefined;
+      S.d.coins = undefined;
+      S.d.sessions = undefined;
+      S.d.onetime = undefined;
+    }
+    if (S.route === "starting" && S.b) {
+      await boot();
+      return;
+    }
     const st = S.b?.state;
     if (before && !st?.unlocked && !LOCKED_ROUTES.has(S.route)) {
       S.f = {};
@@ -75,19 +92,14 @@ async function tick(): Promise<void> {
     }
     if (!st?.unlocked) return;
     if (S.f.hideBal === undefined) S.f.hideBal = S.b!.prefs.hideBalance;
-    const now = Date.now();
-    if (now >= backoffUntil) {
-      const behind = scanning().on || !st.tip;
-      if (behind || now - lastFollow > 30_000) {
-        lastFollow = now;
-        try {
-          await call({ type: behind ? "SCAN" : "FOLLOW_TIP" });
-          await refresh();
-        } catch {
-          await refresh();
-          if (health() !== "ok") backoffUntil = Date.now() + 60_000;
-        }
+    const behind = scanning().on || !st.tip;
+    if (behind) {
+      if (!scanKicked) {
+        scanKicked = true;
+        void call({ type: "SCAN_KICK" }).catch(() => undefined);
       }
+    } else {
+      scanKicked = false;
     }
     if (S.route === "home" || S.route === "activity" || S.route === "activity-detail") await loadHistory();
     if (S.route === "paylink" || S.route === "pj-waiting") await loadSessions();
@@ -100,6 +112,7 @@ async function tick(): Promise<void> {
 
 export async function start(mode: Mode): Promise<void> {
   document.documentElement.dataset.mode = mode;
+  await hydrateTheme();
   setRenderer(mode === "full" ? fullHtml : popupHtml);
   mount(document.getElementById("app")!, mode);
   await boot();
@@ -114,6 +127,6 @@ export async function start(mode: Mode): Promise<void> {
       if (S.b?.state.unlocked && h && h !== S.route && screens[h] && !LOCKED_ROUTES.has(h)) go(h, {}, { reset: true });
     });
   }
-  setInterval(() => void tick(), 4000);
+  setInterval(() => void tick(), 2000);
   void tick();
 }

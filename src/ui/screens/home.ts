@@ -27,7 +27,15 @@ export function entryMeta(e: HistoryEntry): { ic: string; cls: string; t: string
       r = { ic: "arrow-right-left", cls: "fr", t: "Moved from old wallet", badge: html`<span class="badge warn">Linked</span>` };
       break;
     case "self":
-      r = { ic: "arrow-right-left", cls: "", t: "Moved into your receive code", badge: e.linked ? html`<span class="badge warn">Linked</span>` : "" };
+      r = { ic: "arrow-right-left", cls: "in", t: "Moved into your receive code", badge: e.linked ? html`<span class="badge warn">Linked</span>` : "" };
+      break;
+    case "split":
+      r = {
+        ic: "coins",
+        cls: "in",
+        t: e.pieces && e.pieces >= 2 ? `Broke into ${e.pieces} coins` : "Broke into pieces",
+        badge: e.linked ? html`<span class="badge warn">Linked</span>` : "",
+      };
       break;
     default:
       r = { ic: "arrow-down-left", cls: "in", t: lbl ? `Received from ${lbl}` : "Received", badge: e.linked ? html`<span class="badge warn">Linked</span>` : "" };
@@ -97,9 +105,14 @@ export function healthBanner(): Safe | string {
     return html`<div class="banner warn" role="alert">${I("unplug", "s16")}<div><span class="bt">The block data service is limiting requests</span><p>Without an API key it often refuses to answer${since ? `, since ${since}` : ""}. Finding coins is slower until it answers again. Retrying every minute.</p><p><button class="link" type="button" data-act="retry">Retry now</button>, <button class="link" type="button" data-act="go" data-to="set-network">add your own key</button> or <button class="link" type="button" data-act="go" data-to="set-node">use my own node</button></p></div></div>`;
   return "";
 }
+
+function backupBanner(): Safe | string {
+  if (!S.b?.state.hasBackup) return "";
+  return html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">A previous wallet is still on this computer</span>Creating a new one did not erase the last vault. <button class="link" type="button" data-act="restore-backup">Recover it</button></div></div>`;
+}
 actions.retry = async () => {
   await run("retry", async () => {
-    await call({ type: "SCAN" }).catch(() => undefined);
+    await call({ type: "SCAN_KICK" }).catch(() => undefined);
     await refresh();
   });
   toast(health() === "ok" ? "Connected." : "Still not answering.");
@@ -107,17 +120,28 @@ actions.retry = async () => {
 
 function payjoinCard(): Safe | string {
   const p = S.b!.state.payjoin;
-  if (!p) return "";
+  if (!p || (p.status !== "waiting" && p.status !== "proposed")) return "";
   const amt = p.amount && p.amount !== "0" ? fbShort(p.amount) : "";
-  const what = p.role === "send" ? `Waiting for them to add their coin${amt ? ` to your ${amt} payment` : ""}.` : `Waiting for the payer${amt ? ` to pay ${amt}` : ""}.`;
-  return html`<button class="card pad-sm" type="button" data-act="go" data-to="${p.role === "send" ? "pj-waiting" : "paylink"}" style="text-align:left;font:inherit;color:inherit;cursor:pointer;border-color:var(--c-warn-border);background:var(--c-warn-subtle)"><div class="row">${I("hourglass", "s16")}<span class="strong grow">${p.role === "send" ? "Payjoin payment waiting" : "Payment link waiting"}</span><span class="countdown small">${left(p.expiresAt - Date.now())}</span></div>
-    <p class="small">${what} You can close this window. Auto lock waits until this finishes.</p></button>`;
+  let title = "Payment link waiting";
+  let what = `Waiting for them to pay${amt ? ` ${amt}` : ""}. You don't confirm anything. Stay unlocked and this wallet adds your coin when they do.`;
+  if (p.role === "receive" && p.status === "proposed") {
+    title = "They paid";
+    what = "Your coin was added. Waiting for them to finish. Stay unlocked. Nothing to press.";
+  } else if (p.role === "send") {
+    title = "Payjoin payment waiting";
+    what = `Waiting for them to add their coin${amt ? ` to your ${amt} payment` : ""}. Stay unlocked. Nothing else to press.`;
+  }
+  return html`<button class="card pad-sm" type="button" data-act="go" data-to="${p.role === "send" ? "pj-waiting" : "paylink"}" style="text-align:left;font:inherit;color:inherit;cursor:pointer;border-color:var(--c-warn-border);background:var(--c-warn-subtle)"><div class="row">${I("hourglass", "s16")}<span class="strong grow">${title}</span><span class="countdown small">${left(p.expiresAt - Date.now())}</span></div>
+    <p class="small">${what} Closing this window is fine. Finished and cancelled links stay in Payment link history.</p></button>`;
 }
 
 function oneTimeCard(): Safe | string {
   const f = S.b!.state.oneTimeFunded;
   if (!f) return "";
-  return html`<button class="card pad-sm" type="button" data-act="go" data-to="migrate" data-step="sweep" style="text-align:left;font:inherit;color:inherit;cursor:pointer"><div class="row">${I("circle-check", "s16")}<span class="strong grow">${fbShort(f.value)} arrived at your one-time address</span>${I("chevron-right", "s16")}</div><p class="small muted">Move it into your receive code to finish.</p></button>`;
+  const n = f.count ?? 1;
+  const title = n > 1 ? `${n} payments, ${fbShort(f.total ?? f.value)}, are at your one-time address` : `${fbShort(f.value)} arrived at your one-time address`;
+  const sub = n > 1 ? "Move all of them into your receive code. Those payments are tied together because they used the same address." : "Move it into your receive code. Then stop using that address.";
+  return html`<button class="card pad-sm" type="button" data-act="go" data-to="migrate" data-step="sweep" style="text-align:left;font:inherit;color:inherit;cursor:pointer"><div class="row">${I("circle-check", "s16")}<span class="strong grow">${title}</span>${I("chevron-right", "s16")}</div><p class="small muted">${sub}</p></button>`;
 }
 
 function recent(): Safe {
@@ -133,19 +157,19 @@ screens.home = () => {
   const p = price();
   let body: Safe;
   if (sc.on) {
-    body = html`${healthBanner()}${balanceSec()}
+    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}
   <div class="card" role="status" aria-live="polite"><div class="row between"><span class="strong row">${I("refresh-cw", "s16 spin")}Finding your coins…</span><span class="cap num">${sc.pct}%</span></div>
     <div class="progress" role="progressbar" aria-label="Finding your coins" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div>
-    <p class="small muted">Checked block ${num(sc.at)} of ${num(sc.tip)}. PrivateBit reads every block on this computer, so nobody else learns which coins are yours. You can close this window.</p></div>
-  ${payjoinCard()}${actionsRow()}
+    <p class="small muted">${sc.reading ? (sc.reading.count > 0 ? html`Reading block ${num(sc.reading.height)}, transaction ${num(sc.reading.index + 1)} of ${num(sc.reading.count)}. ` : html`Downloading block ${num(sc.reading.height)}. `) : ""}Checked through block ${num(sc.at)} of ${num(sc.tip)}. Closing this window keeps going. Locking hides the wallet, and finding coins continues until you quit the browser or switch wallets. Only this wallet moves; another wallet continues from its own block the next time you open it. ${S.b!.state.chain.kind === "core" ? "Blocks come from your node." : "Blocks already saved on this computer are reused."}</p></div>
+  ${actionsRow()}
   ${h.entries.length ? html`<div class="sec-h"><h2>Recent</h2><button class="link small" type="button" data-act="tab" data-to="activity">See all</button></div>${recent()}` : ""}`;
   } else if (empty) {
-    body = html`${healthBanner()}${balanceSec()}${actionsRow()}
+    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${actionsRow()}
   <div class="card"><div class="stack"><h2 class="strong">Get your first coins</h2><p class="small muted">Share your receive code, or move coins from another wallet.</p></div>
     <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Show my receive code</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div></div>
   ${p.kind !== "off" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD prices come from a price service</span><p>It sees your IP and that someone asked for the FB price, never your coins. <button class="link" type="button" data-act="go" data-to="set-privacy">Turn off in Privacy</button></p></div></div>` : ""}`;
   } else {
-    body = html`${healthBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${actionsRow()}
+    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${actionsRow()}
   ${p.kind === "na" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD price unavailable</span><p>The price service did not answer. Amounts in FB are exact and not affected. Trying again in 10 minutes.</p></div></div>` : ""}
   <div class="sec-h"><h2>Recent</h2>${h.entries.length ? html`<button class="link small" type="button" data-act="tab" data-to="activity">See all</button>` : ""}</div>${h.entries.length ? recent() : html`<p class="small muted">No payments yet.</p>`}`;
   }
@@ -163,7 +187,7 @@ export function whoSees(): Safe {
   const since = S.b!.health?.since ? hm(S.b!.health.since) : "";
   const usdOn = S.b!.prefs.usd !== false;
   return html`<section class="panel" aria-labelledby="p-h"><h2 id="p-h">Who can see what</h2><div class="list">
-  <div class="li" style="cursor:default"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding coins</span><span class="d" style="white-space:normal">On this computer only.</span></span><span class="badge ok">Private</span></div>
+  <div class="li" style="cursor:default"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding coins</span><span class="d" style="white-space:normal">${own ? "Your node sends the blocks. Matching them to your keys happens here." : "mempool.fractalbitcoin.io sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code."}</span></span><span class="badge ${own ? "ok" : "warn"}">${own ? "Private" : "Shared"}</span></div>
   <div class="li" style="cursor:default"><span class="ico ${h !== "ok" ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t">${own ? "Your own node" : "Block data service"}</span><span class="d" style="white-space:normal">${h === "offline" ? `Not reachable${since ? ` since ${since}` : ""}.` : h === "rate-limited" ? "Limiting requests without an API key." : own ? "Only your node sees what you read and broadcast." : "Sees your IP, fee rate requests and payments you broadcast."}</span></span><span class="badge ${h !== "ok" ? "danger" : own ? "ok" : "warn"}">${h === "offline" ? "Offline" : h === "rate-limited" ? "Limited" : own ? "Private" : "Shared"}</span></div>
   <div class="li" style="cursor:default"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links via relay</span><span class="d" style="white-space:normal">Encrypted blobs only. IP hidden by relay.</span></span><span class="badge ok">Private</span></div>
   <div class="li" style="cursor:default"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" style="white-space:normal">${usdOn ? "Sees your IP, never your coins." : "No price requests are made."}</span></span><span class="badge ${usdOn ? "warn" : "ok"}">${usdOn ? "Shared" : "Off"}</span></div></div>

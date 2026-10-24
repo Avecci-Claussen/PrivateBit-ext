@@ -128,9 +128,20 @@ export async function run<T>(busy: string, fn: () => Promise<T>, errKey = "form"
 export async function refresh(): Promise<void> {
   try {
     S.b = await call<Bundle>({ type: "BUNDLE" });
+    delete S.err.bundle;
   } catch (e) {
     S.err.bundle = message(e);
   }
+}
+
+/** After a reload the service worker may not be listening yet. Never treat that as "no wallet". */
+export async function refreshUntilReady(tries = 20): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    await refresh();
+    if (S.b) return true;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return !!S.b;
 }
 
 export function render(): void {

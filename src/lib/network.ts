@@ -26,7 +26,10 @@ export const FRACTAL = {
  * txid 0a6013191e7965a1f41d901e926cdbc2c2f80b5d58a5f8916e438eebc19168b0
  * → unique P2TR bc1p8jpgfw062s0krplk3zvz4sdqaywrmcv6pa5ar0gxntp8cwz85mxs3ly7k9
  */
-export const DEFAULT_BIRTHDAY = 2_228_749;
+/** Previous shipped scan start. Existing wallets on this height are moved to DEFAULT_BIRTHDAY. */
+export const LEGACY_DEFAULT_BIRTHDAY = 2_228_749;
+/** Default first-scan height (Fractal tip at ship). New wallets use max(tip, this). */
+export const DEFAULT_BIRTHDAY = 2_231_692;
 
 export type ChainKind = "core" | "unisat";
 
@@ -76,6 +79,7 @@ export function envUnisatBase(): string {
 export const DEFAULT_CHAIN: ChainConfig = {
   kind: "unisat",
   url: FRACTAL.defaultUnisat,
+  unisatToken: envUnisatToken() || undefined,
   payjoinDirectory: DEFAULT_PAYJOIN_DIRECTORY,
   ohttpRelay: DEFAULT_OHTTP_RELAY,
 };

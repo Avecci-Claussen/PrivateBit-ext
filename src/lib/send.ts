@@ -10,6 +10,7 @@ import {
 import { evenPriv } from "./schnorr-util.ts";
 import { concatBytes, fromHex, hex } from "./bytes.ts";
 import { coinSelect, estimateVbytes, maxSendable } from "./coinselect.ts";
+import { checkSplit, splitBudget } from "./split.ts";
 import type { Account } from "./keys.ts";
 import { CHANGE_LABEL, FRACTAL } from "./network.ts";
 import { parseBip21, type PaymentRequest } from "./bip21.ts";
@@ -343,6 +344,94 @@ export async function buildSend(args: {
       scriptPubKey: u.scriptPubKey,
       ...(u.kind === "bip86" ? { kind: "bip86" as const, index: u.index } : {}),
     })),
+  };
+}
+
+/** One of our coins, broken into several Silent Payment outputs we still own. Not a mix. */
+export async function buildSplit(args: {
+  account: Account;
+  coin: LabeledUtxo;
+  amounts: bigint[];
+  feeRate: number;
+  source: ChainSource;
+}): Promise<BuiltSend> {
+  if (args.coin.spent) throw new Error("this coin was already spent");
+  if (args.coin.height === 0) throw new Error("wait until this coin is in a block");
+  if (args.coin.kind === "bip86") throw new Error("move this into your receive code first");
+  const budget = splitBudget(BigInt(args.coin.value), args.amounts.length, args.feeRate);
+  const checked = checkSplit(args.amounts, budget.spendable);
+  if (!checked.ok) throw new Error(checked.reason);
+  const planned = { pieces: checked.amounts, fee: budget.fee, amount: budget.spendable };
+  const request = parseBip21(args.account.receive);
+  const tx = new btc.Transaction({ allowUnknownOutputs: true });
+  const script = fromHex(args.coin.scriptPubKey);
+  const amountIn = BigInt(args.coin.value);
+  tx.addInput({
+    txid: fromHex(args.coin.txid),
+    index: args.coin.vout,
+    witnessUtxo: { script, amount: amountIn },
+  });
+  const parent = await args.source.getTxHex(args.coin.txid);
+  const prev = voutFromParentHex(parent, args.coin.vout);
+  const d = evenPriv(inputSecret(args.account, args.coin));
+  const eligible = extractEligibleVins([
+    {
+      txid: args.coin.txid,
+      vout: args.coin.vout,
+      scriptSig: "",
+      txinwitness: "",
+      prevout: { scriptPubKey: { hex: hex(prev.scriptPubKey) } },
+      private_key: hex(d),
+    },
+  ]);
+  if (!eligible || eligible.length === 0) {
+    throw new Error("no eligible inputs for Silent Payment shared secret");
+  }
+  const outs = createSilentOutputs(eligible, [{ address: args.account.receive, count: planned.pieces.length }]);
+  if (outs.length !== planned.pieces.length) throw new Error("could not create Silent Payment pieces");
+  const paired = outs.map((o, i) => ({ o, amount: planned.pieces[i]! }));
+  paired.sort((a, b) => hex(a.o.xonly).localeCompare(hex(b.o.xonly)));
+  const silentOutputs: string[] = [];
+  const ourOutputs: OwnedOutput[] = [];
+  paired.forEach((p, i) => {
+    tx.addOutput({ script: taprootScriptPubKey(p.o.xonly), amount: p.amount });
+    silentOutputs.push(hex(p.o.xonly));
+    ourOutputs.push({
+      vout: i,
+      value: p.amount.toString(),
+      scriptPubKey: hex(taprootScriptPubKey(p.o.xonly)),
+      tweak: hex(p.o.tweak),
+      label: null,
+      k: p.o.k,
+    });
+  });
+  const preimage = tx.preimageWitnessV1(0, [script], btc.SigHash.DEFAULT, [amountIn]);
+  const sig = schnorr.sign(preimage, d);
+  tx.updateInput(0, { finalScriptWitness: [sig] });
+  const psbt = tx.toPSBT();
+  const raw = tx.extract();
+  return {
+    psbtBase64: btoa(String.fromCharCode(...psbt)),
+    txHex: hex(raw),
+    previewNote:
+      "Breaks this coin into Silent Payment pieces you still own. Anyone who sees this transaction can tell the pieces were created together. Later you can spend one without spending the others. This is not a mix.",
+    request,
+    change: 0n,
+    fee: planned.fee,
+    amount: planned.amount,
+    vbytes: estimateVbytes(1, planned.pieces.length),
+    silentOutputs,
+    ourOutputs,
+    signableInputs: [
+      {
+        txid: args.coin.txid,
+        vout: args.coin.vout,
+        tweak: args.coin.tweak,
+        label: args.coin.label,
+        value: args.coin.value,
+        scriptPubKey: args.coin.scriptPubKey,
+      },
+    ],
   };
 }
 

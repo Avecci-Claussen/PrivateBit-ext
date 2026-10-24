@@ -36,3 +36,26 @@ export function setOneTimeStatus(store: OneTimeStore, index: number, status: One
 export function visibleRecord(store: OneTimeStore): OneTimeRecord | undefined {
   return store.records.filter((r) => r.status === "issued").sort((a, b) => b.index - a.index)[0];
 }
+
+/**
+ * Keep one-time records and the coins that belong to them in step.
+ * The address is swept only when every coin at that index is spent.
+ * A later payment to the same address is still spendable and reopens it.
+ */
+export function syncOneTimeWithScan(
+  scan: { utxos: { kind?: "sp" | "bip86"; index?: number; spent: boolean }[] },
+  ot: OneTimeStore,
+): { utxosSpent: boolean[]; records: OneTimeRecord[]; changedOt: boolean } {
+  const utxosSpent = scan.utxos.map((u) => u.spent);
+  let changedOt = false;
+  const records = ot.records.map((r) => {
+    const mine = scan.utxos.filter((u) => u.kind === "bip86" && u.index === r.index);
+    if (mine.length === 0) return r;
+    const live = mine.some((u) => !u.spent);
+    const status: OneTimeStatus = live ? "funded" : "swept";
+    if (r.status === status) return r;
+    changedOt = true;
+    return { ...r, status };
+  });
+  return { utxosSpent, records, changedOt };
+}

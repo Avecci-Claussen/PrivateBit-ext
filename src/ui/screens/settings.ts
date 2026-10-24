@@ -5,6 +5,8 @@ import { hdr, tabs, mailboxHost } from "../chrome.ts";
 import { DEFAULT_BIRTHDAY, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
 const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
 import { LOCK_CHOICES } from "../../lib/prefs.ts";
+import { THEME_CHOICES, type ThemeChoice } from "../../lib/theme.ts";
+import { applyTheme, currentTheme } from "../theme.ts";
 import { PRICE_HOST } from "../../lib/requests.ts";
 import { price, syncLine } from "../derive.ts";
 
@@ -42,6 +44,25 @@ async function setLock(m: number): Promise<void> {
 }
 actions["lock-min"] = (el) => setLock(Number(el.dataset.v));
 
+function themeSummary(): string {
+  const id = currentTheme();
+  return THEME_CHOICES.find((c) => c.id === id)?.label ?? "Dark (default)";
+}
+function themeSeg(labelledBy: string): Safe {
+  const cur = currentTheme();
+  return html`<div class="seg wrap" role="radiogroup" aria-labelledby="${labelledBy}">${THEME_CHOICES.map((c) => html`<button type="button" role="radio" data-act="theme-set" data-v="${c.id}" aria-checked="${String(cur === c.id)}">${c.label}</button>`)}</div>`;
+}
+screens["set-appearance"] = () => ({
+  title: "Appearance",
+  header: hdr({ title: "Appearance" }),
+  main: html`<div class="field"><p class="label" id="ap">Theme</p>${themeSeg("ap")}
+    <p class="help">Dark is the default, including the first time you open PrivateBit. Your choice stays on this computer across lock and closing the window.</p></div>`,
+});
+actions["theme-set"] = (el) => {
+  applyTheme(el.dataset.v as ThemeChoice);
+  render();
+};
+
 const VERSION = chrome.runtime.getManifest?.().version ?? "1.0.0";
 
 /* ---------- list (54) ---------- */
@@ -55,12 +76,15 @@ screens.settings = () => {
     main: html`
   <h1 style="font:var(--t-title)">Settings</h1>
   <div class="list">
+  ${row("key-round", "Wallets", `${(S.b!.state.wallets ?? []).length || 1} on this computer`, "wallets")}
   ${row("blocks", "Network and data source", c.kind === "core" ? "Fractal, your own node" : "Fractal, public block data service", "set-network")}
+  ${row("sun", "Appearance", themeSummary(), "set-appearance")}
   ${row("eye-off", "Privacy", pr.usd ? "USD price, hide balance, explorer" : "USD price off, hide balance, explorer", "set-privacy")}
   ${row("route", "Payment links", `${mailboxHost()} through a relay`, "set-payjoin")}
   ${row("lock", "Security and lock", `Password, lock after ${pr.lockMinutes} min`, "set-security")}
   ${row("file-key", "Backup", "Recovery words", "set-backup")}
   ${row("scan-line", "Finding coins", `Look back from block ${num(S.b!.state.birthday ?? DEFAULT_BIRTHDAY)}`, "set-scan")}
+  ${row("arrow-right-left", "Move coins from another wallet", "One payment, then move it into your receive code", "migrate")}
 </div>
   ${S.mode === "popup" ? html`<button class="btn btn-secondary btn-block" type="button" data-act="open-full">${I("external-link", "s16")}Open full page</button>` : ""}
   <p class="cap" style="text-align:center">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p>`,
@@ -300,7 +324,7 @@ screens["set-security"] = () => {
     <div class="r"><span class="k">Now locks</span><span class="v">${prefs().lockMinutes} min after the payment ends</span></div></div></div>`
       : html`
   <div class="field"><p class="label" id="al">Lock after no use for</p>${lockSeg("al")}
-    <p class="help">Counts from your last click or key press in PrivateBit. Waits while a payment link or Payjoin payment is in progress, then locks when it ends.</p></div>
+    <p class="help">Counts from your last click or key press in PrivateBit. Waits while a payment link or Payjoin payment is in progress, then locks when it ends. Finding coins continues while locked, until you quit the browser or switch wallets.</p></div>
   <div class="list">${row("key-round", "Change password", "Re-encrypts your keys here", "set-password")}</div>
   <div class="card" style="border-color:var(--c-danger)"><div class="stack"><p class="strong">Remove wallet from this computer</p><p class="small muted">Deletes the encrypted vault, activity, coin labels and settings from this computer. Only your recovery words can bring the coins back.</p></div><button class="btn btn-danger-outline btn-block" type="button" data-act="go" data-to="remove">Remove wallet</button></div>`,
   };
@@ -345,7 +369,7 @@ loaders["set-backup"] = () => {
 screens["set-backup"] = () => {
   const st = S.b!.state;
   const w = S.d.backupWords as string[] | undefined;
-  const kv = html`<div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Words</span><span class="v">${st.mnemonicWords ?? 12}</span></div><div class="r"><span class="k">Extra passphrase</span><span class="v">${st.hasPassphrase ? "Set" : "Not set"}</span></div><div class="r"><span class="k">Keys path</span><span class="v mono">m/352'/8228'/0'</span></div><div class="r"><span class="k">One-time addresses</span><span class="v mono">m/86'/8228'/0'/0/i</span></div></div></div>`;
+  const kv = html`<div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Words</span><span class="v">${st.mnemonicWords ?? "—"}</span></div><div class="r"><span class="k">Extra passphrase</span><span class="v">${st.hasPassphrase ? "Set" : "Not set"}</span></div><div class="r"><span class="k">Keys path</span><span class="v mono">m/352'/8228'/0'</span></div><div class="r"><span class="k">One-time addresses</span><span class="v mono">m/86'/8228'/0'/0/i</span></div></div></div>`;
   if (w) {
     return {
       title: "Backup",
@@ -391,7 +415,7 @@ screens["set-scan"] = () => {
     header: hdr({ title: "Finding coins" }),
     main: html`
   <div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Looking from block</span><span class="v mono">${num(st.birthday ?? DEFAULT_BIRTHDAY)}</span></div><div class="r"><span class="k">Checked up to</span><span class="v mono">${num(st.lastHeight ?? 0)}</span></div><div class="r"><span class="k">Status</span><span class="v">${done ? html`<span class="badge ok">${I("circle-check")}Up to date</span>` : !st.tip ? html`<span class="badge">${I("clock")}${syncLine()}</span>` : html`<span class="badge">${I("refresh-cw")}Finding coins, ${num(st.tip - (st.lastHeight ?? 0))} blocks to go</span>`}</span></div></div></div>
-  <div class="field" data-enter="rescan"><label class="label" for="bk">Look again from block</label><input class="input mono" id="bk" data-f="bk" inputmode="numeric" autocomplete="off" value="${fv("bk")}" aria-describedby="bk-h" ${err("bk") ? html`aria-invalid="true"` : ""}><p class="help" id="bk-h">Use this if a payment is missing. Earlier blocks take longer. Silent Payments on Fractal started at block ${num(DEFAULT_BIRTHDAY)}.</p>${errP("bk")}</div>
+  <div class="field" data-enter="rescan"><label class="label" for="bk">Look again from block</label><input class="input mono" id="bk" data-f="bk" inputmode="numeric" autocomplete="off" value="${fv("bk")}" aria-describedby="bk-h" ${err("bk") ? html`aria-invalid="true"` : ""}><p class="help" id="bk-h">Use this if a payment is missing. Earlier blocks take longer. The default start is block ${num(DEFAULT_BIRTHDAY)}.</p>${errP("bk")}</div>
   <button class="btn btn-ghost btn-sm" type="button" data-act="bk-default" style="align-self:flex-start">Use block ${num(DEFAULT_BIRTHDAY)}</button>`,
     foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="rescan" ${busy("bk") ? html`aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Look again from this block</button>`,
   };
@@ -425,12 +449,13 @@ loaders.remove = () => {
 };
 screens.remove = () => {
   const two = fv("rmStep") === "2";
+  const many = (S.b!.state.wallets ?? []).length > 1;
   if (!two) {
     return {
       title: "Remove wallet",
       header: hdr({ title: "Remove wallet" }),
       main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("trash-2")}</div><h1>Remove PrivateBit from this computer?</h1><p>This deletes the encrypted vault, activity history, coin labels, payment links and settings stored here. Your coins stay on the chain.</p></div>
+  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("trash-2")}</div><h1>${many ? "Remove this wallet?" : "Remove PrivateBit from this computer?"}</h1><p>${many ? "This deletes the open wallet from this computer. The other wallets stay. Coins stay on the chain." : "This deletes the encrypted vault, activity history, coin labels, payment links and settings stored here. Your coins stay on the chain."}</p></div>
   <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Only your recovery words can bring the coins back</span>Check you have them on paper before you continue. Labels you typed cannot be recovered.</div></div>
   ${S.b!.state.payjoin ? html`<div class="banner danger">${I("hourglass", "s16")}<div>A payment link or Payjoin payment is still waiting. Removing the wallet cancels it.</div></div>` : ""}
   <div class="field" data-enter="rm-next"><label class="label" for="rmpw">Password</label><input class="input" id="rmpw" data-f="rmpw" type="password" autocomplete="current-password" value="${fv("rmpw")}" ${err("rm") ? html`aria-invalid="true" aria-describedby="rm-e"` : ""}>${err("rm") ? html`<p class="err" id="rm-e" role="alert">${I("circle-alert", "s16")}<span>${err("rm")}</span></p>` : ""}</div>`,
@@ -442,8 +467,8 @@ screens.remove = () => {
     title: "Remove wallet",
     header: hdr({ title: "Remove wallet" }),
     main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("triangle-alert")}</div><h1>Last check</h1><p>After this, PrivateBit on this computer starts empty. There is no undo.</p></div>
-  <div class="card pad-sm"><label class="check"><input type="checkbox" data-f="rmAck" ${ack ? html`checked` : ""}> <span>I have my ${S.b!.state.mnemonicWords ?? 12} recovery words${S.b!.state.hasPassphrase ? " and my extra passphrase" : ""} written down</span></label></div>
+  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("triangle-alert")}</div><h1>Last check</h1><p>${(S.b!.state.wallets ?? []).length > 1 ? "After this, that wallet is gone from this computer. The others stay, locked, until you unlock one." : "After this, PrivateBit on this computer starts empty. There is no undo."}</p></div>
+  <div class="card pad-sm"><label class="check"><input type="checkbox" data-f="rmAck" ${ack ? html`checked` : ""}> <span>I have my ${S.b!.state.mnemonicWords ? `${S.b!.state.mnemonicWords} recovery words` : "recovery words"}${S.b!.state.hasPassphrase ? " and my extra passphrase" : ""} written down</span></label></div>
   ${errP("rm")}`,
     foot: html`<button class="btn btn-danger btn-block" type="button" data-act="rm-final" ${ack && !busy("rm") ? "" : html`aria-disabled="true" disabled`}>${busy("rm") ? html`${I("loader-circle", "s16 spin")}Removing…` : "Remove wallet from this computer"}</button><button class="btn btn-ghost btn-block" type="button" data-act="back">Keep my wallet</button>`,
   };
@@ -473,7 +498,7 @@ actions["rm-final"] = async () => {
   S.f = {};
   S.d = {};
   await refresh();
-  go("welcome", {}, { reset: true });
+  go(S.b?.state.hasVault ? "unlock" : "welcome", {}, { reset: true });
 };
 
 /* ---------- full page settings (F2) ---------- */
@@ -486,11 +511,16 @@ function fullSettings(): Safe {
   }
   const pr = prefs();
   return html`<div class="topbar"><h1>Settings</h1><span class="cap">Changes save when you select Save in each section</span></div>
-  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#net">Network and data</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
+  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
   <div class="stack" style="gap:var(--s-8)">
-    <section class="sect" id="net"><header><h2>Network and data source</h2><p>PrivateBit reads every block and finds your coins on this computer. The data source only sees that you read blocks, plus the payments you broadcast.</p></header>
+    <section class="sect" id="wallets"><header><h2>Wallets</h2><p>Several wallets can sit on this computer. One is open at a time. Each has its own password, and its own extra passphrase if you set one. A new wallet is 24 words.</p></header>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("key-round", "s16")}Wallets on this computer</button></div></section>
+    <section class="sect" id="net"><header><h2>Network and data source</h2><p>Blocks are downloaded from the source below. PrivateBit matches them to your keys on this computer. A public service sees your IP, the blocks you download, and the payments you broadcast. It is not given your receive code.</p></header>
       ${networkForm()}
       <div class="row"><button class="btn btn-primary" type="button" data-act="net-save">Save</button></div></section>
+    <section class="sect" id="ap"><header><h2>Appearance</h2><p>Dark is the default. Your choice stays on this computer.</p></header>
+      <div class="field" style="max-width:420px"><p class="label" id="apf">Theme</p>${themeSeg("apf")}</div>
+      <p class="small muted"><button class="link" type="button" data-act="go" data-to="migrate">Move coins from another wallet</button></p></section>
     <section class="sect" id="priv"><header><h2>Privacy</h2><p>Each switch says who would learn something.</p></header>${privacyList()}
       ${pr.usd ? html`<p class="small muted">USD price from <span class="mono">${PRICE_HOST}</span>, asked directly every 10 minutes while unlocked. If the price is older than 30 minutes it shows in amber with its time.</p>` : ""}</section>
     <section class="sect" id="pj"><header><h2>Payment links</h2><p>Messages are encrypted for the other PrivateBit user. The relay hides your IP from the mailbox. Use two different operators.</p></header>

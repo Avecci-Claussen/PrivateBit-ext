@@ -74,7 +74,7 @@ const NAV: [string, string, string][] = [
 const SECTION: Record<string, string> = {
   home: "home", send: "send", "send-coins": "send", "send-fee": "send", review: "send", sending: "send", sent: "send",
   "pj-waiting": "send", "pj-failed": "send", "send-failed": "send", receive: "receive", paylink: "paylink",
-  activity: "activity", "activity-detail": "activity", coins: "coins", "coin-detail": "coins", migrate: "home",
+  activity: "activity", "activity-detail": "activity", coins: "coins", "coin-detail": "coins", "coin-split": "coins", "coin-split-review": "coins", "coin-split-done": "coins", migrate: "home", wallets: "settings",
 };
 
 function sideNav(): Safe {
@@ -128,7 +128,7 @@ export const sheets: Record<string, () => Safe> = {
       "ps-h",
       "Who can see what",
       html`<div class="list">
-    <div class="li" style="cursor:default"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding your coins</span><span class="d" style="white-space:normal">On this computer. No server learns which coins are yours.</span></span>${I("circle-check", "s16")}</div>
+    <div class="li" style="cursor:default"><span class="ico ${own ? "in" : "warn"}">${I("scan-line")}</span><span class="body"><span class="t">Finding your coins</span><span class="d" style="white-space:normal">${own ? "Your node sends the blocks. Matching them to your keys happens here." : "mempool.fractalbitcoin.io sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code."}</span></span>${own ? I("circle-check", "s16") : html`<span class="badge warn">Shared</span>`}</div>
     <div class="li" style="cursor:default"><span class="ico ${down ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t" style="white-space:normal">${own ? "Blocks and fees: your own node" : "Blocks and fees: block data service"}</span><span class="d" style="white-space:normal">${own ? "Only your node sees which blocks you read and what you broadcast." : "Sees your IP, that you read every block and ask for fee rates, and the payments you send."}</span></span>${down ? html`<span class="badge danger">${h!.state === "rate-limited" ? "Limited" : "Offline"}</span>` : own ? I("circle-check", "s16") : html`<span class="badge warn">Shared</span>`}</div>
     <div class="li" style="cursor:default"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links: ${mailboxHost()}</span><span class="d" style="white-space:normal">Stores an encrypted blob it cannot read, reached through a relay that hides your IP.</span></span>${I("circle-check", "s16")}</div>
     <div class="li" style="cursor:default"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" style="white-space:normal">${usdOn ? "Sees your IP and that someone asked for the FB price. Never your coins or codes." : "No price requests are made."}</span></span>${usdOn ? html`<span class="badge warn">Shared</span>` : I("circle-check", "s16")}</div>

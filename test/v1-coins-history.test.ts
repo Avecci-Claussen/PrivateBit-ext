@@ -91,4 +91,64 @@ describe("activity history", () => {
     const h = deriveHistory({ utxos: [coin("c", 5, { height: 0 })], lastHeight: 5, tip: 5 }, null, { now: 0 });
     expect(h.entries["c".repeat(64)]!.status).toBe("incoming");
   });
+  it("records a receive-code sweep as the amount that landed, not minus the fee", () => {
+    const ot = coin("a", 50_000_000, { height: 1000, kind: "bip86", index: 0 });
+    const spent = { ...ot, spent: true, spentBy: "s".repeat(64), spentHeight: 0 };
+    const landed = coin("s", 49_999_889, { height: 0 });
+    let h = recordBroadcast(emptyHistory(), {
+      txid: "s".repeat(64),
+      kind: "self",
+      amount: 49_999_889n,
+      fee: 111n,
+      feeRate: 1,
+      outpoints: [op(ot), op(landed)],
+      now: 5_000,
+      linked: true,
+    });
+    expect(h.entries["s".repeat(64)]!.amount).toBe("49999889");
+    expect(h.entries["s".repeat(64)]!.fee).toBe("111");
+    expect(h.entries["s".repeat(64)]!.status).toBe("pending");
+    h = deriveHistory({ utxos: [spent, landed], lastHeight: 1010, tip: 1010 }, h, { now: 9_000_000 });
+    expect(h.entries["s".repeat(64)]!.kind).toBe("self");
+    expect(h.entries["s".repeat(64)]!.amount).toBe("49999889");
+    expect(h.entries["s".repeat(64)]!.status).toBe("pending");
+    h = deriveHistory(
+      {
+        utxos: [
+          { ...spent, spentHeight: 1010 },
+          { ...landed, height: 1010 },
+        ],
+        lastHeight: 1010,
+        tip: 1010,
+      },
+      h,
+      { now: 9_000_000 },
+    );
+    expect(h.entries["s".repeat(64)]!.status).toBe("confirmed");
+    expect(h.entries["s".repeat(64)]!.amount).toBe("49999889");
+    expect(h.entries["s".repeat(64)]!.height).toBe(1010);
+  });
+  it("rewrites a stored minus-fee self row once the sweep outputs are in the scan", () => {
+    const ot = coin("a", 50_000_000, { height: 1000, kind: "bip86", index: 0 });
+    const spent = { ...ot, spent: true, spentBy: "s".repeat(64), spentHeight: 2231838 };
+    const landed = coin("s", 49_999_889, { height: 2231838 });
+    const prev = emptyHistory();
+    prev.entries["s".repeat(64)] = {
+      txid: "s".repeat(64),
+      kind: "self",
+      amount: "-111",
+      fee: "111",
+      height: null,
+      time: 1,
+      status: "pending",
+      outpoints: [],
+      fromWallet: true,
+    };
+    const h = deriveHistory({ utxos: [spent, landed], lastHeight: 2231838, tip: 2231838 }, prev, { now: 0 });
+    const e = h.entries["s".repeat(64)]!;
+    expect(e.kind).toBe("self");
+    expect(e.amount).toBe("49999889");
+    expect(e.status).toBe("confirmed");
+    expect(e.height).toBe(2231838);
+  });
 });

@@ -6,7 +6,7 @@ import { schnorr } from "@noble/curves/secp256k1";
 import { hex } from "../src/lib/bytes.ts";
 import { oneTimeKey, ONE_TIME_ACCOUNT_PATH } from "../src/lib/keys.ts";
 import { FRACTAL } from "../src/lib/network.ts";
-import { emptyOneTime, issueRecord, nextOneTimeIndex, setOneTimeStatus, visibleRecord } from "../src/lib/onetime.ts";
+import { emptyOneTime, issueRecord, nextOneTimeIndex, setOneTimeStatus, syncOneTimeWithScan, visibleRecord } from "../src/lib/onetime.ts";
 
 const MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 const NET = { bech32: FRACTAL.bech32, pubKeyHash: FRACTAL.pubKeyHash, scriptHash: FRACTAL.scriptHash, wif: FRACTAL.wif };
@@ -50,5 +50,45 @@ describe("one-time migration address (BIP86)", () => {
     s = issueRecord(s, "a1", 3);
     expect(s.records.map((r) => r.index)).toEqual([0, 1]);
     expect(visibleRecord(s)?.index).toBe(1);
+  });
+
+  it("reopens a swept address when another payment is still there", () => {
+    const swept = setOneTimeStatus(issueRecord(emptyOneTime(), "bc1p", 1, 0), 0, "swept");
+    const again = syncOneTimeWithScan(
+      {
+        utxos: [
+          { kind: "bip86" as const, index: 0, spent: true },
+          { kind: "bip86" as const, index: 0, spent: false },
+        ],
+      },
+      swept,
+    );
+    expect(again.changedOt).toBe(true);
+    expect(again.records[0]?.status).toBe("funded");
+    expect(again.utxosSpent).toEqual([true, false]);
+
+    const funded = setOneTimeStatus(issueRecord(emptyOneTime(), "bc1p", 1, 0), 0, "funded");
+    const partial = syncOneTimeWithScan(
+      {
+        utxos: [
+          { kind: "bip86" as const, index: 0, spent: true },
+          { kind: "bip86" as const, index: 0, spent: false },
+        ],
+      },
+      funded,
+    );
+    expect(partial.records[0]?.status).toBe("funded");
+    const done = syncOneTimeWithScan(
+      {
+        utxos: [
+          { kind: "bip86" as const, index: 0, spent: true },
+          { kind: "bip86" as const, index: 0, spent: true },
+        ],
+      },
+      funded,
+    );
+    expect(done.changedOt).toBe(true);
+    expect(done.records[0]?.status).toBe("swept");
+    expect(done.utxosSpent).toEqual([true, true]);
   });
 });

@@ -19,7 +19,7 @@ export function feeFor(inputs: number, outputs: number, feeRate: number): bigint
   return BigInt(Math.ceil((OVERHEAD + inputs * P2TR_VBYTES + outputs * P2TR_OUT_VBYTES) * feeRate));
 }
 
-const DUST = 330n;
+export const DUST = 330n;
 
 export class CoinChoiceError extends Error {
   constructor(message: string) {

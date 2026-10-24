@@ -2,16 +2,24 @@ import { S } from "./app.ts";
 import { PRICE_STALE_MS } from "../lib/requests.ts";
 import { usd as usdFmt } from "./kit.ts";
 
-export function scanning(): { on: boolean; pct: number; at: number; tip: number; from: number } {
+export function scanning(): {
+  on: boolean;
+  pct: number;
+  at: number;
+  tip: number;
+  from: number;
+  reading?: { height: number; index: number; count: number };
+} {
   const st = S.b?.state;
   const tip = st?.tip ?? 0;
   const at = st?.lastHeight ?? 0;
   const from = st?.birthday ?? at;
+  const reading = st?.reading;
   if (!st?.unlocked || !tip || at >= tip) return { on: false, pct: 100, at, tip, from };
   const span = Math.max(1, tip - from);
   const pct = Math.max(0, Math.min(99, Math.floor(((at - from) / span) * 100)));
   // A few blocks behind is normal following, not a scan.
-  return { on: tip - at > 3, pct, at, tip, from };
+  return { on: tip - at > 3, pct, at, tip, from, reading };
 }
 
 export function health(): "ok" | "rate-limited" | "offline" {
@@ -54,7 +62,7 @@ export function syncLine(): string {
   const at = st?.lastHeight ?? 0;
   const checked = !!st && at >= (st.birthday ?? 0);
   const h = health();
-  if (sc.on) return `Finding coins, block ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`;
+  if (sc.on) return `Downloading blocks, ${at.toLocaleString("en-US")} of ${sc.tip.toLocaleString("en-US")}`;
   if (!st?.tip) {
     if (h !== "ok") return checked ? `Last checked block ${at.toLocaleString("en-US")}` : "Waiting for block data";
     return "Checking for new blocks\u2026";

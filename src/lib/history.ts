@@ -1,4 +1,5 @@
 import type { CoinMetaMap } from "./coinmeta.ts";
+import { CHANGE_LABEL } from "./network.ts";
 import type { LabeledUtxo, ScanStore } from "./scan.ts";
 
 /**
@@ -6,13 +7,16 @@ import type { LabeledUtxo, ScanStore } from "./scan.ts";
  * chrome.storage.local only. Everything except typed labels and destinations can be
  * rebuilt from the local scan store, which is what deriveHistory does.
  */
-export type HistoryKind = "received" | "sent" | "payjoin-received" | "payjoin-sent" | "moved-in" | "self";
+export type HistoryKind = "received" | "sent" | "payjoin-received" | "payjoin-sent" | "moved-in" | "self" | "split";
 export type HistoryStatus = "incoming" | "pending" | "confirmed" | "failed" | "cancelled";
 
 export type HistoryEntry = {
   txid: string;
   kind: HistoryKind;
-  /** Net effect on the wallet in sats, signed. For sends this is minus the amount paid (fee shown apart). */
+  /**
+   * Signed sats for the row. Sends are minus the amount paid (fee is separate).
+   * A move into the receive code is the amount that landed there, positive.
+   */
   amount: string;
   fee?: string;
   feeRate?: number;
@@ -28,6 +32,8 @@ export type HistoryEntry = {
   /** Set by PrivateBit when it built the transaction, so the scan does not reclassify it. */
   fromWallet?: boolean;
   change?: string;
+  /** How many Silent Payment pieces a split created. */
+  pieces?: number;
 };
 
 export type HistoryStore = {
@@ -73,13 +79,19 @@ export function deriveHistory(
     const heights = [...o.map((u) => u.height), ...i.map((u) => u.spentHeight ?? 0)].filter((h) => h > 0);
     const height = heights.length ? Math.max(...heights) : null;
     const old = entries[txid];
+    const selfMove =
+      i.length > 0 &&
+      o.length > 0 &&
+      (net === 0n || i.some((u) => u.kind === "bip86") || (net < 0n && outSum * 50n >= inSum * 49n));
     let kind: HistoryKind;
     if (old?.fromWallet) kind = old.kind;
     else if (i.length === 0) kind = o.some((u) => u.kind === "bip86") ? "moved-in" : "received";
     else if (opts.payjoinTxids?.has(txid) && net > 0n) kind = "payjoin-received";
     else if (net > 0n) kind = "payjoin-received";
-    else if (o.length > 0 && net === 0n) kind = "self";
-    else kind = "sent";
+    else if (selfMove) {
+      const allReceive = o.every((u) => u.label !== CHANGE_LABEL);
+      kind = o.length >= 2 && allReceive ? "split" : "self";
+    } else kind = "sent";
     const outpoints = [...i.map(op), ...o.map(op)];
     const linked =
       [...i, ...o].some((u) => u.kind === "bip86" || meta[op(u)]?.linked) || undefined;
@@ -98,7 +110,16 @@ export function deriveHistory(
           : incoming
             ? "incoming"
             : "pending";
-    const amount = old?.fromWallet ? old.amount : net.toString();
+    const amount =
+      kind === "self" || kind === "split"
+        ? outSum > 0n
+          ? outSum.toString()
+          : old?.amount && BigInt(old.amount) > 0n
+            ? old.amount
+            : outSum.toString()
+        : old?.fromWallet
+          ? old.amount
+          : net.toString();
     const entry: HistoryEntry = {
       ...(old ?? {}),
       txid,
@@ -112,6 +133,7 @@ export function deriveHistory(
     if (approxTime) entry.approxTime = true;
     else delete entry.approxTime;
     if (linked) entry.linked = true;
+    if (kind === "split") entry.pieces = o.length >= 2 ? o.length : old?.pieces;
     entries[txid] = entry;
   }
   const out: HistoryStore = { v: 1, entries };
@@ -133,15 +155,17 @@ export function recordBroadcast(
     change?: bigint;
     now: number;
     linked?: boolean;
+    pieces?: number;
   },
 ): HistoryStore {
   const base = prev ?? emptyHistory();
   const old = base.entries[e.txid];
+  const credit = e.kind === "self" || e.kind === "split";
   const entry: HistoryEntry = {
     ...(old ?? {}),
     txid: e.txid,
     kind: e.kind,
-    amount: e.kind === "self" ? (-e.fee).toString() : (-e.amount).toString(),
+    amount: credit ? e.amount.toString() : (-e.amount).toString(),
     fee: e.fee.toString(),
     feeRate: e.feeRate,
     height: old?.height ?? null,
@@ -154,6 +178,7 @@ export function recordBroadcast(
   if (e.label) entry.label = e.label;
   if (e.change !== undefined && e.change > 0n) entry.change = e.change.toString();
   if (e.linked) entry.linked = true;
+  if (e.pieces && e.pieces >= 2) entry.pieces = e.pieces;
   return { ...base, entries: { ...base.entries, [e.txid]: entry } };
 }
 

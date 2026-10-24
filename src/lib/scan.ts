@@ -1,10 +1,12 @@
 import { detectOurUtxos, type DetectedOutput } from "./bip352.ts";
+import type { SharedBlock } from "./blockshare.ts";
 import type { Account } from "./keys.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
-import type { ChainSource } from "./chain.ts";
-import { parseTxHex, taprootOutputs, voutFromParentHex } from "./tx.ts";
-import { hex } from "./bytes.ts";
+import type { ChainSource, TxInputScript } from "./chain.ts";
+import { parseTxHex, taprootOutputs, voutFromParentHex, type ParsedTx } from "./tx.ts";
+import { fromHex, hex } from "./bytes.ts";
 import { assertParentTxHex } from "./policy.ts";
+import { RateLimitedError } from "./requests.ts";
 
 export type LabeledUtxo = {
   txid: string;
@@ -28,6 +30,8 @@ export type ScanInflight = {
   height: number;
   nextTx: number;
   txids: string[];
+  /** Set when the block is the shared copy, so the txid list does not have to be stored. */
+  txCount?: number;
 };
 
 /** One-shot P2TR we created for a BIP77 session (not an sp1). */
@@ -47,6 +51,8 @@ export type ScanStore = {
   tip?: number;
   inflight?: ScanInflight;
   watch?: WatchedOutput[];
+  /** Tx hex fetches that failed often enough to stop blocking the block. Retried later. */
+  deferred?: ScanHole[];
 };
 
 export type ScanProgress = {
@@ -59,7 +65,74 @@ export type ScanProgress = {
   skipped: number;
 };
 
-export const SCAN_TX_BATCH = 8;
+/** Txs applied per height before we persist. Hex and input lists are fetched together. */
+export const SCAN_TX_BATCH = 48;
+/** In-flight block transactions. Each one may use two requests (raw tx and its inputs). */
+export const SCAN_FETCH_CONCURRENCY = 8;
+/** Work between yields. The service worker continues immediately after this; it does not wait on an alarm. */
+export const SCAN_BUDGET_MS = 12_000;
+/** A missing tx hex is retried, then the block moves on and the tx is tried again later. */
+export const SCAN_HEX_TRIES = 3;
+
+export type ScanHole = { txid: string; height: number; tries: number };
+
+async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  if (!items.length) return out;
+  let next = 0;
+  const n = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(
+    Array.from({ length: n }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await fn(items[i]!, i);
+      }
+    }),
+  );
+  return out;
+}
+
+/** Reuse raw tx hex within one catch-up so parent prevouts are not refetched. */
+export function withTxHexCache(source: ChainSource, max = 512): ChainSource {
+  const cache = new Map<string, string>();
+  const inflight = new Map<string, Promise<string>>();
+  return {
+    kind: source.kind,
+    getTip: () => source.getTip(),
+    getBlockHash: (h) => source.getBlockHash(h),
+    getBlockTxids: (h) => source.getBlockTxids(h),
+    broadcast: (hexTx) => source.broadcast(hexTx),
+    estimateFeeSatPerVb: () => source.estimateFeeSatPerVb(),
+    feeRates: source.feeRates ? () => source.feeRates!() : undefined,
+    getTxHeight: source.getTxHeight ? (txid) => source.getTxHeight!(txid) : undefined,
+    listInputScripts: source.listInputScripts ? (txid) => source.listInputScripts!(txid) : undefined,
+    async getTxHex(txid) {
+      const hit = cache.get(txid);
+      if (hit) return hit;
+      let pending = inflight.get(txid);
+      if (!pending) {
+        pending = source.getTxHex(txid).then(
+          (h) => {
+            inflight.delete(txid);
+            cache.set(txid, h);
+            if (cache.size > max) {
+              const oldest = cache.keys().next().value;
+              if (oldest) cache.delete(oldest);
+            }
+            return h;
+          },
+          (e) => {
+            inflight.delete(txid);
+            throw e;
+          },
+        );
+        inflight.set(txid, pending);
+      }
+      return pending;
+    },
+  };
+}
 
 export function emptyScanStore(birthday: number): ScanStore {
   return { utxos: [], lastHeight: Math.max(0, birthday - 1) };
@@ -87,24 +160,23 @@ export async function scanTransaction(
   source: ChainSource,
   txHex: string,
   _height: number,
+  inputs?: TxInputScript[],
 ): Promise<(DetectedOutput & { txid: string; value: bigint })[]> {
   const tx = parseTxHex(txHex);
   const taps = taprootOutputs(tx);
   if (taps.length === 0) return [];
 
-  const raw: RawVin[] = [];
-  for (const vin of tx.vin) {
-    if (isCoinbaseTxid(vin.txid)) continue;
-    const parentHex = assertParentTxHex(await source.getTxHex(vin.txid), vin.txid);
-    const prev = voutFromParentHex(parentHex, vin.vout);
-    raw.push(toRawVin(vin, prev));
-  }
+  const tapsIn = taps.map((t) => ({ xonly: t.xonly, vout: t.vout }));
+  const raw = inputs
+    ? vinsFromListed(tx, inputs)
+    : source.listInputScripts
+      ? await rawVinsFromInputList(tx, source)
+      : await rawVinsFromParents(tx, source);
   if (raw.length === 0) return [];
   const eligible = extractEligibleVins(raw);
   if (!eligible || eligible.length === 0) return [];
 
-  const tapsIn = taps.map((t) => ({ xonly: t.xonly, vout: t.vout }));
-  let found = detectOurUtxos({
+  const found = detectOurUtxos({
     vins: eligible,
     taprootOutputs: tapsIn,
     scanSecret: account.scanSecret,
@@ -112,25 +184,48 @@ export async function scanTransaction(
     labels: account.labels,
     outpoints: tx.vin.map((v) => ({ txid: v.txid, vout: v.vout })),
   });
-  if (found.length === 0 && eligible.length > 1) {
-    for (let drop = 0; drop < eligible.length; drop++) {
-      const subset = eligible.filter((_, i) => i !== drop);
-      found = detectOurUtxos({
-        vins: subset,
-        taprootOutputs: tapsIn,
-        scanSecret: account.scanSecret,
-        spendPub: account.spendPub,
-        labels: account.labels,
-        outpoints: tx.vin.map((v) => ({ txid: v.txid, vout: v.vout })),
-      });
-      if (found.length) break;
-    }
-  }
   const hits = found.map((f) => {
     const t = taps.find((x) => x.vout === f.vout)!;
     return { ...f, txid: tx.txid, value: t.value };
   });
   return hits;
+}
+
+function vinsFromListed(tx: ParsedTx, listed: TxInputScript[]): RawVin[] {
+  const byOutpoint = new Map(listed.map((row) => [`${row.txid}:${row.vout}`, row.scriptPubKey]));
+  const raw: RawVin[] = [];
+  for (const vin of tx.vin) {
+    if (isCoinbaseTxid(vin.txid)) continue;
+    const script = byOutpoint.get(`${vin.txid}:${vin.vout}`);
+    if (!script) continue;
+    raw.push(toRawVin(vin, { scriptPubKey: fromHex(script) }));
+  }
+  return raw;
+}
+
+/** Indexed input page: one request per 500 inputs, instead of one raw parent tx each. */
+async function rawVinsFromInputList(tx: ParsedTx, source: ChainSource): Promise<RawVin[]> {
+  return vinsFromListed(tx, await source.listInputScripts!(tx.txid));
+}
+
+async function rawVinsFromParents(
+  tx: ParsedTx,
+  source: ChainSource,
+): Promise<RawVin[]> {
+  const parentIds = [...new Set(tx.vin.map((v) => v.txid).filter((id) => !isCoinbaseTxid(id)))];
+  const parents = new Map<string, string>();
+  await mapLimited(parentIds, SCAN_FETCH_CONCURRENCY, async (id) => {
+    parents.set(id, assertParentTxHex(await source.getTxHex(id), id));
+  });
+  const raw: RawVin[] = [];
+  for (const vin of tx.vin) {
+    if (isCoinbaseTxid(vin.txid)) continue;
+    const parentHex = parents.get(vin.txid);
+    if (!parentHex) throw new Error(`parent ${vin.txid} missing`);
+    const prev = voutFromParentHex(parentHex, vin.vout);
+    raw.push(toRawVin(vin, prev));
+  }
+  return raw;
 }
 
 function cloneStore(store: ScanStore): ScanStore {
@@ -139,10 +234,71 @@ function cloneStore(store: ScanStore): ScanStore {
     lastHeight: store.lastHeight,
     tip: store.tip,
     inflight: store.inflight
-      ? { height: store.inflight.height, nextTx: store.inflight.nextTx, txids: store.inflight.txids.slice() }
+      ? {
+          height: store.inflight.height,
+          nextTx: store.inflight.nextTx,
+          txids: store.inflight.txids.slice(),
+          ...(store.inflight.txCount !== undefined ? { txCount: store.inflight.txCount } : {}),
+        }
       : undefined,
     watch: store.watch?.map((w) => ({ ...w })),
+    deferred: store.deferred?.map((d) => ({ ...d })),
   };
+}
+
+function bumpHole(store: ScanStore, txid: string, height: number): number {
+  const prev = store.deferred?.find((d) => d.txid === txid);
+  const tries = (prev?.tries ?? 0) + 1;
+  const rest = (store.deferred ?? []).filter((d) => d.txid !== txid);
+  store.deferred = [...rest, { txid, height, tries }];
+  return tries;
+}
+
+function clearHole(store: ScanStore, txid: string): void {
+  if (!store.deferred?.some((d) => d.txid === txid)) return;
+  const rest = store.deferred.filter((d) => d.txid !== txid);
+  store.deferred = rest.length ? rest : undefined;
+}
+
+/**
+ * Confirmed watched coins the indexer no longer lists are spent.
+ * An empty or failed lookup does not do this: the caller only passes a successful hint list.
+ */
+export function markAbsentWatchSpent(store: ScanStore, scriptPubKey: string, liveTxids: ReadonlySet<string>): ScanStore {
+  let changed = false;
+  const utxos = store.utxos.map((u) => {
+    if (u.spent || u.scriptPubKey !== scriptPubKey || u.height <= 0) return u;
+    if (liveTxids.has(u.txid)) return u;
+    changed = true;
+    return { ...u, spent: true };
+  });
+  return changed ? { ...store, utxos } : store;
+}
+
+/** Retry txids we stepped past. Does not block the sequential scan. */
+export async function retryDeferred(
+  account: Account,
+  source: ChainSource,
+  store: ScanStore,
+  limit = 8,
+): Promise<ScanStore> {
+  const waiting = (store.deferred ?? []).filter((h) => h.tries < SCAN_HEX_TRIES);
+  const due = (store.deferred ?? []).filter((h) => h.tries >= SCAN_HEX_TRIES);
+  if (!due.length) return store;
+  let next = store;
+  const keep: ScanHole[] = [];
+  const now = due.slice(0, limit);
+  for (const h of now) {
+    try {
+      const hexTx = await source.getTxHex(h.txid);
+      next = await applyTxHex(account, source, next, hexTx, h.height);
+    } catch {
+      keep.push(h);
+    }
+  }
+  keep.push(...due.slice(limit));
+  const deferred = [...waiting, ...keep];
+  return { ...next, deferred: deferred.length ? deferred : undefined };
 }
 
 export function addWatch(store: ScanStore, w: WatchedOutput): ScanStore {
@@ -150,6 +306,36 @@ export function addWatch(store: ScanStore, w: WatchedOutput): ScanStore {
   const list = next.watch ?? [];
   if (!list.some((x) => x.scriptPubKey === w.scriptPubKey)) list.push(w);
   next.watch = list;
+  return next;
+}
+
+/** Credit a watched output from the address index, before the raw transaction is fetched. */
+export function noteWatchedOutput(
+  store: ScanStore,
+  hit: { txid: string; vout: number; value: string; scriptPubKey: string; height: number },
+): ScanStore {
+  const w = store.watch?.find((x) => x.scriptPubKey.toLowerCase() === hit.scriptPubKey.toLowerCase());
+  if (!w) return store;
+  const next = cloneStore(store);
+  const prev = next.utxos.find((u) => u.txid === hit.txid && u.vout === hit.vout);
+  upsertUtxo(next.utxos, {
+    txid: hit.txid,
+    vout: hit.vout,
+    value: hit.value,
+    scriptPubKey: w.scriptPubKey,
+    tweak: w.tweak,
+    label: w.label,
+    k: w.k,
+    height: hit.height,
+    spent: false,
+    ...(w.kind === "bip86" ? { kind: "bip86" as const, index: w.index } : {}),
+  });
+  // A sweep used to mark every coin at this address spent, including one the indexer still lists.
+  // A real spend names the transaction that spent it. An unnamed spend is that mistake, so take the coin back.
+  if (prev?.spent && !prev.spentBy) {
+    const i = next.utxos.findIndex((u) => u.txid === hit.txid && u.vout === hit.vout);
+    if (i >= 0) next.utxos[i] = { ...next.utxos[i]!, spent: false };
+  }
   return next;
 }
 
@@ -222,6 +408,44 @@ function hitToUtxo(
   };
 }
 
+function ingestSeenTx(store: ScanStore, txHex: string, height: number): void {
+  const parsed = parseTxHex(txHex);
+  markSpent(store.utxos, parsed, height);
+  applyWatch(store, txHex, height);
+  if (height > 0) {
+    for (const u of store.utxos) {
+      if (u.txid === parsed.txid) u.height = height;
+      if (u.spentBy === parsed.txid) u.spentHeight = height;
+    }
+  }
+}
+
+/**
+ * Pull known watched scripts into the store from raw txs (one-time addresses, Payjoin outputs).
+ * Does not replace Silent Payment sequential scan: hints are only candidate txids.
+ */
+export async function recoverWatchedFromHints(
+  account: Account,
+  source: ChainSource,
+  store: ScanStore,
+  hints: { txid: string; height: number }[],
+): Promise<ScanStore> {
+  let next = store;
+  const seen = new Set<string>();
+  for (const h of hints) {
+    if (seen.has(h.txid)) continue;
+    seen.add(h.txid);
+    try {
+      const hexTx = await source.getTxHex(h.txid);
+      const height = h.height > 0 ? h.height : (source.getTxHeight ? ((await source.getTxHeight(h.txid)) ?? 0) : 0);
+      next = await applyTxHex(account, source, next, hexTx, height);
+    } catch {
+      /* sequential scan still has to cover this */
+    }
+  }
+  return next;
+}
+
 /** Apply a tx we already have (broadcast or mempool) without waiting for its block. */
 export async function applyTxHex(
   account: Account,
@@ -231,9 +455,7 @@ export async function applyTxHex(
   height = 0,
 ): Promise<ScanStore> {
   const next = cloneStore(store);
-  const parsed = parseTxHex(txHex);
-  markSpent(next.utxos, parsed, height);
-  applyWatch(next, txHex, height);
+  ingestSeenTx(next, txHex, height);
   try {
     const hits = await scanTransaction(account, source, txHex, height);
     for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));
@@ -241,6 +463,121 @@ export async function applyTxHex(
     /* still persist spends and watched Payjoin outputs */
   }
   return next;
+}
+
+/** When the sequential scan missed a block, ask the source for heights of our unconfirmed coins. */
+export async function confirmPendingUtxos(source: ChainSource, store: ScanStore): Promise<ScanStore> {
+  if (!source.getTxHeight) return store;
+  const ids = new Set<string>();
+  for (const u of store.utxos) {
+    if (u.height === 0) ids.add(u.txid);
+    if (u.spent && !(u.spentHeight && u.spentHeight > 0) && u.spentBy) ids.add(u.spentBy);
+  }
+  if (ids.size === 0) return store;
+  const next = cloneStore(store);
+  for (const txid of ids) {
+    let height: number | null;
+    try {
+      height = await source.getTxHeight(txid);
+    } catch {
+      continue;
+    }
+    if (!height || height <= 0) continue;
+    for (const u of next.utxos) {
+      if (u.txid === txid) u.height = height;
+      if (u.spentBy === txid) u.spentHeight = height;
+    }
+  }
+  return next;
+}
+
+/** Match one slice of a saved block to this wallet. No network. */
+export function applySharedSlice(
+  account: Account,
+  store: ScanStore,
+  block: SharedBlock,
+  from: number,
+  tip: number,
+  limit = 80,
+): { store: ScanStore; progress: ScanProgress } {
+  const next = cloneStore(store);
+  next.tip = tip;
+  const end = Math.min(block.txs.length, from + limit);
+  for (let i = from; i < end; i++) {
+    const tx = block.txs[i]!;
+    markSpent(
+      next.utxos,
+      {
+        txid: tx.txid,
+        hex: "",
+        vin: tx.inputs.map((vin) => ({ txid: vin.txid, vout: vin.vout, scriptSig: "", witness: [] })),
+        vout: [],
+      },
+      block.height,
+    );
+    for (const tap of tx.taps) {
+      const spk = "5120" + tap.xonly.toLowerCase();
+      const w = next.watch?.find((item) => item.scriptPubKey.toLowerCase() === spk);
+      if (!w) continue;
+      upsertUtxo(next.utxos, {
+        txid: tx.txid,
+        vout: tap.vout,
+        value: tap.value,
+        scriptPubKey: w.scriptPubKey,
+        tweak: w.tweak,
+        label: w.label,
+        k: w.k,
+        height: block.height,
+        spent: false,
+        ...(w.kind === "bip86" ? { kind: "bip86" as const, index: w.index } : {}),
+      });
+    }
+    if (tx.eligible.length > 0 && tx.taps.length > 0) {
+      const found = detectOurUtxos({
+        vins: tx.eligible.map((vin) => ({
+          txid: vin.txid,
+          vout: vin.vout,
+          pubkey: fromHex(vin.pubkey),
+          taproot: vin.taproot,
+        })),
+        taprootOutputs: tx.taps.map((tap) => ({ xonly: fromHex(tap.xonly), vout: tap.vout })),
+        scanSecret: account.scanSecret,
+        spendPub: account.spendPub,
+        labels: account.labels,
+        outpoints: tx.inputs,
+      });
+      for (const hit of found) {
+        const tap = tx.taps.find((item) => item.vout === hit.vout);
+        if (!tap) continue;
+        upsertUtxo(next.utxos, hitToUtxo({ ...hit, txid: tx.txid, value: BigInt(tap.value) }, block.height));
+      }
+    }
+    if (block.height > 0) {
+      for (const u of next.utxos) {
+        if (u.txid === tx.txid) u.height = block.height;
+        if (u.spentBy === tx.txid) u.spentHeight = block.height;
+      }
+    }
+  }
+  const blockDone = end >= block.txs.length;
+  if (blockDone) {
+    next.lastHeight = block.height;
+    next.inflight = undefined;
+  } else {
+    next.inflight = { height: block.height, nextTx: end, txids: [], txCount: block.txs.length };
+  }
+  return {
+    store: next,
+    progress: {
+      done: next.lastHeight >= tip && !next.inflight,
+      lastHeight: next.lastHeight,
+      tip,
+      height: block.height,
+      txIndex: end,
+      txCount: block.txs.length,
+      skipped: 0,
+    },
+  };
 }
 
 /** One batch so a Chrome MV3 worker can persist before it is killed. */
@@ -287,7 +624,8 @@ export async function scanStep(
   if (!next.inflight || next.inflight.height !== height) {
     try {
       next.inflight = { height, nextTx: 0, txids: await source.getBlockTxids(height) };
-    } catch {
+    } catch (e) {
+      if (e instanceof RateLimitedError) throw e;
       return {
         store: next,
         progress: {
@@ -307,19 +645,70 @@ export async function scanStep(
   const start = next.inflight.nextTx;
   const end = Math.min(txids.length, start + batch);
   let skipped = 0;
-  for (let i = start; i < end; i++) {
-    try {
-      const hexTx = await source.getTxHex(txids[i]);
-      const hits = await scanTransaction(account, source, hexTx, height);
-      for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));
-      applyWatch(next, hexTx, height);
-      markSpent(next.utxos, parseTxHex(hexTx), height);
-    } catch {
-      skipped += 1;
+  const slice = txids.slice(start, end);
+  const fetched = await mapLimited(slice, SCAN_FETCH_CONCURRENCY, async (txid) => {
+    const hexP = source.getTxHex(txid);
+    const insP = source.listInputScripts ? source.listInputScripts(txid) : undefined;
+    const [hexR, insR] = await Promise.allSettled(insP ? [hexP, insP] : [hexP]);
+    const hexRejected = hexR.status === "rejected" ? hexR.reason : undefined;
+    const insRejected = insR && insR.status === "rejected" ? insR.reason : undefined;
+    if (hexRejected instanceof RateLimitedError || insRejected instanceof RateLimitedError) {
+      throw hexRejected instanceof RateLimitedError ? hexRejected : insRejected;
     }
+    return {
+      hex: hexR.status === "fulfilled" ? hexR.value : undefined,
+      inputs: insR && insR.status === "fulfilled" ? insR.value : undefined,
+    };
+  });
+  const hold = (i: number, whySkipped: number): { store: ScanStore; progress: ScanProgress } => {
+    next.inflight!.nextTx = start + i;
+    return {
+      store: next,
+      progress: {
+        done: false,
+        lastHeight: next.lastHeight,
+        tip,
+        height,
+        txIndex: start + i,
+        txCount: txids.length,
+        skipped: whySkipped,
+      },
+    };
+  };
+  let cursor = start;
+  for (let i = 0; i < fetched.length; i++) {
+    const txid = slice[i]!;
+    const hexTx = fetched[i]?.hex;
+    const inputs = fetched[i]?.inputs;
+    if (!hexTx) {
+      const tries = bumpHole(next, txid, height);
+      if (tries < SCAN_HEX_TRIES) return hold(i, fetched.length - i);
+      skipped += 1;
+      cursor = start + i + 1;
+      continue;
+    }
+    try {
+      ingestSeenTx(next, hexTx, height);
+    } catch {
+      const tries = bumpHole(next, txid, height);
+      if (tries < SCAN_HEX_TRIES) return hold(i, fetched.length - i);
+      skipped += 1;
+      cursor = start + i + 1;
+      continue;
+    }
+    clearHole(next, txid);
+    try {
+      const hits = await scanTransaction(account, source, hexTx, height, inputs);
+      for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));
+    } catch (e) {
+      if (e instanceof RateLimitedError) throw e;
+      /* spends and our known outputs already have this block height */
+    }
+    cursor = start + i + 1;
+    if ((i & 7) === 7) await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  next.inflight.nextTx = end;
-  if (end >= txids.length) {
+  next.inflight.nextTx = cursor;
+  if (next.inflight.nextTx >= txids.length) {
     next.lastHeight = height;
     next.inflight = undefined;
   }

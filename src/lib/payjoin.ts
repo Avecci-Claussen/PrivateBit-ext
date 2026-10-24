@@ -70,11 +70,10 @@ function assertHpkeMailbox(pj: string, directory?: string): void {
 }
 
 export function ohttpFromPj(pj: string, cfg: PayjoinConfig): OhttpKeyConfig | undefined {
-  if (cfg.ohttp) return cfg.ohttp;
   const { fragment } = splitMailbox(pj);
   const oh = fragment ? parseFragment(fragment).ohttp : undefined;
-  if (!oh) return undefined;
-  return { keyId: oh.keyId[1] ?? oh.keyId[0] ?? 0, compressedPub: oh.compressedPub };
+  if (oh) return { keyId: oh.keyId[1] ?? oh.keyId[0] ?? 0, compressedPub: oh.compressedPub };
+  return cfg.ohttp;
 }
 
 function transportOf(cfg: PayjoinConfig, pj?: string): MailboxTransport {
@@ -268,6 +267,7 @@ export type PayjoinReceiveSession = {
   expiresAt: number;
   status: "waiting" | "proposed" | "done" | "failed";
   error?: string;
+  checkedAt?: number;
   reserved?: {
     txid: string;
     vout: number;
@@ -281,6 +281,8 @@ export type PayjoinReceiveSession = {
   hpkePub?: string;
   replyPk?: string;
   inputSecret?: string;
+  /** Set when the Payjoin output is seen in this wallet. */
+  txid?: string;
 };
 
 export type PayjoinSendSession = {
@@ -296,6 +298,7 @@ export type PayjoinSendSession = {
   expiresAt: number;
   status: "waiting" | "done" | "failed";
   error?: string;
+  checkedAt?: number;
   txid?: string;
 };
 

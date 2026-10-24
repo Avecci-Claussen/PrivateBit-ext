@@ -21,7 +21,7 @@ export type RawVin = {
   txid: string;
   vout: number;
   scriptSig?: string;
-  txinwitness?: string | string[];
+  txinwitness?: string | string[] | Uint8Array[];
   prevout: { scriptPubKey: { hex: string } };
   private_key?: string;
 };
@@ -55,9 +55,13 @@ function deserializeWitness(hexStr: string): Uint8Array[] {
   return [buf];
 }
 
-function witnessStack(w: string | string[] | undefined): Uint8Array[] {
+function witnessStack(w: string | string[] | Uint8Array[] | undefined): Uint8Array[] {
   if (!w) return [];
-  if (Array.isArray(w)) return w.filter(Boolean).map((x) => fromHex(x));
+  if (Array.isArray(w)) {
+    if (w.length === 0) return [];
+    if (w[0] instanceof Uint8Array) return w as Uint8Array[];
+    return (w as string[]).filter(Boolean).map((x) => fromHex(x));
+  }
   return deserializeWitness(w);
 }
 

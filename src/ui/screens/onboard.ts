@@ -1,4 +1,4 @@
-import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
+import { S, screens, actions, loaders, go, back, render, run, refresh, refreshUntilReady, fv, busy, err, toast } from "../app.ts";
 import { call } from "../api.ts";
 import { html, I, MARK, NETLOGO, codeHi, num, type Safe } from "../kit.ts";
 import { hdr } from "../chrome.ts";
@@ -43,12 +43,13 @@ screens.welcome = () => ({
     <h1 style="font:var(--t-display);letter-spacing:var(--track-tight)">PrivateBit</h1>
     <p style="font:var(--t-body);color:var(--c-fg2);max-width:290px">A Fractal Bitcoin wallet with one reusable receive code. Every payment lands at a new address only you can find.</p>
   </div>
+  ${S.b?.state.hasBackup ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">A previous wallet is still on this computer</span>Reloading the extension does not delete it. Recover it instead of creating a new one.</div></div>` : ""}
   <ul class="stack" style="list-style:none;margin:0;padding:0">
     <li class="row small">${I("key-round", "s16")}<span>Keys stay on this computer, encrypted with your password.</span></li>
     <li class="row small">${I("route", "s16")}<span>Payment links hide which coins are yours (Payjoin).</span></li>
     <li class="row small">${I("scan-line", "s16")}<span>Your coins are found locally. No server learns which are yours.</span></li>
   </ul>`,
-  foot: { cls: "plain", html: html`<button class="btn btn-primary btn-block" type="button" data-act="go" data-to="create-password">Create a new wallet</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="import">I already have recovery words</button>` },
+  foot: { cls: "plain", html: html`${S.b?.state.hasBackup ? html`<button class="btn btn-primary btn-block" type="button" data-act="restore-backup">Recover the previous wallet</button>` : ""}<button class="btn ${S.b?.state.hasBackup ? "btn-secondary" : "btn-primary"} btn-block" type="button" data-act="go" data-to="create-password">Create a new wallet</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="import">I already have recovery words</button>` },
 });
 
 /* ---------- set password (create and import) ---------- */
@@ -68,10 +69,9 @@ function passwordScreen(mode: "create" | "import") {
   ${pwField("pw2", "Repeat password", "new-password")}
   </div>
   ${create
-    ? html`<details class="card flat pad-sm" ${S.f.adv ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle" data-k="adv">Advanced: 24 words, extra passphrase</summary>
-    <div class="stack" style="margin-top:8px"><label class="check"><input type="checkbox" data-f="w24" ${S.f.w24 ? html`checked` : ""}> <span>Use 24 recovery words instead of 12</span></label>
-    <p class="small muted">Only use an extra passphrase if you know why you need one. Without it your coins cannot be recovered, and nobody can reset it.</p>
-    <div class="field"><label class="label" for="pp">Extra passphrase <span class="optl">(optional)</span></label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}"></div></div></details>`
+    ? html`<div class="card flat pad-sm"><p class="strong">24 recovery words</p><p class="small muted">A new wallet is 256 bits, drawn from this computer's secure random generator. That is the strongest BIP39 backup. Write the words on paper.</p>
+    <div class="field" style="margin-top:8px"><label class="label" for="pp">Extra passphrase <span class="optl">(optional)</span></label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}" aria-describedby="pp-h"><p class="help" id="pp-h">Leave this empty unless you want a second secret. It is not the password above. Without it, the words alone cannot recover the coins, and nobody can reset it.</p></div>
+    <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" autocomplete="off" value="${fv("wname")}" placeholder="Wallet"></div></div>`
     : ""}
   ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
     foot: create
@@ -101,7 +101,12 @@ function checkPasswords(): boolean {
 
 actions["pw-continue"] = async () => {
   if (!checkPasswords()) return;
-  const ob = await run("pw", () => call<{ mnemonic: string; words: number }>({ type: "NEW_MNEMONIC", words: S.f.w24 ? 24 : 12 }));
+  if (S.b?.state.hasVault && S.f.adding !== true) {
+    toast("A wallet is already on this computer. Unlock it, or add another from Settings.");
+    go("unlock", {}, { reset: true });
+    return;
+  }
+  const ob = await run("pw", () => call<{ mnemonic: string; words: number }>({ type: "NEW_MNEMONIC", add: S.f.adding === true }));
   if (!ob) return;
   S.d.verify = undefined;
   S.f.revealed = false;
@@ -216,7 +221,7 @@ actions["words-again"] = () => {
 };
 actions["finish-create"] = async () => {
   const ok = await run("create", async () => {
-    S.b = await call({ type: "CREATE_CHECKED", password: fv("pw"), passphrase: fv("pp") });
+    S.b = await call({ type: "CREATE_CHECKED", password: fv("pw"), passphrase: fv("pp"), add: S.f.adding === true, name: fv("wname") });
     return true;
   });
   if (!ok) return;
@@ -283,7 +288,7 @@ export function checkMnemonic(text: string): { ok: boolean; msg?: string; count:
       return { ok: false, count: w.length, msg: `Word ${i + 1} \u201c${w[i]}\u201d is not in the recovery word list.${c ? ` Did you mean \u201c${c}\u201d?` : ""}` };
     }
   }
-  if (![12, 15, 18, 21, 24].includes(w.length)) return { ok: false, count: w.length, msg: `${w.length} words. Recovery words come in 12 or 24.` };
+  if (![12, 15, 18, 21, 24].includes(w.length)) return { ok: false, count: w.length, msg: `${w.length} words. A new wallet is 24 words. An older backup can be 12.` };
   if (!validateMnemonic(w.join(" "), wordlist)) return { ok: false, count: w.length, msg: "The words are all valid but the checksum does not match. Check the order and spelling." };
   return { ok: true, count: w.length };
 }
@@ -294,31 +299,46 @@ screens.import = () => {
   const showErr = !!c.msg && (S.f.mnTried === true || c.count >= 12);
   const custom = S.f.bdMode === "custom";
   const hasVault = S.b?.state.hasVault;
+  const adding = S.f.adding === true;
+  const tip = typeof S.d.tipHeight === "number" ? S.d.tipHeight : DEFAULT_BIRTHDAY;
   return {
     title: "Import wallet",
     solo: true,
     header: hdr({ title: "Import wallet" }),
     main: html`
-  ${hasVault ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">This replaces the wallet on this computer</span>Only continue if you have the recovery words for the current wallet too.</div></div>` : ""}
+  ${hasVault && !adding ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">This replaces the open wallet</span>The other wallets on this computer stay. Only continue if you have the recovery words for the one you are replacing.</div></div>` : ""}
+  ${adding ? html`<div class="banner">${I("info", "s16")}<div>This adds a wallet. The one you have open stays on this computer. You will switch to the new one after the password.</div></div>` : ""}
   <div class="field"><label class="label" for="mn">Recovery words</label><textarea class="textarea" id="mn" data-f="mn" data-live rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" ${showErr ? html`aria-invalid="true" aria-describedby="mn-e"` : html`aria-describedby="mn-h"`}>${mn}</textarea>
-  ${showErr ? html`<p class="err" id="mn-e" role="alert">${I("circle-alert", "s16")}<span>${c.msg}</span></p>` : c.ok ? html`<p class="help" id="mn-h">${I("circle-check", "s16")} ${c.count} words, checksum valid. Paste is allowed.</p>` : html`<p class="help" id="mn-h">12 or 24 words separated by spaces. Paste is allowed.</p>`}</div>
-  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">When did this wallet first receive coins?</legend>
+  ${showErr ? html`<p class="err" id="mn-e" role="alert">${I("circle-alert", "s16")}<span>${c.msg}</span></p>` : c.ok ? html`<p class="help" id="mn-h">${I("circle-check", "s16")} ${c.count} words, checksum valid.${c.count === 24 ? "" : " New wallets are 24 words. This older backup still restores."}</p>` : html`<p class="help" id="mn-h">24 words, separated by spaces. An older 12-word backup still restores.</p>`}</div>
+  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Start reading the chain at</legend>
     <div class="opt-list" role="radiogroup">
-      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="default" aria-checked="${String(!custom)}"><span class="body"><span class="t">Since Silent Payments started on Fractal</span><span class="d">Block ${num(DEFAULT_BIRTHDAY)}. Safest, slower first scan.</span></span></button>
-      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="custom" aria-checked="${String(custom)}"><span class="body"><span class="t">I know the block</span><span class="d">Faster. Too late and older coins will not show.</span></span></button>
+      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="default" aria-checked="${String(!custom)}"><span class="body"><span class="t">The latest block, ${num(tip)}</span><span class="d">Fast. Coins received before this block will not show.</span></span></button>
+      <button class="opt" type="button" role="radio" data-act="set" data-k="bdMode" data-v="custom" aria-checked="${String(custom)}"><span class="body"><span class="t">A block I choose</span><span class="d">Use the block of the first payment, or any earlier block. PrivateBit reads forward from there.</span></span></button>
     </div>
-    ${custom ? html`<div class="field" style="margin-top:8px"><label class="label" for="bd">Block height</label><input class="input mono" id="bd" data-f="bd" inputmode="numeric" placeholder="${num(DEFAULT_BIRTHDAY)}" value="${fv("bd")}" ${err("bd") ? html`aria-invalid="true" aria-describedby="bd-e"` : ""}>${err("bd") ? html`<p class="err" id="bd-e" role="alert">${I("circle-alert", "s16")}<span>${err("bd")}</span></p>` : ""}</div>` : ""}</fieldset>
-  <details class="card flat pad-sm" ${S.f.ppOpen ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle" data-k="ppOpen">Extra passphrase (only if you set one)</summary><div class="field" style="margin-top:8px"><label class="label" for="pp">Passphrase</label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}"></div></details>
-  <div class="banner">${I("info", "s16")}<div>Recovery words from any BIP39 wallet are accepted. PrivateBit derives its own Fractal Silent Payment keys from them, so your old addresses will not appear here.</div></div>`,
+    ${custom ? html`<div class="field" style="margin-top:8px"><label class="label" for="bd">Block height</label><input class="input mono" id="bd" data-f="bd" data-live inputmode="numeric" placeholder="${num(tip)}" value="${fv("bd")}" ${err("bd") ? html`aria-invalid="true" aria-describedby="bd-e"` : ""}>${err("bd") ? html`<p class="err" id="bd-e" role="alert">${I("circle-alert", "s16")}<span>${err("bd")}</span></p>` : html`<p class="help">A lower number finds older coins and takes longer. The scan starts as soon as this wallet is open.</p>`}</div>` : ""}</fieldset>
+  <div class="field"><label class="label" for="pp">Extra passphrase <span class="optl">(only if this wallet has one)</span></label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}" aria-describedby="pp-h"><p class="help" id="pp-h">This is not the password you are about to choose. Leave it empty if you never set one. A wrong passphrase opens a different, empty wallet.</p></div>
+  <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" autocomplete="off" value="${fv("wname")}" placeholder="Wallet"></div>
+  <div class="banner">${I("info", "s16")}<div>These words can come from any BIP39 wallet. PrivateBit derives its own Fractal keys from them, so addresses from the old wallet do not appear here.</div></div>`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="import-continue">Continue to password</button>`,
   };
+};
+loaders.import = async () => {
+  try {
+    const tip = await call<{ height: number }>({ type: "TIP" });
+    S.d.tipHeight = tip.height;
+  } catch {
+    S.d.tipHeight = undefined;
+  }
 };
 actions.set = (el) => {
   S.f[el.dataset.k!] = el.dataset.v!;
   render();
 };
 function birthdayValue(): number | null {
-  if (S.f.bdMode !== "custom") return DEFAULT_BIRTHDAY;
+  if (S.f.bdMode !== "custom") {
+    const tip = S.d.tipHeight;
+    return typeof tip === "number" && tip > 0 ? tip : DEFAULT_BIRTHDAY;
+  }
   const n = Number(fv("bd").replace(/[,\s]/g, ""));
   if (!Number.isInteger(n) || n < 1) return null;
   return n;
@@ -338,7 +358,7 @@ actions["import-finish"] = async () => {
   if (!checkPasswords()) return;
   const mnemonic = fv("mn").trim().toLowerCase().split(/\s+/).join(" ");
   const ok = await run("restore", async () => {
-    S.b = await call({ type: "RESTORE", mnemonic, password: fv("pw"), passphrase: fv("pp"), birthday: birthdayValue() ?? DEFAULT_BIRTHDAY });
+    S.b = await call({ type: "RESTORE", mnemonic, password: fv("pw"), passphrase: fv("pp"), birthday: birthdayValue() ?? DEFAULT_BIRTHDAY, add: S.f.adding === true, name: fv("wname") });
     return true;
   });
   if (!ok) return;
@@ -352,13 +372,16 @@ const LEDGER = [0, 0, 1, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 3, 0, 0, 1, 0, 0, 0, 3, 0
 screens.unlock = () => {
   const li = S.b?.lockinfo;
   const loading = busy("unlock");
+  const wallets = S.b?.state.wallets ?? [];
+  const active = wallets.find((w) => w.active);
   return {
     title: "Unlock",
     solo: true,
     main: html`
   <div class="row" style="gap:10px;padding-top:4px">${MARK(28, false)}<span class="wordmark">PrivateBit</span></div>
   <div class="ledger" aria-hidden="true">${LEDGER.map((v) => html`<i class="${["", "a", "o", "s"][v]}"></i>`)}</div>
-  <div class="unlock-hero"><h1>Unlock your wallet</h1><p class="muted">Your balance, codes and payment links stay sealed until you do.</p></div>
+  <div class="unlock-hero"><h1>${active && wallets.length > 1 ? `Unlock ${active.name}` : "Unlock your wallet"}</h1><p class="muted">Your balance, codes and payment links stay sealed until you do. The password is the one for this computer, not the extra passphrase.</p></div>
+  ${wallets.length > 1 ? html`<div class="opt-list" role="listbox" aria-label="Wallets">${wallets.map((w) => html`<button class="opt" type="button" data-act="wallet-pick" data-id="${w.id}" aria-selected="${String(w.active)}"><span class="body"><span class="t">${w.name}${w.active ? " · in use" : ""}</span><span class="d">${w.words ? `${w.words} words` : "Recovery words"}${w.hasPassphrase ? " · extra passphrase" : ""} · from block ${num(w.birthday)}</span></span>${w.active ? I("check") : I("chevron-right", "s16")}</button>`)}</div>` : ""}
   ${li?.by === "auto" ? html`<p class="small row" role="status" style="gap:6px">${I("timer", "s16")}Locked itself after ${li.minutes ?? 15} minutes without use.</p>` : ""}
   <div class="vault">${I("hard-drive", "s16")}<span class="grow"><span class="strong" style="display:block">Keys on this computer only</span><span class="k">Encrypted with your password. Nothing is sent anywhere.</span></span>${NETLOGO("fractal")}</div>
   <div data-enter="unlock">${pwField("pw", "Password", "current-password")}</div>
@@ -370,6 +393,20 @@ screens.unlock = () => {
         : html`<button class="btn btn-primary btn-block" type="button" data-act="unlock">Unlock</button><button class="btn btn-ghost btn-block" type="button" data-act="go" data-to="import">Forgot password? Restore from words</button>`,
     },
   };
+};
+actions["wallet-pick"] = async (el) => {
+  const id = el.dataset.id;
+  if (!id) return;
+  const current = S.b?.state.wallets?.find((w) => w.active);
+  if (current?.id === id) return;
+  try {
+    S.b = await call({ type: "SWITCH_WALLET", id });
+  } catch (e) {
+    toast(e instanceof Error ? e.message : "Could not switch wallets.");
+    return;
+  }
+  S.f.pw = "";
+  render();
 };
 actions.unlock = async () => {
   const pw = fv("pw");
@@ -398,7 +435,11 @@ document.addEventListener("keydown", (ev) => {
 });
 
 export async function boot(): Promise<void> {
-  await refresh();
+  const ready = await refreshUntilReady();
+  if (!ready) {
+    go("starting", {}, { reset: true });
+    return;
+  }
   const st = S.b?.state;
   if (!st?.hasVault) {
     const ob = await call<{ mnemonic: string } | null>({ type: "ONBOARD_GET" }).catch(() => null);
@@ -408,3 +449,25 @@ export async function boot(): Promise<void> {
 }
 
 screens.boot = () => ({ title: "Loading", solo: true, main: html`<div class="state"><div class="big neutral">${I("loader-circle", "spin")}</div></div>` });
+
+screens.starting = () => ({
+  title: "Starting",
+  solo: true,
+  main: html`<div class="state"><div class="big neutral">${I("loader-circle", "spin")}</div><h1>PrivateBit is starting…</h1><p>The extension just reloaded. This is not a new wallet.</p></div>
+  ${err("bundle") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("bundle")}</span></p>` : ""}`,
+  foot: html`<button class="btn btn-primary btn-block" type="button" data-act="boot-retry">${busy("boot") ? html`${I("loader-circle", "s16 spin")}Trying…` : "Try again"}</button>`,
+});
+actions["boot-retry"] = async () => {
+  const ok = await run("boot", async () => refreshUntilReady(12));
+  if (ok) await boot();
+};
+actions["restore-backup"] = async () => {
+  const ok = await run("boot", async () => {
+    S.b = await call({ type: "RESTORE_BACKUP" });
+    return true;
+  });
+  if (ok) {
+    toast("Previous wallet restored. Unlock it.");
+    go("unlock", {}, { reset: true });
+  }
+};

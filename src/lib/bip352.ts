@@ -4,7 +4,6 @@ import { bech32m } from "@scure/base";
 import {
   compareBytes,
   concatBytes,
-  equalBytes,
   fromHex,
   hex,
   ser32,
@@ -285,20 +284,6 @@ export function precomputeLabels(scanSecret: Uint8Array, labels: Iterable<number
   return book;
 }
 
-function lookupLabel(
-  outputPoint: InstanceType<typeof Point>,
-  Pk: InstanceType<typeof Point>,
-  book: LabelBook,
-): number | undefined {
-  const candidates = [outputPoint, outputPoint.negate()];
-  for (const c of candidates) {
-    const label = c.subtract(Pk);
-    const m = book.get(hex(serP(label)));
-    if (m !== undefined) return m;
-  }
-  return undefined;
-}
-
 /**
  * detectOurUtxos — trial t_k against taproot x-only outputs.
  * `outputs` are 32-byte x-only keys (or 33-byte compressed).
@@ -326,10 +311,14 @@ export function detectOurUtxos(args: {
     return [];
   }
   const Bspend = parsePoint(args.spendPub);
-  const remaining = args.taprootOutputs.map((o) => ({
-    xonly: o.xonly.length === 33 ? o.xonly.slice(1) : o.xonly,
-    vout: o.vout,
+  const labelPoints = [...args.labels].map(([pointHex, m]) => ({
+    m,
+    point: parsePoint(fromHex(pointHex)),
   }));
+  const remaining = args.taprootOutputs.map((o) => {
+    const xonlyKey = o.xonly.length === 33 ? o.xonly.slice(1) : o.xonly;
+    return { xonly: xonlyKey, vout: o.vout, x: hex(xonlyKey) };
+  });
   const found: DetectedOutput[] = [];
   let k = 0;
   while (k < SP_K_MAX && remaining.length > 0) {
@@ -340,23 +329,22 @@ export function detectOurUtxos(args: {
       break;
     }
     const Pk = Bspend.add(Point.fromPrivateKey(t));
-    const want = xonly(Pk);
-    let hit = remaining.findIndex((o) => equalBytes(o.xonly, want));
+    const plain = hex(xonly(Pk));
+    let matched = remaining.find((o) => o.x === plain);
     let label: number | null = null;
-    if (hit < 0) {
-      for (let i = 0; i < remaining.length; i++) {
-        const ox = remaining[i].xonly;
-        const even = parsePoint(concatBytes(new Uint8Array([0x02]), ox));
-        const m = lookupLabel(even, Pk, args.labels);
-        if (m !== undefined) {
-          hit = i;
-          label = m;
+    if (!matched && labelPoints.length > 0) {
+      const labeled = labelPoints.map((L) => ({ m: L.m, x: hex(xonly(Pk.add(L.point))) }));
+      for (const o of remaining) {
+        const hit = labeled.find((L) => L.x === o.x);
+        if (hit) {
+          matched = o;
+          label = hit.m;
           break;
         }
       }
     }
-    if (hit < 0) break;
-    const matched = remaining.splice(hit, 1)[0];
+    if (!matched) break;
+    remaining.splice(remaining.indexOf(matched), 1);
     found.push({ xonly: matched.xonly, tweak: t, label, k, vout: matched.vout });
     k += 1;
   }

@@ -20,7 +20,7 @@ import { evenPriv, sessionTweak } from "../src/lib/schnorr-util.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import * as btc from "@scure/btc-signer";
 import { PrivateBit } from "../src/lib/wallet.ts";
-import { memoryKv } from "../src/lib/vault.ts";
+import { createMnemonic, memoryKv } from "../src/lib/vault.ts";
 
 function mutateFirstOutputScript(b64: string): string {
   const bin = atob(b64.replace(/\s/g, ""));
@@ -227,6 +227,72 @@ describe("BIP77 two-party Payjoin", () => {
     const done = (await bob.w.loadPayjoinSends())[0];
     expect(done?.status).toBe("done");
     expect(done?.txid).toBe("deadbeef");
+  });
+
+  it("lets the sender cancel a waiting Payjoin without broadcasting", async () => {
+    const dir = new MemoryDirectory();
+    const alice = await fundedWallet(dir, "44".repeat(32), "50000");
+    const bob = await fundedWallet(dir, "55".repeat(32), "10300");
+    const session = await alice.w.offerPayjoin(10_000n);
+    const built = await bob.w.planSend(session.bip21, 10_000n);
+    const pending = await bob.w.broadcast(INTENT_PAYJOIN, built);
+    expect(pending.kind).toBe("payjoin-pending");
+    const id = (await bob.w.loadPayjoinSends())[0]!.id;
+    await bob.w.cancelSend(id);
+    expect((await bob.w.loadPayjoinSends())[0]?.status).toBe("failed");
+    expect((await bob.w.loadPayjoinSends())[0]?.error).toBe("cancelled");
+    const bobSvc = await bob.w.servicePayjoin();
+    expect(bobSvc.processed).toBe(0);
+    expect((await bob.w.loadPayjoinSends())[0]?.status).toBe("failed");
+    expect((await bob.w.state()).payjoin).toBeUndefined();
+    expect((await bob.w.sessions()).some((s) => s.role === "send" && s.status === "failed" && s.error === "cancelled")).toBe(true);
+  });
+
+  it("keeps a cancelled or expired payment link off the wallet and in history", async () => {
+    const dir = new MemoryDirectory();
+    const alice = await fundedWallet(dir, "66".repeat(32), "50000");
+    const session = await alice.w.offerPayjoin(10_000n);
+    expect((await alice.w.state()).payjoin?.status).toBe("waiting");
+    await alice.w.cancelLink(session.id);
+    const afterCancel = await alice.w.state();
+    expect(afterCancel.payjoin).toBeUndefined();
+    expect(afterCancel.payjoinStatus).toBeUndefined();
+    const listed = await alice.w.sessions();
+    expect(listed.some((s) => s.id === session.id && s.role === "receive" && s.status === "failed" && s.error === "cancelled")).toBe(true);
+
+    const again = await alice.w.offerPayjoin(10_000n);
+    const stored = await alice.w.loadPayjoinSessions();
+    const row = stored.find((s) => s.id === again.id)!;
+    row.expiresAt = Date.now() - 1_000;
+    await alice.w.savePayjoinSessions(stored);
+    const expired = await alice.w.state();
+    expect(expired.payjoin).toBeUndefined();
+    const history = await alice.w.sessions();
+    expect(history.find((s) => s.id === again.id)?.status).toBe("failed");
+    expect(history.find((s) => s.id === again.id)?.error).toBe("expired");
+  });
+
+  it("lets another wallet pay a link that this wallet created", async () => {
+    const dir = new MemoryDirectory();
+    const alice = await fundedWallet(dir, "77".repeat(32), "50000");
+    const link = await alice.w.offerPayjoin(10_000n);
+    const created = await alice.w.loadPayjoinSessions();
+    await alice.w.addWallet({
+      mnemonic: createMnemonic(256),
+      password: "other",
+      birthday: 8,
+      name: "Other",
+      kind: "create",
+    });
+    await alice.w.savePayjoinSessions(created);
+    await expect(alice.w.assertNotOwnLink(link.bip21)).resolves.toBeUndefined();
+    expect((await alice.w.sessions()).some((s) => s.id === link.id)).toBe(false);
+
+    const first = (await alice.w.state()).wallets!.find((w) => !w.active)!.id;
+    await alice.w.openWallet(first);
+    await alice.w.unlock("pw");
+    await expect(alice.w.assertNotOwnLink(link.bip21)).rejects.toThrow(/own payment link/i);
+    expect((await alice.w.sessions()).some((s) => s.id === link.id && s.role === "receive")).toBe(true);
   });
 
   it("does not keep a spend key on disk and will not sign while locked", async () => {

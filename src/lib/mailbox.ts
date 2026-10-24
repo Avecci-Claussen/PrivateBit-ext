@@ -142,6 +142,7 @@ export function ohttpRelayTransport(cfg: OhttpKeyConfig, relay: string): Mailbox
         method: "POST",
         headers: { "content-type": "message/ohttp-req" },
         body: wire as unknown as BodyInit,
+        signal: AbortSignal.timeout(20_000),
       });
       return new Uint8Array(await res.arrayBuffer());
     });
@@ -161,6 +162,7 @@ export function ohttpGatewayTransport(cfg: OhttpKeyConfig, directory: string): M
         method: "POST",
         headers: { "content-type": "message/ohttp-req" },
         body: wire as unknown as BodyInit,
+        signal: AbortSignal.timeout(20_000),
       });
       return new Uint8Array(await res.arrayBuffer());
     });

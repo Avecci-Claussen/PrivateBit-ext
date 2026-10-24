@@ -1,6 +1,6 @@
 import { scrypt } from "@noble/hashes/scrypt";
 import { gcm } from "@noble/ciphers/aes";
-import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
+import { entropyToMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
 
@@ -26,8 +26,16 @@ export type UnlockedVault = {
   birthday: number;
 };
 
-export function createMnemonic(strength: 128 | 256 = 128): string {
-  return generateMnemonic(wordlist, strength);
+/**
+ * BIP39 entropy from crypto.getRandomValues. New wallets are 256 bits (24 words).
+ * 128 is only for tests of an older backup. A stuck generator is refused.
+ */
+export function createMnemonic(strength: 128 | 256 = 256): string {
+  if (strength !== 128 && strength !== 256) throw new Error("mnemonic strength must be 128 or 256 bits");
+  const entropy = randomBytes(strength / 8);
+  if (entropy.length !== strength / 8) throw new Error("entropy generator returned the wrong length");
+  if (entropy.every((b) => b === entropy[0])) throw new Error("entropy generator failed");
+  return entropyToMnemonic(entropy, wordlist);
 }
 
 export function assertMnemonic(mnemonic: string): void {
@@ -129,9 +137,17 @@ export function memoryKv(): Kv {
 }
 
 const VAULT_KEY = "privatebit.vault";
+/** Previous vault, one generation. Reloading the extension must never destroy this. */
+export const VAULT_BAK_KEY = "privatebit.vault.bak";
 const SESSION_KEY = "privatebit.session";
+/** Scan secret for the open wallet. Survives Lock. Cleared on browser quit, switch, or remove. Not packed to disk. */
+export const SCAN_GRANT_KEY = "privatebit.scan.grant";
 
 export async function persistVault(kv: Kv, blob: VaultBlob): Promise<void> {
+  const prev = await loadVaultBlob(kv);
+  if (prev && JSON.stringify(prev) !== JSON.stringify(blob)) {
+    await kv.set({ [VAULT_BAK_KEY]: prev });
+  }
   await kv.set({ [VAULT_KEY]: blob });
 }
 
@@ -140,13 +156,32 @@ export async function loadVaultBlob(kv: Kv): Promise<VaultBlob | null> {
   return (got[VAULT_KEY] as VaultBlob) ?? null;
 }
 
+export async function loadVaultBackup(kv: Kv): Promise<VaultBlob | null> {
+  const got = await kv.get([VAULT_BAK_KEY]);
+  return (got[VAULT_BAK_KEY] as VaultBlob) ?? null;
+}
+
+/** Put the previous vault back. The wallet that was current becomes the backup. */
+export async function restoreVaultBackup(kv: Kv): Promise<void> {
+  const bak = await loadVaultBackup(kv);
+  if (!bak) throw new Error("No previous wallet is saved on this computer.");
+  const cur = await loadVaultBlob(kv);
+  await clearSession(kv);
+  await clearScanGrant(kv);
+  const next: Record<string, unknown> = { [VAULT_KEY]: bak };
+  if (cur) next[VAULT_BAK_KEY] = cur;
+  await kv.set(next);
+}
+
 export async function saveSession(kv: Kv, vault: UnlockedVault): Promise<void> {
+  const body = {
+    mnemonic: vault.mnemonic,
+    passphrase: vault.passphrase,
+    birthday: vault.birthday,
+  };
   await kv.set({
-    [SESSION_KEY]: {
-      mnemonic: vault.mnemonic,
-      passphrase: vault.passphrase,
-      birthday: vault.birthday,
-    },
+    [SESSION_KEY]: body,
+    [SCAN_GRANT_KEY]: body,
   });
 }
 
@@ -159,4 +194,16 @@ export async function loadSession(kv: Kv): Promise<UnlockedVault | null> {
 
 export async function clearSession(kv: Kv): Promise<void> {
   await kv.remove([SESSION_KEY]);
+}
+
+/** Words for finding coins while the wallet is locked. Absent after a switch or a browser quit. */
+export async function loadScanGrant(kv: Kv): Promise<UnlockedVault | null> {
+  const got = await kv.get([SCAN_GRANT_KEY]);
+  const s = got[SCAN_GRANT_KEY] as { mnemonic: string; passphrase: string; birthday: number } | undefined;
+  if (!s?.mnemonic) return null;
+  return vaultFromMnemonic(s);
+}
+
+export async function clearScanGrant(kv: Kv): Promise<void> {
+  await kv.remove([SCAN_GRANT_KEY]);
 }

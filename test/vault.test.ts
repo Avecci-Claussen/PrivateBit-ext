@@ -1,3 +1,5 @@
+import { validateMnemonic } from "@scure/bip39";
+import { wordlist } from "@scure/bip39/wordlists/english";
 import { describe, expect, it } from "vitest";
 import { accountFromVault } from "../src/lib/keys.ts";
 import { hex } from "../src/lib/bytes.ts";
@@ -7,9 +9,12 @@ import {
   clearSession,
   createMnemonic,
   loadSession,
+  loadVaultBackup,
+  loadVaultBlob,
   lockVault,
   memoryKv,
   persistVault,
+  restoreVaultBackup,
   saveSession,
   unlockVault,
   vaultFromMnemonic,
@@ -71,5 +76,48 @@ describe("vault", () => {
     expect((await loadSession(kv))?.mnemonic).toBe(mnemonic);
     await clearSession(kv);
     expect(await loadSession(kv)).toBeNull();
+  });
+
+  it("keeps the previous vault when a new one is written, and can restore it", async () => {
+    const kv = memoryKv();
+    const first = vaultFromMnemonic({ mnemonic: createMnemonic(128), birthday: 1 });
+    const second = vaultFromMnemonic({ mnemonic: createMnemonic(128), birthday: 1 });
+    await persistVault(kv, lockVault(first, "pw"));
+    expect(await loadVaultBackup(kv)).toBeNull();
+    await persistVault(kv, lockVault(second, "pw2"));
+    const bak = await loadVaultBackup(kv);
+    expect(bak).toBeTruthy();
+    expect(unlockVault(bak!, "pw").mnemonic).toBe(first.mnemonic);
+    await restoreVaultBackup(kv);
+    expect(unlockVault((await loadVaultBlob(kv))!, "pw").mnemonic).toBe(first.mnemonic);
+    expect(unlockVault((await loadVaultBackup(kv))!, "pw2").mnemonic).toBe(second.mnemonic);
+  });
+
+  it("refuses createChecked when a vault is already on this computer", async () => {
+    const w = new PrivateBit(memoryKv());
+    await w.create({ password: "pw", birthday: DEFAULT_BIRTHDAY });
+    await expect(
+      w.createChecked({ mnemonic: createMnemonic(128), password: "pw", birthday: DEFAULT_BIRTHDAY }),
+    ).rejects.toThrow(/already on this computer/);
+  });
+
+  it("draws a new wallet as 24 words from 256 bits", () => {
+    const a = createMnemonic();
+    const b = createMnemonic();
+    expect(a.split(" ")).toHaveLength(24);
+    expect(b.split(" ")).toHaveLength(24);
+    expect(a).not.toBe(b);
+    expect(validateMnemonic(a, wordlist)).toBe(true);
+    expect(validateMnemonic(b, wordlist)).toBe(true);
+  });
+
+  it("refuses to create a new wallet from 12 words", async () => {
+    const kv = memoryKv();
+    const w = new PrivateBit(kv);
+    await expect(w.create({ password: "pw", birthday: DEFAULT_BIRTHDAY, words: 12 })).rejects.toThrow(/24 words/);
+    await expect(
+      w.createChecked({ mnemonic: createMnemonic(128), password: "pw", birthday: DEFAULT_BIRTHDAY }),
+    ).rejects.toThrow(/24 words/);
+    expect(await loadVaultBlob(kv)).toBeNull();
   });
 });
