@@ -1017,7 +1017,7 @@ export class WalletCore {
         const cursor = `${store.lastHeight}:${store.inflight?.height ?? ""}:${store.inflight?.nextTx ?? ""}`;
         // fetch
         let block: SharedBlock | undefined;
-        const legacy = (store.inflight?.txids.length ?? 0) > 0 || (this.incomplete.get(height) ?? 0) >= 3;
+        const legacy = (this.incomplete.get(height) ?? 0) >= 3;
         if (!legacy) {
           try {
             const queued = ahead?.height === height ? ahead.block : undefined;
@@ -1039,6 +1039,12 @@ export class WalletCore {
             }
             if (!(e instanceof UnsupportedBlock)) throw e;
           }
+        }
+        if (block && store.inflight && store.inflight.txids.length > 0) {
+          // A block left half read on the per-transaction path (older builds used it for every block).
+          // Read it again whole from the shared copy; coins already found are kept, never doubled.
+          // Without this, a store from an older build kept asking the data service per transaction.
+          store = { ...store, inflight: undefined };
         }
         // match
         let step: { store: ScanStore; progress: ScanProgress };
