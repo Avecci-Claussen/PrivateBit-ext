@@ -1,9 +1,14 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Private test build only: the key is read from the environment here and never written to the tree.
+  const privateKey = mode === "private" ? (process.env.UNISAT_API_KEY ?? "").trim() : "";
+  if (mode === "private" && !privateKey) throw new Error("build:private needs UNISAT_API_KEY in the environment");
+  return {
   base: "./",
+  define: { __PB_PRIVATE_UNISAT__: mode === "private" ? JSON.stringify(privateKey) : "undefined" },
   // Nothing from the environment is ever compiled in: no VITE_ variables, no keys.
   envPrefix: "PRIVATEBIT_BUILD_NEVER_",
   publicDir: "public",
@@ -17,12 +22,18 @@ export default defineConfig({
         },
         closeBundle() {
           copyFileSync(resolve(__dirname, "manifest.json"), resolve(outDir, "manifest.json"));
+          if (mode === "private") {
+            // Make the private build easy to tell apart in chrome://extensions.
+            const m = JSON.parse(readFileSync(resolve(outDir, "manifest.json"), "utf8"));
+            m.name = `${m.name} (private test)`;
+            writeFileSync(resolve(outDir, "manifest.json"), JSON.stringify(m, null, 2));
+          }
         },
       };
     })(),
   ],
   build: {
-    outDir: "dist",
+    outDir: mode === "private" ? "dist-private" : "dist",
     emptyOutDir: true,
     sourcemap: false,
     rollupOptions: {
@@ -39,4 +50,5 @@ export default defineConfig({
       },
     },
   },
+};
 });

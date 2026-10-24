@@ -3,6 +3,7 @@ import { netFetch, noteRateLimited } from "./net.ts";
 import { rejectAddressUtxoAsSot } from "./policy.ts";
 import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
 import { FRACTAL, migrateChainConfig, type ChainConfig, type ChainKind } from "./network.ts";
+import { effectiveUnisatToken } from "./builtin-key.ts";
 import { mempoolBlockHash, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
 
 export type Tip = { height: number; hash: string };
@@ -255,7 +256,7 @@ function unisatHeaders(token?: string): Record<string, string> {
 export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): ChainSource {
   const migrated = migrateChainConfig(cfg);
   const root = (migrated.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
-  const headers = unisatHeaders(migrated.unisatToken);
+  const headers = unisatHeaders(effectiveUnisatToken(migrated.unisatToken, root, FRACTAL.defaultUnisat));
   return {
     kind: "unisat",
     async getTip() {

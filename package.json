@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc --noEmit && vite build && node scripts/check-dist.mjs dist",
     "build:e2e": "vite build --mode e2e --outDir dist-e2e",
+    "build:private": "tsc --noEmit && vite build --mode private --outDir dist-private",
     "check:dist": "node scripts/check-dist.mjs dist",
     "test": "vitest run",
     "test:watch": "vitest",

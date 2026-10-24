@@ -7,3 +7,5 @@ dist/
 .env.*.local
 secrets.local.ts
 dist-e2e/
+dist-private/
+PrivateBit-PRIVATE*
