@@ -2,8 +2,8 @@ import * as btc from "@scure/btc-signer";
 import { spendSecret, taprootScriptPubKey } from "./bip352.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
-import { loadSharedBlock, UnsupportedBlock } from "./blockshare.ts";
-import { hintAddressUtxos, openChain, type ChainSource } from "./chain.ts";
+import { forgetSharedFrom, IncompleteBlock, loadSharedBlock, pruneSharedBelow, UnsupportedBlock, type SharedBlock } from "./blockshare.ts";
+import { cancellable, openChain, type ChainSource } from "./chain.ts";
 import type { Account, ScanAccount } from "./keys.ts";
 import { accountFromVault, p2trAddressFromScriptHex, scanAccountFrom } from "./keys.ts";
 import {
@@ -47,13 +47,16 @@ import {
   applyTxHex,
   markAbsentWatchSpent,
   recoverWatchedFromHints,
-  confirmPendingUtxos,
   retryDeferred,
   confirmedBalance,
   emptyScanStore,
   pendingBalance,
   spendableBalance,
   applySharedSlice,
+  noteBlockHash,
+  pruneWatches,
+  ReorgError,
+  rollbackTo,
   SCAN_BUDGET_MS,
   scanStep,
   withTxHexCache,
@@ -301,6 +304,7 @@ export class WalletCore {
 
   /** Lock and drop the scan grant: only the open wallet matches blocks. */
   async closeForSwitch(): Promise<void> {
+    this.cancelScan();
     await this.settle().catch(() => undefined);
     await this.lock();
     await this.kv.remove([SCAN_GRANT_KEY]);
@@ -309,6 +313,7 @@ export class WalletCore {
 
   /** Bumped by PrivateBit when this wallet is closed, so its scan stops at the next check. */
   close(): void {
+    this.cancelScan();
     this.coins_.close();
     this.walletEpoch += 1;
     this.keyCache = undefined;
@@ -811,6 +816,7 @@ export class WalletCore {
         /* history is rebuilt at the next unlock */
       }
     }
+    this.cancelScan();
     this.keyCache = undefined;
     this.sessionCache = undefined;
     this.accountCache = undefined;
@@ -859,6 +865,26 @@ export class WalletCore {
     }
   }
 
+  /** Cancel handle for the scan run in progress. Lock, switch and remove abort it. */
+  private runAbort?: AbortController;
+  /** Heights whose input data came back incomplete, and how often. Bounded by the run. */
+  private incomplete = new Map<number, number>();
+
+  /** Stop the scan run in progress (Lock, switch, remove). The next run resumes from the checkpoint. */
+  cancelScan(): void {
+    this.runAbort?.abort(new ScanStopped());
+    this.runAbort = undefined;
+  }
+
+  /**
+   * One scan run, in three stages per block:
+   *   fetch   download the block (or its transactions) with no lock held,
+   *   match   compare it to a snapshot of the coin list, CPU only,
+   *   persist commit against the snapshot's rev; if anything else wrote meanwhile, redo the
+   *           block from a fresh read (the block itself is cached).
+   * Runs until the tip or the time budget. Progress is saved as a checkpoint, so a worker
+   * restart continues from the last saved block.
+   */
   private async scanRun(): Promise<ScanProgress> {
     const epoch = this.walletEpoch;
     const idle: ScanProgress = { done: false, lastHeight: 0, tip: 0, height: 0, txIndex: 0, txCount: 0, skipped: 0 };
@@ -867,140 +893,190 @@ export class WalletCore {
     const grant = full ? null : await this.grant();
     const account: ScanAccount | undefined = full ?? grant?.account;
     if (!account) return idle;
-    {
-    const scan = await this.loadScan();
     const mark: ScanMark = { epoch, spendPub: hex(account.spendPub) };
+    this.cancelScan();
+    const abort = new AbortController();
+    this.runAbort = abort;
+    const signal = abort.signal;
+    const source = cancellable(this.cachedScanSource(), signal);
+    let snap = await this.coins_.read();
     const stopped = (): ScanProgress => ({
       done: false,
-      lastHeight: scan.lastHeight,
-      tip: scan.tip ?? scan.lastHeight,
-      height: scan.lastHeight,
+      lastHeight: snap.store.lastHeight,
+      tip: snap.store.tip ?? snap.store.lastHeight,
+      height: snap.store.lastHeight,
       txIndex: 0,
       txCount: 0,
       skipped: 0,
     });
-    if (mark.epoch !== this.walletEpoch) return stopped();
-    const source = this.cachedScanSource();
-    const tip = await source.getTip();
-    if (mark.epoch !== this.walletEpoch) return stopped();
-    const started = Date.now();
-    let store = await this.loadScan();
-    if (started - this.sideWorkAt >= 20_000) {
-      this.sideWorkAt = started;
-      store = await this.loadScan();
-      if (full) store = await this.ensureOneTimeWatches(full, store);
-      store = await this.recoverWatches(account, source, store);
-      if (full) store = await this.recoverOwnBroadcasts(full, source, store);
-      store = await retryDeferred(account, source, store);
-      store = await confirmPendingUtxos(source, store);
-      if (!(await this.scanStillHere(mark))) return stopped();
-      store = await this.scanCommit(store, mark);
-    }
-    let progress: ScanProgress | undefined;
-    let sharedHeight = -1;
-    let shared: Awaited<ReturnType<typeof loadSharedBlock>> | undefined;
-    let ahead: { height: number; block: Promise<Awaited<ReturnType<typeof loadSharedBlock>>> } | undefined;
-    if ((store.inflight?.txids.length ?? 0) > 0) store = { ...store, inflight: undefined };
-    do {
-      if (mark.epoch !== this.walletEpoch) return progress ?? stopped();
-      const cursor = `${store.lastHeight}:${store.inflight?.height ?? ""}:${store.inflight?.nextTx ?? ""}`;
-      const height = store.inflight?.height ?? store.lastHeight + 1;
-      const legacy = (store.inflight?.txids.length ?? 0) > 0;
-      if (!legacy && height <= tip.height && sharedHeight !== height) {
+    try {
+      const tip = await source.getTip();
+      if (mark.epoch !== this.walletEpoch) return stopped();
+      await this.checkReorg(source, mark);
+      const started = Date.now();
+      if (started - this.sideWorkAt >= 20_000) {
+        this.sideWorkAt = started;
+        await this.sideWork(full, account, source, mark);
+      }
+      let progress: ScanProgress | undefined;
+      let ahead: { height: number; block: Promise<SharedBlock> } | undefined;
+      for (;;) {
+        signal.throwIfAborted();
+        if (mark.epoch !== this.walletEpoch) return progress ?? stopped();
+        snap = await this.coins_.read();
+        let store = snap.store;
+        const height = store.inflight?.height ?? store.lastHeight + 1;
+        if (height > tip.height) {
+          if (store.tip !== tip.height) store = { ...store, tip: tip.height };
+          snap = { store: await this.scanCommit(store, mark, snap.rev), rev: snap.rev + 1 };
+          progress = { done: true, lastHeight: store.lastHeight, tip: tip.height, height: store.lastHeight, txIndex: 0, txCount: 0, skipped: 0 };
+          break;
+        }
+        const cursor = `${store.lastHeight}:${store.inflight?.height ?? ""}:${store.inflight?.nextTx ?? ""}`;
+        // fetch
+        let block: SharedBlock | undefined;
+        const legacy = (store.inflight?.txids.length ?? 0) > 0 || (this.incomplete.get(height) ?? 0) >= 3;
+        if (!legacy) {
+          try {
+            const queued = ahead?.height === height ? ahead.block : undefined;
+            ahead = undefined;
+            block = await (queued ?? loadSharedBlock(height, source));
+            signal.throwIfAborted();
+            this.incomplete.delete(height);
+            if (height + 1 <= tip.height) {
+              const nextBlock = loadSharedBlock(height + 1, source);
+              void nextBlock.catch(() => {});
+              ahead = { height: height + 1, block: nextBlock };
+            }
+          } catch (e) {
+            if (e instanceof IncompleteBlock) {
+              // Never matched or saved with inputs missing. Retried; after 3 tries per-transaction data is used.
+              this.incomplete.set(height, (this.incomplete.get(height) ?? 0) + 1);
+              if (this.incomplete.size > 64) this.incomplete.delete(this.incomplete.keys().next().value!);
+              throw e;
+            }
+            if (!(e instanceof UnsupportedBlock)) throw e;
+          }
+        }
+        // match
+        let step: { store: ScanStore; progress: ScanProgress };
         try {
-          if (store.inflight?.height !== height) {
-            store = { ...store, tip: tip.height, inflight: { height, nextTx: 0, txids: [], txCount: 0 } };
-            store = await this.scanCommit(store, mark);
-          }
-          const queued = ahead?.height === height ? ahead.block : undefined;
-          if (ahead?.height === height) ahead = undefined;
-          shared = queued ? await queued : await loadSharedBlock(height, source);
-          sharedHeight = height;
-          if (height + 1 <= tip.height) {
-            const next = height + 1;
-            const block = loadSharedBlock(next, source);
-            void block.catch(() => {});
-            ahead = { height: next, block };
-          }
+          step = block
+            ? applySharedSlice(account, store, block, store.inflight?.height === height ? store.inflight.nextTx : 0, tip.height)
+            : await scanStep(account, source, store, tip.height);
         } catch (e) {
-          if (e instanceof RateLimitedError) throw e;
-          if (!(e instanceof UnsupportedBlock)) throw e;
-          shared = undefined;
-          sharedHeight = height;
+          if (e instanceof ReorgError) {
+            await this.handleReorg(source, mark, e.height);
+            ahead = undefined;
+            continue;
+          }
+          throw e;
         }
+        if (!block && step.store.lastHeight > store.lastHeight) {
+          // Per-transaction path has no header; ask for this block's hash for reorg detection.
+          noteBlockHash(step.store, step.store.lastHeight, await source.getBlockHash(step.store.lastHeight).catch(() => undefined));
+        }
+        signal.throwIfAborted();
+        // persist (version checked against the snapshot)
+        try {
+          await this.scanCommit(step.store, mark, snap.rev);
+        } catch (e) {
+          if (e instanceof StaleWriteError) continue;
+          throw e;
+        }
+        progress = step.progress;
+        const now = `${step.store.lastHeight}:${step.store.inflight?.height ?? ""}:${step.store.inflight?.nextTx ?? ""}`;
+        if (now === cursor || progress.done || Date.now() - started >= SCAN_BUDGET_MS) break;
       }
-      const step =
-        !legacy && shared && shared.height === height
-          ? applySharedSlice(
-              account,
-              store,
-              shared,
-              store.inflight?.height === height ? store.inflight.nextTx : 0,
-              tip.height,
-            )
-          : await scanStep(account, source, store, tip.height);
-      store = step.store;
-      progress = step.progress;
-      if (mark.epoch !== this.walletEpoch) return progress;
-      store = await this.scanCommit(store, mark);
-      const now = `${store.lastHeight}:${store.inflight?.height ?? ""}:${store.inflight?.nextTx ?? ""}`;
-      if (now === cursor) break;
-    } while (!progress.done && Date.now() - started < SCAN_BUDGET_MS);
-    await this.settle();
-    return progress ?? stopped();
+      await this.settle();
+      return progress ?? stopped();
+    } finally {
+      if (this.runAbort === abort) this.runAbort = undefined;
     }
   }
 
-  /** Commit a scan step to memory (persisted by CoinStore shortly). Throws if the wallet changed. */
-  private async scanCommit(store: ScanStore, mark: ScanMark): Promise<ScanStore> {
+  /** Commit a scan step (to memory; persisted by CoinStore). Throws if the wallet changed. */
+  private async scanCommit(store: ScanStore, mark: ScanMark, baseRev?: number): Promise<ScanStore> {
     if (!(await this.scanStillHere(mark))) throw new ScanStopped();
-    return this.coins_.commit(store.rev ?? 0, store, { flush: false });
+    return this.coins_.commit(baseRev ?? store.rev ?? 0, store, { flush: false });
   }
 
-  /** Known scripts (one-time, Payjoin) via indexer hints, then raw tx hex. SP scan stays sequential. */
-  private async recoverWatches(account: ScanAccount, source: ChainSource, store: ScanStore): Promise<ScanStore> {
-    const watch = store.watch ?? [];
-    if (!watch.length) return store;
-    const hints: { txid: string; height: number }[] = [];
-    const seen = new Set<string>();
-    let next = store;
-    for (const w of watch) {
-      const addr = p2trAddressFromScriptHex(w.scriptPubKey);
-      if (!addr) continue;
-      let rows: { txid: string; height: number; vout?: number; value?: string; scriptPubKey?: string }[];
-      try {
-        rows = await hintAddressUtxos(this.chainCfg, addr);
-      } catch {
-        continue;
+  /** Once per run: is the last block we matched still on the chain? */
+  private async checkReorg(source: ChainSource, mark: ScanMark): Promise<void> {
+    const snap = await this.coins_.read();
+    const last = snap.store.recent?.[snap.store.recent.length - 1];
+    if (!last || last[0] !== snap.store.lastHeight) return;
+    const hash = (await source.getBlockHash(last[0])).toLowerCase();
+    if (hash && hash !== last[1]) await this.handleReorg(source, mark, last[0]);
+  }
+
+  /** Walk back through recent hashes to the fork, roll the coin list back, forget cached blocks. */
+  private async handleReorg(source: ChainSource, mark: ScanMark, height: number): Promise<void> {
+    const snap = await this.coins_.read();
+    const recent = [...(snap.store.recent ?? [])].reverse();
+    let fork = recent.length ? recent[recent.length - 1]![0] : height;
+    for (const [h, hash] of recent) {
+      if (h >= height) continue;
+      const now = (await source.getBlockHash(h).catch(() => "")).toLowerCase();
+      if (now === hash) {
+        fork = h + 1;
+        break;
       }
-      const unspent = new Set(rows.filter((h) => h.scriptPubKey).map((h) => h.txid));
-      if (unspent.size) next = markAbsentWatchSpent(next, w.scriptPubKey, unspent);
-      for (const h of rows) {
-        if (h.scriptPubKey && h.vout !== undefined && h.value !== undefined) {
-          next = noteWatchedOutput(next, {
-            txid: h.txid,
-            vout: h.vout,
-            value: h.value,
-            scriptPubKey: h.scriptPubKey,
-            height: h.height,
-          });
-        }
-        if (seen.has(h.txid)) continue;
-        seen.add(h.txid);
-        hints.push(h);
+      fork = h;
+    }
+    if (!(await this.scanStillHere(mark))) throw new ScanStopped();
+    await forgetSharedFrom(fork);
+    await this.coins_.update((cur) => rollbackTo(cur, fork), { flush: true });
+  }
+
+  /**
+   * Every 20 s: keep one-time watches, retry deferred transactions, prune old watches,
+   * prune the shared block cache. Nothing here sends a txid or an address of ours anywhere.
+   */
+  private async sideWork(full: Account | undefined, account: ScanAccount, source: ChainSource, mark: ScanMark): Promise<void> {
+    const keep = full ? await this.watchesToKeep() : null;
+    const ot = full ? await this.oneTimeIndexes() : null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snap = await this.coins_.read();
+      let store = snap.store;
+      if (full && ot) store = this.withOneTimeWatches(full, store, ot);
+      // Deferred holes are transactions of blocks we scanned, not ours; refetching them reveals nothing about us.
+      store = await retryDeferred(account, source, store);
+      if (keep) store = pruneWatches(store, keep);
+      try {
+        await this.scanCommit(store, mark, snap.rev);
+        break;
+      } catch (e) {
+        if (!(e instanceof StaleWriteError)) throw e;
       }
     }
-    if (!hints.length) return next;
-    return recoverWatchedFromHints(account, source, next, hints);
+    const pos = (await this.coins_.read()).store.lastHeight;
+    if (pos > 5_000) void pruneSharedBelow(pos - 5_000).catch(() => undefined);
   }
 
-  /** One-time records stay watched even if an earlier scan store was replaced. */
-  private async ensureOneTimeWatches(account: Account, store: ScanStore): Promise<ScanStore> {
+  /** Scripts of payment links that are open, or closed less than a week ago. */
+  private async watchesToKeep(): Promise<Set<string>> {
+    const keep = new Set<string>();
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (const s of await this.loadPayjoinSessions()) {
+      const open = s.status === "waiting" || s.status === "proposed";
+      if (open || (s.closedAt ?? s.expiresAt ?? 0) > weekAgo) {
+        if (s.scriptPubKey) keep.add(s.scriptPubKey.toLowerCase());
+        if (s.extraScriptPubKey) keep.add(s.extraScriptPubKey.toLowerCase());
+      }
+    }
+    return keep;
+  }
+
+  /** One-time indexes that must stay watched, even if an earlier coin list was replaced. */
+  private async oneTimeIndexes(): Promise<number[]> {
     const ot = await this.loadOneTime();
     const indexes = new Set(ot.records.map((r) => r.index));
-    if (ot.restoredWindow !== undefined) {
-      for (let i = 0; i < ot.restoredWindow; i++) indexes.add(i);
-    }
+    if (ot.restoredWindow !== undefined) for (let i = 0; i < ot.restoredWindow; i++) indexes.add(i);
+    return [...indexes];
+  }
+
+  private withOneTimeWatches(account: Account, store: ScanStore, indexes: number[]): ScanStore {
     let next = store;
     for (const index of indexes) {
       const k = account.oneTime(index);
@@ -1010,32 +1086,6 @@ export class WalletCore {
     return next;
   }
 
-  /** Pull txs this wallet broadcast back in, so a sweep is not stuck at height 0 behind the block scan. */
-  private async recoverOwnBroadcasts(account: Account, source: ChainSource, store: ScanStore): Promise<ScanStore> {
-    const hist = await this.loadHistory();
-    let next = store;
-    let n = 0;
-    for (const e of Object.values(hist.entries)) {
-      if (!e.fromWallet || n >= 8) continue;
-      const outs = next.utxos.filter((u) => u.txid === e.txid);
-      const ins = next.utxos.filter((u) => u.spentBy === e.txid);
-      const pending = outs.some((u) => u.height === 0) || ins.some((u) => !(u.spentHeight && u.spentHeight > 0));
-      const missingOut = outs.length === 0;
-      const missingIn = ins.length === 0 && (e.kind === "self" || e.kind === "split" || e.kind === "sent" || e.kind === "payjoin-sent");
-      if (!missingOut && !missingIn && !pending) continue;
-      n += 1;
-      try {
-        const hexTx = await source.getTxHex(e.txid);
-        const height = source.getTxHeight ? ((await source.getTxHeight(e.txid)) ?? 0) : 0;
-        next = await applyTxHex(account, source, next, hexTx, height);
-      } catch {
-        /* next scan tries again */
-      }
-    }
-    return next;
-  }
-
-  /** Needs the previous wallet's password. */
   /**
    * Apply a transaction we just broadcast. Parents are fetched outside the writer queue, then
    * committed against the rev they were prepared from; a concurrent write means try again.
@@ -1229,14 +1279,8 @@ export class WalletCore {
 
   /** Scan newly indexed heights. One call already spends the catch-up budget. */
   async followTip(_maxSteps = FOLLOW_TIP_STEPS): Promise<ScanProgress> {
-    return this.enqueueScan(async () => {
-      try {
-        await this.servicePayjoin();
-      } catch {
-        /* locked or no directory; finding coins must not wait on the mailbox */
-      }
-      return this.scanOnceUnlocked();
-    });
+    // Payjoin runs on its own timer (background.ts). Finding coins never waits on a mailbox.
+    return this.enqueueScan(() => this.scanOnceUnlocked());
   }
 
   /** True while this wallet can match blocks. Lock leaves this on until the browser quits or you switch. */

@@ -283,6 +283,13 @@ export type PayjoinReceiveSession = {
   inputSecret?: string;
   /** Set when the Payjoin output is seen in this wallet. */
   txid?: string;
+  /** When the session reached a final state (done, failed, expired, cancelled). */
+  closedAt?: number;
+  /** After a proposal is posted: the payer must broadcast before this, or the link expires. */
+  proposedAt?: number;
+  proposalDeadline?: number;
+  /** Final transaction id, known from our proposal (signatures do not change a segwit txid). */
+  proposedTxid?: string;
 };
 
 export type PayjoinSendSession = {
@@ -397,6 +404,7 @@ export function bip78ValidateStub(proposal: string, original: string): string[] 
 export async function fetchDirectoryOhttp(directory: string): Promise<OhttpKeyConfig> {
   const res = await fetch(`${mailboxBase(directory)}/.well-known/ohttp-gateway`, {
     headers: { Accept: "application/ohttp-keys" },
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`OHTTP keys HTTP ${res.status}`);
   return parseOhttpKeys(new Uint8Array(await res.arrayBuffer()));

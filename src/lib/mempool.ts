@@ -1,5 +1,6 @@
 import { fromHex } from "./bytes.ts";
 import { RateLimitedError } from "./requests.ts";
+import { netFetch } from "./net.ts";
 
 /** Whole blocks only. Addresses and broadcasts stay on the chain source. */
 export const MEMPOOL_FRACTAL = "https://mempool.fractalbitcoin.io";
@@ -10,11 +11,9 @@ const UA =
 async function mempoolFetch(path: string): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(`${MEMPOOL_FRACTAL}${path}`, {
-      headers: { accept: "*/*", "user-agent": UA },
-      signal: AbortSignal.timeout(20_000),
-    });
+    res = await netFetch(`${MEMPOOL_FRACTAL}${path}`, { headers: { accept: "*/*", "user-agent": UA } }, { timeoutMs: 20_000 });
   } catch (e) {
+    if (e instanceof RateLimitedError) throw e;
     throw new Error(e instanceof Error ? e.message : "mempool unreachable");
   }
   if (res.status === 429 || res.status === 503) throw new RateLimitedError(`mempool ${path} ${res.status}`);
@@ -30,10 +29,7 @@ export async function mempoolBlockRaw(height: number): Promise<Uint8Array> {
 }
 
 export async function mempoolTxHex(txid: string): Promise<string | undefined> {
-  const res = await fetch(`${MEMPOOL_FRACTAL}/api/tx/${txid}/hex`, {
-    headers: { accept: "text/plain", "user-agent": UA },
-    signal: AbortSignal.timeout(12_000),
-  });
+  const res = await netFetch(`${MEMPOOL_FRACTAL}/api/tx/${txid}/hex`, { headers: { accept: "text/plain", "user-agent": UA } }, { timeoutMs: 12_000 });
   if (res.status === 404) return undefined;
   if (res.status === 429 || res.status === 503) throw new RateLimitedError(`mempool tx ${res.status}`);
   if (!res.ok) throw new Error(`mempool tx ${res.status}`);

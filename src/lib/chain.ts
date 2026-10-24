@@ -1,4 +1,5 @@
 import { fromHex } from "./bytes.ts";
+import { netFetch, noteRateLimited } from "./net.ts";
 import { rejectAddressUtxoAsSot } from "./policy.ts";
 import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
 import { FRACTAL, migrateChainConfig, type ChainConfig, type ChainKind } from "./network.ts";
@@ -130,16 +131,29 @@ export function parseUnisatInputs(data: unknown): TxInputScript[] {
 
 /** Without a key the service answers 403 with code -2004 once its limit is hit. */
 async function throwUnisatHttp(res: Response, url: string): Promise<never> {
-  if (res.status === 429) throw new RateLimitedError(`${url} 429`);
+  if (res.status === 429) {
+    noteRateLimited(url);
+    throw new RateLimitedError(`${url} 429`);
+  }
   const body = await res.json().catch(() => null);
-  if (body && typeof body === "object") unwrapUnisat<unknown>(body, url);
+  try {
+    if (body && typeof body === "object") unwrapUnisat<unknown>(body, url);
+  } catch (e) {
+    if (e instanceof RateLimitedError) noteRateLimited(url);
+    throw e;
+  }
   throw new Error(`${url} ${res.status}`);
 }
 
 async function unisatGet<T>(url: string, headers: Record<string, string>): Promise<T> {
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
+  const res = await netFetch(url, { headers }, { timeoutMs: 12_000 });
   if (!res.ok) await throwUnisatHttp(res, url);
-  return unwrapUnisat<T>(await res.json(), url);
+  try {
+    return unwrapUnisat<T>(await res.json(), url);
+  } catch (e) {
+    if (e instanceof RateLimitedError) noteRateLimited(url);
+    throw e;
+  }
 }
 
 type RpcAuth = { user?: string; password?: string };
@@ -149,11 +163,12 @@ async function rpc(url: string, auth: RpcAuth, method: string, params: unknown[]
   if (auth.user) {
     headers.authorization = `Basic ${btoa(`${auth.user}:${auth.password ?? ""}`)}`;
   }
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ jsonrpc: "1.0", id: "privatebit", method, params }),
-  });
+  // Your own node gets a timeout too: a stalled node must not freeze the scan.
+  const res = await netFetch(
+    url,
+    { method: "POST", headers, body: JSON.stringify({ jsonrpc: "1.0", id: "privatebit", method, params }) },
+    { timeoutMs: method === "getblock" ? 30_000 : 15_000 },
+  );
   const body = (await res.json()) as { result: unknown; error: { message: string } | null };
   if (body.error) throw new Error(body.error.message);
   return body.result;
@@ -329,11 +344,12 @@ export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): Ch
       return typeof data.height === "number" && data.height > 0 ? data.height : null;
     },
     async broadcast(txHex) {
-      const res = await fetch(`${root}/v1/indexer/local_pushtx`, {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
-        body: JSON.stringify({ txHex }),
-      });
+      // Broadcast: the service sees this transaction and our IP. Unavoidable for a public source.
+      const res = await netFetch(
+        `${root}/v1/indexer/local_pushtx`,
+        { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ txHex }) },
+        { timeoutMs: 20_000 },
+      );
       const body: unknown = await res.json();
       const data = unwrapUnisat<string | { txid?: string }>(body, "local_pushtx");
       if (typeof data === "string" && data.length > 0) return data;
@@ -390,66 +406,34 @@ export function parseUnisatUtxoData(data: unknown): WatchHint[] {
   return out;
 }
 
-/** Newest address history page. `start` echoes the cursor; detail is newest first. */
-export function parseUnisatAddressHistory(data: unknown): WatchHint[] {
-  const rows = data && typeof data === "object" ? (data as { detail?: unknown }).detail : undefined;
-  if (!Array.isArray(rows)) return [];
-  const out: WatchHint[] = [];
-  for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    const r = row as { txid?: string; height?: number };
-    if (typeof r.txid !== "string" || !/^[0-9a-fA-F]{64}$/.test(r.txid)) continue;
-    out.push({ txid: r.txid, height: typeof r.height === "number" && r.height > 0 ? r.height : 0 });
-  }
-  return out;
-}
-
 /**
- * Candidate txids for a known address (one-time / Payjoin watch). Not a Silent Payment SoT:
- * callers must fetch tx hex and match the watched script.
+ * The same source, bound to a scan run's cancel signal. After cancel no call starts, and a
+ * call already in flight is abandoned (its result is ignored).
  */
-export async function hintAddressUtxos(cfg: ChainConfig, address: string): Promise<WatchHint[]> {
-  const migrated = migrateChainConfig(cfg);
-  if (migrated.kind !== "unisat" || !address) return [];
-  const root = (migrated.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
-  const headers = unisatHeaders(migrated.unisatToken);
-  const out: WatchHint[] = [];
-  const seen = new Set<string>();
-  const size = 100;
-  let cursor = 0;
-  for (;;) {
-    const data = await unisatGet<unknown>(
-      `${root}/v1/indexer/address/${encodeURIComponent(address)}/utxo-data?cursor=${cursor}&size=${size}`,
-      headers,
-    );
-    const rows = data && typeof data === "object" && Array.isArray((data as { utxo?: unknown }).utxo)
-      ? (data as { utxo: unknown[] }).utxo
-      : [];
-    for (const hint of parseUnisatUtxoData(data)) {
-      const key = hint.vout === undefined ? hint.txid : `${hint.txid}:${hint.vout}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      seen.add(hint.txid);
-      out.push(hint);
-    }
-    const next = nextUnisatOffset(cursor, rows.length, size, unisatTotal(data));
-    if (next === null) break;
-    cursor = next;
-  }
-  // One-time addresses have one or two payments. The newest history page covers that
-  // even when the unspent list has not caught up yet. Busy addresses are not walked.
-  try {
-    const history = await unisatGet<unknown>(
-      `${root}/v1/indexer/address/${encodeURIComponent(address)}/history?cursor=0&size=20`,
-      headers,
-    );
-    for (const hint of parseUnisatAddressHistory(history)) {
-      if (seen.has(hint.txid)) continue;
-      seen.add(hint.txid);
-      out.push(hint);
-    }
-  } catch {
-    /* The unspent list above still stands when history is unavailable. */
-  }
-  return out;
+export function cancellable(source: ChainSource, signal: AbortSignal): ChainSource {
+  const stopped = new Promise<never>((_, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason ?? new Error("cancelled")), { once: true });
+  });
+  stopped.catch(() => undefined);
+  const wrap =
+    <A extends unknown[], R>(fn: (...a: A) => Promise<R>) =>
+    async (...a: A): Promise<R> => {
+      signal.throwIfAborted();
+      const r = await Promise.race([fn.apply(source, a), stopped]);
+      signal.throwIfAborted();
+      return r;
+    };
+  return {
+    kind: source.kind,
+    getTip: wrap(source.getTip),
+    getBlockHash: wrap(source.getBlockHash),
+    getBlockRaw: source.getBlockRaw ? wrap(source.getBlockRaw) : undefined,
+    getBlockTxids: wrap(source.getBlockTxids),
+    getTxHex: wrap(source.getTxHex),
+    listInputScripts: source.listInputScripts ? wrap(source.listInputScripts) : undefined,
+    getTxHeight: source.getTxHeight ? wrap(source.getTxHeight) : undefined,
+    broadcast: wrap(source.broadcast),
+    estimateFeeSatPerVb: wrap(source.estimateFeeSatPerVb),
+    feeRates: source.feeRates ? wrap(source.feeRates) : undefined,
+  };
 }

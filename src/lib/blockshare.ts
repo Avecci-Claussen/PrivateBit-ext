@@ -4,6 +4,7 @@ import type { ChainSource } from "./chain.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
 import { mempoolBlockRaw, mempoolTxHex } from "./mempool.ts";
 import { parseTxHex } from "./tx.ts";
+import { sha256 } from "@noble/hashes/sha256";
 
 /** One transaction another wallet can match without downloading the block again. */
 export type SharedTx = {
@@ -15,6 +16,9 @@ export type SharedTx = {
 
 export type SharedBlock = {
   height: number;
+  /** Block hash and its parent, from the header. A mismatch with the last block we matched is a reorg. */
+  hash: string;
+  prev: string;
   txs: SharedTx[];
 };
 
@@ -25,15 +29,55 @@ export class UnsupportedBlock extends Error {
   }
 }
 
+/**
+ * Some input scripts could not be found. Matching such a block could miss a payment
+ * (BIP352 needs every eligible input), so it is neither matched nor saved. Retried later.
+ */
+export class IncompleteBlock extends Error {
+  constructor(
+    readonly height: number,
+    readonly missing: string[],
+  ) {
+    super(`block ${height}: ${missing.length} input scripts missing`);
+    this.name = "IncompleteBlock";
+  }
+}
+
+function headerHashes(raw: Uint8Array): { hash: string; prev: string } {
+  if (raw.length < 80) throw new UnsupportedBlock();
+  const header = raw.subarray(0, 80);
+  const hash = sha256(sha256(header)).slice().reverse();
+  const prev = header.slice(4, 36).reverse();
+  return { hash: hex(hash), prev: hex(prev) };
+}
+
+/** Script marker for an output type BIP352 ignores. Known, so not a missing input. */
+const INELIGIBLE = "";
+
+/** Witness v2..v16 output: a spend of one disqualifies the whole transaction (BIP352). */
+function isFutureWitness(script: Uint8Array): boolean {
+  const len = script.length;
+  return len >= 4 && len <= 42 && script[0]! >= 0x52 && script[0]! <= 0x60 && script[1] === len - 2;
+}
+
+/** What to remember about an output: its script when BIP352 needs it, a marker otherwise. */
+function scriptToKeep(script: Uint8Array): string {
+  return isPaymentScript(script) || isFutureWitness(script) ? hex(script) : INELIGIBLE;
+}
+
 type Backend = {
   getBlock(height: number): Promise<SharedBlock | undefined>;
   putBlock(height: number, block: SharedBlock): Promise<void>;
   getScripts(height: number): Promise<Record<string, string> | undefined>;
   putScripts(height: number, rows: Record<string, string>): Promise<void>;
   scriptHeights(): Promise<number[]>;
+  forgetFrom(height: number): Promise<void>;
+  pruneBelow(height: number): Promise<void>;
 };
 
 const memoryBlocks = new Map<number, SharedBlock>();
+/** Bound on output scripts kept in memory. Oldest are dropped first; IndexedDB keeps the rest. */
+const SCRIPT_CACHE_MAX = 250_000;
 const memoryScripts = new Map<number, Record<string, string>>();
 
 const memoryBackend: Backend = {
@@ -51,6 +95,14 @@ const memoryBackend: Backend = {
   },
   async scriptHeights() {
     return [...memoryScripts.keys()];
+  },
+  async forgetFrom(height) {
+    for (const h of [...memoryBlocks.keys()]) if (h >= height) memoryBlocks.delete(h);
+    for (const h of [...memoryScripts.keys()]) if (h >= height) memoryScripts.delete(h);
+  },
+  async pruneBelow(height) {
+    for (const h of [...memoryBlocks.keys()]) if (h < height) memoryBlocks.delete(h);
+    for (const h of [...memoryScripts.keys()]) if (h < height) memoryScripts.delete(h);
   },
 };
 
@@ -76,17 +128,51 @@ function backend(): Backend {
 }
 
 const DB = "privatebit-chain";
+/** v2: blocks carry their hash, incomplete blocks were never stored. v1 copies are dropped. */
+const DB_VERSION = 2;
+let dbConn: Promise<IDBDatabase> | undefined;
 
+/** One connection for the life of the worker (v1 opened a new one on every call and never closed it). */
 function idbOpen(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
+  if (dbConn) return dbConn;
+  dbConn = new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open(DB, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains("blocks")) db.createObjectStore("blocks");
-      if (!db.objectStoreNames.contains("scripts")) db.createObjectStore("scripts");
+      for (const name of ["blocks", "scripts"]) {
+        if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
+        db.createObjectStore(name);
+      }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => {
+        db.close();
+        dbConn = undefined;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      dbConn = undefined;
+      reject(req.error);
+    };
+  });
+  return dbConn;
+}
+
+/** Delete the shared block cache (last wallet removed). */
+export async function clearSharedChain(): Promise<void> {
+  scriptCache.clear();
+  indexedHeights.clear();
+  memoryBlocks.clear();
+  memoryScripts.clear();
+  if (typeof indexedDB === "undefined" || backendOverride) return;
+  const db = dbConn ? await dbConn.catch(() => undefined) : undefined;
+  db?.close();
+  dbConn = undefined;
+  await new Promise<void>((resolve) => {
+    const req = indexedDB.deleteDatabase(DB);
+    req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
 }
 
@@ -121,7 +207,39 @@ const idbBackend: Backend = {
     const keys = await idbReq(db.transaction("scripts").objectStore("scripts").getAllKeys());
     return keys.filter((k): k is number => typeof k === "number");
   },
+  async forgetFrom(height) {
+    const db = await idbOpen();
+    const tx = db.transaction(["blocks", "scripts"], "readwrite");
+    tx.objectStore("blocks").delete(IDBKeyRange.lowerBound(height));
+    tx.objectStore("scripts").delete(IDBKeyRange.lowerBound(height));
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+  async pruneBelow(height) {
+    const db = await idbOpen();
+    const tx = db.transaction(["blocks", "scripts"], "readwrite");
+    tx.objectStore("blocks").delete(IDBKeyRange.upperBound(height, true));
+    tx.objectStore("scripts").delete(IDBKeyRange.upperBound(height, true));
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
 };
+
+function cacheScript(key: string, script: string): void {
+  if (scriptCache.size >= SCRIPT_CACHE_MAX) {
+    // Map keeps insertion order: drop the oldest tenth in one go.
+    let drop = Math.floor(SCRIPT_CACHE_MAX / 10);
+    for (const k of scriptCache.keys()) {
+      scriptCache.delete(k);
+      if (--drop <= 0) break;
+    }
+  }
+  scriptCache.set(key, script);
+}
 
 const scriptCache = new Map<string, string>();
 const indexedHeights = new Set<number>();
@@ -171,7 +289,7 @@ async function indexHeight(height: number, source: ChainSource): Promise<void> {
   if (indexedHeights.has(height)) return;
   const existing = await backend().getScripts(height);
   if (existing) {
-    for (const [key, script] of Object.entries(existing)) scriptCache.set(key, script);
+    for (const [key, script] of Object.entries(existing)) cacheScript(key, script);
     indexedHeights.add(height);
     return;
   }
@@ -195,24 +313,20 @@ async function ensureLookback(height: number, source: ChainSource): Promise<void
 
 function rememberOutput(tx: LightTx, added: Record<string, string>): void {
   for (let i = 0; i < tx.vout.length; i++) {
-    const script = tx.vout[i]!.script;
-    if (!isPaymentScript(script)) continue;
     const key = `${tx.txid}:${i}`;
-    const hexScript = hex(script);
-    scriptCache.set(key, hexScript);
-    added[key] = hexScript;
+    const keep = scriptToKeep(tx.vout[i]!.script);
+    cacheScript(key, keep);
+    added[key] = keep;
   }
 }
 
 function rememberParent(parentHex: string, added: Record<string, string>): void {
   const parent = parseTxHex(parentHex);
   for (let i = 0; i < parent.vout.length; i++) {
-    const script = parent.vout[i]!.scriptPubKey;
-    if (!isPaymentScript(script)) continue;
     const key = `${parent.txid}:${i}`;
-    const hexScript = hex(script);
-    scriptCache.set(key, hexScript);
-    added[key] = hexScript;
+    const keep = scriptToKeep(parent.vout[i]!.scriptPubKey);
+    cacheScript(key, keep);
+    added[key] = keep;
   }
 }
 
@@ -228,6 +342,7 @@ export async function buildSharedBlock(
 ): Promise<{ block: SharedBlock; scripts: Record<string, string> }> {
   const txs = parseBlockTransactions(raw);
   if (!txs) throw new UnsupportedBlock();
+  const { hash, prev } = headerHashes(raw);
   const added: Record<string, string> = {};
   const missingParents = new Set<string>();
   for (const tx of txs) {
@@ -242,6 +357,7 @@ export async function buildSharedBlock(
     if (parent) rememberParent(parent, added);
   });
   const kept: SharedTx[] = [];
+  const stillMissing = new Set<string>();
   for (const tx of txs) {
     const taps = taprootOutputs(tx);
     const spendsTracked = tx.vin.some((vin) => {
@@ -254,7 +370,12 @@ export async function buildSharedBlock(
     for (const vin of tx.vin) {
       if (isCoinbase(vin.txid)) continue;
       const script = scriptCache.get(`${vin.txid}:${vin.vout}`);
-      if (!script) continue;
+      if (script === undefined) {
+        // Only matters where a payment to us could be: transactions with taproot outputs.
+        if (taps.length > 0) stillMissing.add(vin.txid);
+        continue;
+      }
+      if (script === INELIGIBLE) continue;
       rawVins.push({
         txid: vin.txid,
         vout: vin.vout,
@@ -277,7 +398,8 @@ export async function buildSharedBlock(
         })) ?? [],
     });
   }
-  return { block: { height, txs: kept }, scripts: added };
+  if (stillMissing.size > 0) throw new IncompleteBlock(height, [...stillMissing]);
+  return { block: { height, hash, prev, txs: kept }, scripts: added };
 }
 
 async function fetchRaw(source: ChainSource, height: number): Promise<Uint8Array> {
@@ -288,6 +410,18 @@ async function fetchRaw(source: ChainSource, height: number): Promise<Uint8Array
 async function fetchParent(source: ChainSource, txid: string): Promise<string | undefined> {
   if (source.kind === "core") return source.getTxHex(txid);
   return mempoolTxHex(txid);
+}
+
+/** A reorg replaced these heights: drop their saved copies and scripts. */
+export async function forgetSharedFrom(height: number): Promise<void> {
+  for (const h of [...indexedHeights]) if (h >= height) indexedHeights.delete(h);
+  await backend().forgetFrom(height);
+}
+
+/** Keep the cache bounded: blocks far below every wallet's position are not needed again. */
+export async function pruneSharedBelow(height: number): Promise<void> {
+  for (const h of [...indexedHeights]) if (h < height) indexedHeights.delete(h);
+  await backend().pruneBelow(height);
 }
 
 async function buildAndStore(height: number, source: ChainSource): Promise<SharedBlock> {
@@ -303,7 +437,7 @@ async function buildAndStore(height: number, source: ChainSource): Promise<Share
 /** Download a block once. Later wallets read the saved copy. */
 export async function loadSharedBlock(height: number, source: ChainSource): Promise<SharedBlock> {
   const saved = await backend().getBlock(height);
-  if (saved) return saved;
+  if (saved && typeof saved.hash === "string") return saved;
   let job = pending.get(height);
   if (!job) {
     job = buildAndStore(height, source).finally(() => pending.delete(height));

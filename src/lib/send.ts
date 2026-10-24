@@ -249,8 +249,8 @@ export async function buildSend(args: {
   if (request.silent) {
     const vins = [];
     for (const u of selected.inputs) {
-      const parent = await args.source.getTxHex(u.txid);
-      const prev = voutFromParentHex(parent, u.vout);
+      // Our own coin: its script is already known. Not looked up, so the txid is not sent anywhere.
+      const prev = { scriptPubKey: fromHex(u.scriptPubKey) };
       const d = inputSecret(args.account, u);
       vins.push({
         txid: u.txid,
@@ -284,8 +284,8 @@ export async function buildSend(args: {
     if (selected.change > 0n) {
       const vins = [];
       for (const u of selected.inputs) {
-        const parent = await args.source.getTxHex(u.txid);
-        const prev = voutFromParentHex(parent, u.vout);
+        // Our own coin: its script is already known. Not looked up, so the txid is not sent anywhere.
+        const prev = { scriptPubKey: fromHex(u.scriptPubKey) };
         const d = inputSecret(args.account, u);
         vins.push({
           txid: u.txid,
@@ -371,8 +371,7 @@ export async function buildSplit(args: {
     index: args.coin.vout,
     witnessUtxo: { script, amount: amountIn },
   });
-  const parent = await args.source.getTxHex(args.coin.txid);
-  const prev = voutFromParentHex(parent, args.coin.vout);
+  const prev = { scriptPubKey: fromHex(args.coin.scriptPubKey) };
   const d = evenPriv(inputSecret(args.account, args.coin));
   const eligible = extractEligibleVins([
     {

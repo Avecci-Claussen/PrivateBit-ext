@@ -5,7 +5,8 @@ import { DEFAULT_OHTTP_RELAY, DEFAULT_PAYJOIN_DIRECTORY } from "../src/lib/netwo
 import { fetchDirectoryOhttp } from "../src/lib/payjoin.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 
-describe("payjo.in OHTTP live roundtrip", () => {
+// Talks to the public payjo.in directory: opt in with PRIVATEBIT_LIVE_PAYJOIN=1.
+describe.skipIf(!process.env.PRIVATEBIT_LIVE_PAYJOIN)("payjo.in OHTTP live roundtrip", () => {
   it(
     "fetches RFC 9540 keys and GETs/POSTs a mailbox through the default relay",
     { timeout: 90_000 },

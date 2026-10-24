@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   addWatch,
   applyBuiltSend,
-  confirmPendingUtxos,
   confirmedBalance,
   emptyScanStore,
   isCoinbaseTxid,
@@ -251,36 +250,6 @@ describe("scan", () => {
     const change = step.store.utxos.find((u) => u.txid === parsed.txid);
     expect(spent?.spentHeight).toBe(2);
     expect(change?.height).toBe(2);
-  });
-
-  it("fills confirming height from the source for pending local coins", async () => {
-    const txid = "ab".repeat(32);
-    const store = {
-      lastHeight: 10,
-      tip: 10,
-      utxos: [
-        {
-          txid,
-          vout: 0,
-          value: "49999889",
-          scriptPubKey: "5120" + "ab".repeat(32),
-          tweak: "cc".repeat(32),
-          label: null,
-          k: 0,
-          height: 0,
-          spent: false,
-        } satisfies LabeledUtxo,
-      ],
-    };
-    const source: ChainSource = {
-      ...fakeSource({}),
-      async getTxHeight(id) {
-        expect(id).toBe(txid);
-        return 2231838;
-      },
-    };
-    const next = await confirmPendingUtxos(source, store);
-    expect(next.utxos[0]!.height).toBe(2231838);
   });
 
   it("does not mark a block done when a tx hex fetch fails", async () => {

@@ -176,7 +176,7 @@ export function ohttpGatewayTransport(cfg: OhttpKeyConfig, directory: string): M
 export function fetchTransport(): MailboxTransport {
   return {
     async get(url) {
-      const res = await fetch(url, { method: "GET" });
+      const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(20_000) });
       const bytes = new Uint8Array(await res.arrayBuffer());
       return { status: res.status, bytes, body: utf8d.decode(bytes).trim() };
     },
@@ -186,6 +186,7 @@ export function fetchTransport(): MailboxTransport {
         method: "POST",
         headers: { "content-type": bytes.length > 1000 ? "application/octet-stream" : "text/plain" },
         body: bytes as unknown as BodyInit,
+        signal: AbortSignal.timeout(20_000),
       });
       const out = new Uint8Array(await res.arrayBuffer());
       return { status: res.status, bytes: out, body: utf8d.decode(out).trim() };
@@ -196,6 +197,7 @@ export function fetchTransport(): MailboxTransport {
         method: "PUT",
         headers: { "content-type": "application/octet-stream" },
         body: bytes as unknown as BodyInit,
+        signal: AbortSignal.timeout(20_000),
       });
       const out = new Uint8Array(await res.arrayBuffer());
       return { status: res.status, bytes: out, body: utf8d.decode(out).trim() };

@@ -7,6 +7,8 @@ import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/pref
 import { getPrice, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates } from "./lib/requests.ts";
 import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
 import { openChain } from "./lib/chain.ts";
+import { clearSharedChain } from "./lib/blockshare.ts";
+import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
 
 const kv = chromeKv();
@@ -65,17 +67,37 @@ function schedulePayjoinWake(): void {
   chrome.alarms.create(PJ_SOON, { when: Date.now() + 15_000 });
 }
 
+/** Payjoin polls on its own timer, separate from block scanning. Alarms wake a sleeping worker. */
+const PJ_POLL_MS = 10_000;
+let pjTimer: ReturnType<typeof setTimeout> | undefined;
+let pjRunning = false;
+
+function stopPayjoinTimer(): void {
+  if (pjTimer !== undefined) clearTimeout(pjTimer);
+  pjTimer = undefined;
+}
+
 async function pumpPayjoin(): Promise<void> {
+  if (pjRunning) return;
+  pjRunning = true;
+  stopPayjoinTimer();
+  let again = false;
   try {
     await wallet.loadChain();
     await wallet.servicePayjoin();
-    if (await wallet.waitingPayjoin()) schedulePayjoinWake();
-    else {
-      await chrome.alarms.clear(PJ_ALARM);
-      await chrome.alarms.clear(PJ_SOON);
-    }
+    again = await wallet.waitingPayjoin();
   } catch {
-    /* no vault yet */
+    /* no vault yet, or locked: the next alarm tries again */
+    again = await wallet.waitingPayjoin().catch(() => false);
+  } finally {
+    pjRunning = false;
+  }
+  if (again) {
+    schedulePayjoinWake();
+    pjTimer = setTimeout(() => void pumpPayjoin(), PJ_POLL_MS);
+  } else {
+    await chrome.alarms.clear(PJ_ALARM);
+    await chrome.alarms.clear(PJ_SOON);
   }
 }
 
@@ -131,6 +153,9 @@ void pumpPayjoin();
 
 let catchupTimer: ReturnType<typeof setTimeout> | undefined;
 let catchupRunning = false;
+/** Failed or stuck runs in a row. Drives exponential backoff with jitter; reset on progress. */
+let catchupFailures = 0;
+let lastProgress = "";
 
 /** Keep reading blocks in this worker. Chrome alarms cannot fire faster than about 30 seconds. */
 function kickCatchup(delayMs: number): void {
@@ -152,13 +177,19 @@ async function runCatchup(): Promise<void> {
       await wallet.loadChain();
       const progress = await wallet.followTip();
       await noteHealth();
+      const mark = `${progress.lastHeight}:${progress.height}:${progress.txIndex}`;
+      const moved = mark !== lastProgress;
+      lastProgress = mark;
+      if (moved) catchupFailures = 0;
       if (!progress.done) {
-        kickCatchup(0);
+        if (!moved) catchupFailures++;
+        kickCatchup(moved ? 0 : backoffMs(catchupFailures, 2_000, 120_000));
         chrome.alarms.create(CATCHUP_ALARM, { delayInMinutes: 0.5 });
       }
     } catch (e) {
       await noteHealth(e);
-      kickCatchup(15_000);
+      catchupFailures++;
+      kickCatchup(backoffMs(catchupFailures, 5_000, 300_000));
     }
   } finally {
     catchupRunning = false;
@@ -475,6 +506,7 @@ async function handle(msg: Msg): Promise<unknown> {
     case "REMOVE_WALLET": {
       // Only the open wallet goes. Storage is cleared completely only when it was the last one.
       const { wiped } = await wallet.removeWallet(msg.password);
+      stopPayjoinTimer();
       await chrome.alarms.clear(PJ_ALARM);
       await chrome.alarms.clear(PJ_SOON);
       await kv.remove([ACTIVITY_KEY, FEES_KEY]);
@@ -484,6 +516,8 @@ async function handle(msg: Msg): Promise<unknown> {
       }
       await chrome.storage.local.clear();
       await chrome.storage.session.clear();
+      // Downloaded blocks hold no wallet data, but nothing of PrivateBit should stay behind.
+      await clearSharedChain().catch(() => undefined);
       const left = { ...(await chrome.storage.local.get(null)), ...(await chrome.storage.session.get(null)) };
       return { wiped: true, left: Object.keys(left).length };
     }

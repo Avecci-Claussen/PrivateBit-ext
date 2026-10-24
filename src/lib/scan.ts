@@ -106,6 +106,8 @@ export function withTxHexCache(source: ChainSource, max = 512): ChainSource {
     getTip: () => source.getTip(),
     getBlockHash: (h) => source.getBlockHash(h),
     getBlockTxids: (h) => source.getBlockTxids(h),
+    // Passed through so an own node's raw blocks are used (without it, blocks came from the public explorer).
+    getBlockRaw: source.getBlockRaw ? (h) => source.getBlockRaw!(h) : undefined,
     broadcast: (hexTx) => source.broadcast(hexTx),
     estimateFeeSatPerVb: () => source.estimateFeeSatPerVb(),
     feeRates: source.feeRates ? () => source.feeRates!() : undefined,
@@ -195,13 +197,14 @@ export async function scanTransaction(
   return hits;
 }
 
+/** Every input must be listed. Matching with an input missing could miss a payment. */
 function vinsFromListed(tx: ParsedTx, listed: TxInputScript[]): RawVin[] {
   const byOutpoint = new Map(listed.map((row) => [`${row.txid}:${row.vout}`, row.scriptPubKey]));
   const raw: RawVin[] = [];
   for (const vin of tx.vin) {
     if (isCoinbaseTxid(vin.txid)) continue;
     const script = byOutpoint.get(`${vin.txid}:${vin.vout}`);
-    if (!script) continue;
+    if (!script) throw new Error(`input ${vin.txid}:${vin.vout} of ${tx.txid} not listed`);
     raw.push(toRawVin(vin, { scriptPubKey: fromHex(script) }));
   }
   return raw;
@@ -471,32 +474,6 @@ export async function applyTxHex(
   return next;
 }
 
-/** When the sequential scan missed a block, ask the source for heights of our unconfirmed coins. */
-export async function confirmPendingUtxos(source: ChainSource, store: ScanStore): Promise<ScanStore> {
-  if (!source.getTxHeight) return store;
-  const ids = new Set<string>();
-  for (const u of store.utxos) {
-    if (u.height === 0) ids.add(u.txid);
-    if (u.spent && !(u.spentHeight && u.spentHeight > 0) && u.spentBy) ids.add(u.spentBy);
-  }
-  if (ids.size === 0) return store;
-  const next = cloneStore(store);
-  for (const txid of ids) {
-    let height: number | null;
-    try {
-      height = await source.getTxHeight(txid);
-    } catch {
-      continue;
-    }
-    if (!height || height <= 0) continue;
-    for (const u of next.utxos) {
-      if (u.txid === txid) u.height = height;
-      if (u.spentBy === txid) u.spentHeight = height;
-    }
-  }
-  return next;
-}
-
 /** Match one slice of a saved block to this wallet. No network. */
 export function applySharedSlice(
   account: ScanAccount,
@@ -506,6 +483,7 @@ export function applySharedSlice(
   tip: number,
   limit = 80,
 ): { store: ScanStore; progress: ScanProgress } {
+  if (from === 0) assertExtends(store, block.height, block.prev);
   const next = cloneStore(store);
   next.tip = tip;
   const end = Math.min(block.txs.length, from + limit);
@@ -569,6 +547,7 @@ export function applySharedSlice(
   if (blockDone) {
     next.lastHeight = block.height;
     next.inflight = undefined;
+    noteBlockHash(next, block.height, block.hash);
   } else {
     next.inflight = { height: block.height, nextTx: end, txids: [], txCount: block.txs.length };
   }
@@ -628,23 +607,9 @@ export async function scanStep(
   }
 
   if (!next.inflight || next.inflight.height !== height) {
-    try {
-      next.inflight = { height, nextTx: 0, txids: await source.getBlockTxids(height) };
-    } catch (e) {
-      if (e instanceof RateLimitedError) throw e;
-      return {
-        store: next,
-        progress: {
-          done: false,
-          lastHeight: next.lastHeight,
-          tip,
-          height,
-          txIndex: 0,
-          txCount: 0,
-          skipped: 0,
-        },
-      };
-    }
+    // A failure here is thrown, not reported as "no progress": the caller backs off instead of
+    // asking again at once (that was a retry storm against a rate-limited service).
+    next.inflight = { height, nextTx: 0, txids: await source.getBlockTxids(height) };
   }
 
   const { txids } = next.inflight;
@@ -708,7 +673,12 @@ export async function scanStep(
       for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));
     } catch (e) {
       if (e instanceof RateLimitedError) throw e;
-      /* spends and our known outputs already have this block height */
+      // Input data incomplete: hold here and retry; after a few tries it waits in deferred.
+      const tries = bumpHole(next, txid, height);
+      if (tries < SCAN_HEX_TRIES) return hold(i, fetched.length - i);
+      skipped += 1;
+      cursor = start + i + 1;
+      continue;
     }
     cursor = start + i + 1;
     if ((i & 7) === 7) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -789,4 +759,61 @@ export function applyBuiltSend(store: ScanStore, txHex: string, ours: OwnedOutpu
     });
   }
   return next;
+}
+
+/** How many recent block hashes are kept for reorg detection. */
+export const RECENT_HASHES = 12;
+
+/** The chain changed under blocks we already matched. */
+export class ReorgError extends Error {
+  constructor(readonly height: number) {
+    super(`reorg below block ${height}`);
+    this.name = "ReorgError";
+  }
+}
+
+export function noteBlockHash(store: ScanStore, height: number, hash: string | undefined): void {
+  if (!hash) return;
+  const recent = (store.recent ?? []).filter((r) => r[0] < height);
+  recent.push([height, hash.toLowerCase()]);
+  store.recent = recent.slice(-RECENT_HASHES);
+}
+
+/** Block at height must sit on the block we matched at height - 1. */
+export function assertExtends(store: ScanStore, height: number, prev: string | undefined): void {
+  if (!prev) return;
+  const last = store.recent?.[store.recent.length - 1];
+  if (last && last[0] === height - 1 && last[1] !== prev.toLowerCase()) throw new ReorgError(height);
+}
+
+/**
+ * Undo everything learned from blocks at fork and above: coins found there are dropped
+ * (they come back if the new chain has them), spends seen there become unconfirmed.
+ */
+export function rollbackTo(store: ScanStore, fork: number): ScanStore {
+  const next = cloneStore(store);
+  next.utxos = next.utxos
+    .filter((u) => !(u.height >= fork))
+    .map((u) => (u.spentHeight !== undefined && u.spentHeight >= fork ? { ...u, spentHeight: 0 } : u));
+  next.lastHeight = Math.min(next.lastHeight, fork - 1);
+  next.inflight = undefined;
+  next.recent = (next.recent ?? []).filter((r) => r[0] < fork);
+  next.deferred = next.deferred?.filter((d) => d.height < fork);
+  return next;
+}
+
+/**
+ * Keep the watch list bounded. One-time address watches always stay (they are few and an
+ * address can be paid again). Others stay while a coin sits there or the caller still needs
+ * them (an open or recent payment link); the rest are dropped.
+ */
+export function pruneWatches(store: ScanStore, keep: ReadonlySet<string>, max = 400): ScanStore {
+  const live = new Set(store.utxos.filter((u) => !u.spent).map((u) => u.scriptPubKey.toLowerCase()));
+  const watch = (store.watch ?? []).filter((w) => {
+    const spk = w.scriptPubKey.toLowerCase();
+    return w.kind === "bip86" || live.has(spk) || keep.has(spk);
+  });
+  const bounded = watch.length > max ? [...watch.filter((w) => w.kind === "bip86"), ...watch.filter((w) => w.kind !== "bip86").slice(-max)] : watch;
+  if (bounded.length === (store.watch ?? []).length) return store;
+  return { ...store, watch: bounded };
 }

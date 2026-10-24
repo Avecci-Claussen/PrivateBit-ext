@@ -38,7 +38,7 @@ export async function fetchVia(
   route: RequestRoute,
   url: string,
   init: RequestInit = {},
-  fetcher: Fetcher = (u, i) => fetch(u, i),
+  fetcher: Fetcher = (u, i) => netFetchLazy(u, i),
 ): Promise<Response> {
   const res = await fetcher(routeUrl(route, url), { ...init, credentials: "omit", referrerPolicy: "no-referrer" });
   if (res.status === 429) throw new RateLimitedError();
@@ -123,4 +123,10 @@ export function checkCustomFee(rate: number, minimum: number, fast: number): Fee
   if (rate < minimum) return { ok: false, reason: "too-low" };
   if (rate > Math.max(1000, fast * 50)) return { ok: false, reason: "too-high" };
   return { ok: true };
+}
+
+/** Loaded lazily to keep requests.ts free of an import cycle with net.ts. */
+async function netFetchLazy(url: string, init?: RequestInit): Promise<Response> {
+  const { netFetch } = await import("./net.ts");
+  return netFetch(url, init);
 }

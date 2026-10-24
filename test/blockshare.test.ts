@@ -10,9 +10,11 @@ import { addWatch, applySharedSlice, emptyScanStore } from "../src/lib/scan.ts";
 import { parseTxHex } from "../src/lib/tx.ts";
 import { createMnemonic, vaultFromMnemonic } from "../src/lib/vault.ts";
 
-function blockOf(txHexes: string[]): Uint8Array {
+/** A block whose header links to `prevHash` (display order hex), so reorg checks see a chain. */
+function blockOf(txHexes: string[], prevHash?: string): Uint8Array {
   const body = txHexes.map((item) => fromHexSafe(item));
   const header = new Uint8Array(80);
+  if (prevHash) header.set(fromHexSafe(prevHash).reverse(), 4);
   return concatBytes(header, new Uint8Array([txHexes.length]), ...body);
 }
 
@@ -94,7 +96,7 @@ describe("shared blocks", () => {
     const spend = new btc.Transaction({ allowUnknownOutputs: true });
     spend.addInput({ txid, index: 0, sequence: 0xffffffff });
     spend.addOutput({ script: new Uint8Array([0x6a]), amount: 0n });
-    const spending = await buildSharedBlock(blockOf([spend.hex]), 5, async () => undefined);
+    const spending = await buildSharedBlock(blockOf([spend.hex], created.block.hash), 5, async () => undefined);
     expect(spending.block.txs).toHaveLength(1);
     const script = "5120" + "33".repeat(32);
     let store = addWatch(emptyScanStore(4), { scriptPubKey: script, tweak: "", label: null, k: 0, kind: "bip86", index: 1 });
