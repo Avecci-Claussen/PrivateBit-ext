@@ -384,7 +384,7 @@ export function openChain(cfg: ChainConfig): ChainSource {
 
 export type WatchHint = { txid: string; height: number; vout?: number; value?: string; scriptPubKey?: string };
 
-/** Parse UniSat address utxo-data. Hints only — coins are applied from the watched script. */
+/** Parse UniSat address utxo-data. Hints only: coins are applied from the watched script. */
 export function parseUnisatUtxoData(data: unknown): WatchHint[] {
   const rows = data && typeof data === "object" ? (data as { utxo?: unknown }).utxo : undefined;
   if (!Array.isArray(rows)) return [];

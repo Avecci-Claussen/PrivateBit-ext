@@ -83,7 +83,7 @@ function feToBytes(x: bigint): Uint8Array {
 }
 
 /**
- * xswiftec (BIP324) then Y from sign(t) — secp256k1_ellswift_swiftec_var.
+ * xswiftec (BIP324) then Y from sign(t): secp256k1_ellswift_swiftec_var.
  */
 export function ellswiftDecodeUncompressed(ell: Uint8Array): Uint8Array {
   if (ell.length !== 64) throw new Error("ellswift is 64 bytes");

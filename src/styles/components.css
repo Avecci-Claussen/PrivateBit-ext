@@ -28,8 +28,8 @@ svg.i.s24{width:24px;height:24px;stroke-width:1.75}
 .main.tight{gap:var(--s-3)}
 .main.center{justify-content:center}
 .foot{padding:var(--s-3) var(--s-4) var(--s-4);display:flex;flex-direction:column;gap:var(--s-2);border-top:1px solid var(--c-border);background:var(--c-bg)}
-.foot.row{flex-direction:row}
-.foot.row > *{flex:1}
+.foot.row{flex-direction:row;flex-wrap:wrap}
+.foot.row > *{flex:1 1 auto}
 .foot.plain{border-top:0}
 
 /* bottom tabs */
@@ -204,7 +204,8 @@ svg.i.s24{width:24px;height:24px;stroke-width:1.75}
 .path-k{font:var(--t-caption);color:var(--c-fg2);text-transform:uppercase;letter-spacing:.06em}
 .path-t{font:var(--t-body-strong);overflow-wrap:anywhere}
 .path-d{font:var(--t-small);color:var(--c-fg2);overflow-wrap:anywhere}
-.path-join{display:flex;align-items:center;justify-content:center;color:var(--c-fg2);padding:2px 0}
+.path-join{display:flex;align-items:center;gap:var(--s-2);color:var(--c-fg2);padding:var(--s-1) 0}
+.path-join::after{content:"";flex:1;height:1px;background:var(--c-border)}
 .path-join .i{opacity:.7}
 
 /* io (tx details) */
@@ -388,3 +389,38 @@ details.card[open] > summary::after{transform:rotate(225deg)}
 .mk-n{fill:var(--c-fg)}
 :root .qr .qmark .mk-n{fill:#110c26}:root .qr .qmark .mk-v{fill:#7c5cff}
 p.code{word-break:normal;overflow-wrap:normal}.code .g{display:inline-block;white-space:nowrap}
+
+/* wallet switcher (header chip, sidebar block, sheet list) */
+.net.static{cursor:default;padding-right:10px}
+.wchip{display:inline-flex;align-items:center;gap:6px;height:32px;min-width:0;max-width:160px;padding:0 var(--s-2) 0 10px;border-radius:var(--r-full);border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-fg);font:var(--t-body-strong);cursor:pointer}
+.wchip .wname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (min-width:420px){.wchip{max-width:260px}}
+.wchip svg{flex:none;color:var(--c-fg2)}
+.wswitch{display:flex;align-items:center;gap:var(--s-3);width:100%;min-height:56px;padding:var(--s-2) var(--s-3);border-radius:var(--r-lg);border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-fg);text-align:left;cursor:pointer}
+.wswitch .ico{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:var(--r-md);background:var(--c-accent-subtle);color:var(--c-accent-text);flex:none}
+.wswitch .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.wswitch .t{font:var(--t-body-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wswitch .d{font:var(--t-small);color:var(--c-fg2)}
+.wswitch > svg{color:var(--c-fg2);flex:none}
+@media (hover:hover) and (pointer:fine){.wchip:hover,.wswitch:hover{border-color:var(--c-border-strong);background:var(--c-surface2)}}
+.wchip:focus-visible,.wswitch:focus-visible,.wrow button:focus-visible,.wrow input:focus-visible{outline:2px solid var(--c-ring);outline-offset:2px}
+ul.list,ul.wrows{list-style:none;margin:0;padding:0}
+.wlist li + li .li{border-top:1px solid var(--c-border)}
+.wlist .li[aria-current=true] .t{color:var(--c-fg)}
+/* Wallets screen rows */
+.wrows{display:flex;flex-direction:column;gap:var(--s-3)}
+.wrow{border:1px solid var(--c-border);border-radius:var(--r-lg);background:var(--c-surface);padding:var(--s-3);display:flex;flex-direction:column;gap:var(--s-3);min-width:0}
+.wrow[data-open=true]{border-color:var(--c-accent);box-shadow:inset 0 0 0 1px var(--c-accent)}
+.wrow .top{display:flex;align-items:flex-start;gap:var(--s-3);min-width:0}
+.wrow .top .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.wrow .name{font:var(--t-body-strong);overflow-wrap:anywhere}
+.wrow .meta{font:var(--t-small);color:var(--c-fg2)}
+.wrow .acts{display:flex;flex-wrap:wrap;gap:var(--s-1);align-items:center}
+.wrow .acts .btn{padding-inline:var(--s-2)}
+.wrow .acts .danger{margin-left:auto}
+@media (max-width:479px){.wrow .acts{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr))}.wrow .acts .danger{margin-left:0}}
+.wrow .rename{display:flex;gap:var(--s-2);align-items:flex-end;flex-wrap:wrap}
+.wrow .rename .field{flex:1;min-width:160px}
+.ulist{list-style:none;margin:0;padding:0}
+.ulist .opt[aria-current=true]{border:2px solid var(--c-accent);padding:11px;background:var(--c-accent-subtle)}
+.btn.danger{color:var(--c-danger)}

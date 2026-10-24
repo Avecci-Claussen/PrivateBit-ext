@@ -1,4 +1,5 @@
 import { chromeKv } from "./chrome-kv.ts";
+import { installE2E } from "./e2e-hook.ts";
 import { jsonSafe } from "./lib/json.ts";
 import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, redactChain, type ChainConfig } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
@@ -13,6 +14,8 @@ import type { CoinMeta } from "./lib/coinmeta.ts";
 
 const kv = chromeKv();
 const wallet = new PrivateBit(kv, DEFAULT_CHAIN);
+// Browser end-to-end build only (vite build --mode e2e). Removed from the production bundle.
+if (import.meta.env.MODE === "e2e") installE2E(wallet);
 const FOLLOW_ALARM = "privatebit.follow-tip";
 const CATCHUP_ALARM = "privatebit.catchup";
 const PJ_ALARM = "privatebit.payjoin";
@@ -266,7 +269,9 @@ type Msg =
   | { type: "SERVICE_PAYJOIN" }
   | { type: "SHOW_WORDS"; password: string }
   | { type: "CHANGE_PASSWORD"; current: string; next: string }
-  | { type: "REMOVE_WALLET"; password: string };
+  | { type: "REMOVE_WALLET"; password: string; id?: string }
+  | { type: "CHECK_WALLET_PASSWORD"; id: string; password: string }
+  | { type: "RENAME_WALLET"; id: string; name: string };
 
 type Onboard = { mnemonic: string; words: 24; createdAt: number };
 
@@ -503,9 +508,16 @@ async function handle(msg: Msg): Promise<unknown> {
     case "CHANGE_PASSWORD":
       await wallet.changePassword(msg.current, msg.next);
       return null;
+    case "CHECK_WALLET_PASSWORD":
+      await wallet.checkWalletPassword(msg.id, msg.password);
+      return null;
+    case "RENAME_WALLET":
+      await wallet.renameWallet(msg.id, msg.name);
+      return bundle();
     case "REMOVE_WALLET": {
-      // Only the open wallet goes. Storage is cleared completely only when it was the last one.
-      const { wiped } = await wallet.removeWallet(msg.password);
+      // One wallet goes (the open one, or another by id). Storage is cleared only after the last.
+      const { wiped, removedOpen } = await wallet.removeWallet(msg.password, msg.id);
+      if (!removedOpen) return { wiped: false, removedOpen: false, left: (await wallet.state()).wallets?.length ?? 0 };
       stopPayjoinTimer();
       await chrome.alarms.clear(PJ_ALARM);
       await chrome.alarms.clear(PJ_SOON);

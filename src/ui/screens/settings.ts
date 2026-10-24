@@ -76,7 +76,7 @@ screens.settings = () => {
     main: html`
   <h1 style="font:var(--t-title)">Settings</h1>
   <div class="list">
-  ${row("key-round", "Wallets", `${(S.b!.state.wallets ?? []).length || 1} on this computer`, "wallets")}
+  ${row("wallet", "Wallets", (() => { const n = (S.b!.state.wallets ?? []).length || 1; return `${n} ${n === 1 ? "wallet" : "wallets"}, ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"} open`; })(), "wallets")}
   ${row("blocks", "Network and data source", c.kind === "core" ? "Fractal, your own node" : "Fractal, public block data service", "set-network")}
   ${row("sun", "Appearance", themeSummary(), "set-appearance")}
   ${row("eye-off", "Privacy", pr.usd ? "USD price, hide balance, explorer" : "USD price off, hide balance, explorer", "set-privacy")}
@@ -103,11 +103,9 @@ loaders["set-network"] = () => {
 };
 function networkForm(): Safe {
   const own = fv("src", chain().kind === "core" ? "core" : "service") === "core";
-  return html`<fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Network</legend><div class="opt-list" role="radiogroup">
-    <button class="opt" role="radio" aria-checked="true" type="button">${NETLOGO("fractal", "lg")}<span class="body"><span class="t">Fractal Bitcoin</span><span class="d">Mainnet</span></span>${I("check")}</button>
-    <button class="opt" role="radio" aria-checked="false" aria-disabled="true" type="button">${NETLOGO("btc", "lg")}<span class="body"><span class="t">Bitcoin</span><span class="d">Not available in this version</span></span><span class="plan">Unavailable</span></button></div></fieldset>
+  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("fractal", "lg")}<span class="body grow"><span class="strong" style="display:block">Fractal Bitcoin</span><span class="small muted">Mainnet. PrivateBit works on Fractal only.</span></span></div></div>
   <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Where block data comes from</legend><div class="opt-list" role="radiogroup">
-    <button class="opt" role="radio" aria-checked="${String(!own)}" type="button" data-act="set" data-k="src" data-v="service"><span class="body"><span class="t">Public block data service</span><span class="d"><span class="mono">${host(chain().kind === "core" ? DEFAULT_UNISAT_BASE : chain().url, DEFAULT_UNISAT_BASE)}</span>. Easiest. Sees your IP and the payments you broadcast.</span></span>${!own ? I("check") : ""}</button>
+    <button class="opt" role="radio" aria-checked="${String(!own)}" type="button" data-act="set" data-k="src" data-v="service"><span class="body"><span class="t">Public block data service</span><span class="d">Easiest. The service sees your IP, the blocks and fee rates you ask for, and the payments you broadcast. It is not given your receive code.</span></span>${!own ? I("check") : ""}</button>
     <button class="opt" role="radio" aria-checked="${String(own)}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own Fractal node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
   ${own
     ? html`<button class="rowlink" type="button" data-act="go" data-to="set-node"><span class="body"><span class="t">Node settings</span><span class="d">${chain().kind === "core" ? chain().url : "Not set up yet"}</span></span><span class="v">${I("chevron-right", "s16")}</span></button>`
@@ -447,18 +445,28 @@ loaders.remove = () => {
   S.f.rmpw = "";
   S.f.rmAck = false;
 };
+/** The wallet being removed: the one picked on the Wallets screen, else the open one. */
+function rmTarget() {
+  const list = S.b!.state.wallets ?? [];
+  const id = typeof S.params.id === "string" ? S.params.id : undefined;
+  return list.find((w) => w.id === id) ?? list.find((w) => w.active);
+}
 screens.remove = () => {
   const two = fv("rmStep") === "2";
-  const many = (S.b!.state.wallets ?? []).length > 1;
+  const list = S.b!.state.wallets ?? [];
+  const many = list.length > 1;
+  const t = rmTarget();
+  const isOpen = !t || t.active;
+  const name = t?.name ?? "this wallet";
   if (!two) {
     return {
       title: "Remove wallet",
       header: hdr({ title: "Remove wallet" }),
       main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("trash-2")}</div><h1>${many ? "Remove this wallet?" : "Remove PrivateBit from this computer?"}</h1><p>${many ? "This deletes the open wallet from this computer. The other wallets stay. Coins stay on the chain." : "This deletes the encrypted vault, activity history, coin labels, payment links and settings stored here. Your coins stay on the chain."}</p></div>
-  <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Only your recovery words can bring the coins back</span>Check you have them on paper before you continue. Labels you typed cannot be recovered.</div></div>
-  ${S.b!.state.payjoin ? html`<div class="banner danger">${I("hourglass", "s16")}<div>A payment link or Payjoin payment is still waiting. Removing the wallet cancels it.</div></div>` : ""}
-  <div class="field" data-enter="rm-next"><label class="label" for="rmpw">Password</label><input class="input" id="rmpw" data-f="rmpw" type="password" autocomplete="current-password" value="${fv("rmpw")}" ${err("rm") ? html`aria-invalid="true" aria-describedby="rm-e"` : ""}>${err("rm") ? html`<p class="err" id="rm-e" role="alert">${I("circle-alert", "s16")}<span>${err("rm")}</span></p>` : ""}</div>`,
+  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("trash-2")}</div><h1>${many ? `Remove ${name}?` : "Remove PrivateBit from this computer?"}</h1><p>${many ? `This deletes ${name} from this computer: its vault, activity, coin labels and payment links. The other wallets stay. Coins stay on the chain.` : "This deletes the encrypted vault, activity history, coin labels, payment links and settings stored here. Your coins stay on the chain."}</p></div>
+  <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Only the recovery words of ${name} can bring its coins back</span>Check you have them on paper before you continue. Labels you typed cannot be recovered.</div></div>
+  ${isOpen && S.b!.state.payjoin ? html`<div class="banner danger">${I("hourglass", "s16")}<div>A payment link or Payjoin payment is still waiting. Removing the wallet ends it.</div></div>` : ""}
+  <div class="field" data-enter="rm-next"><label class="label" for="rmpw">${isOpen ? "Password" : `Password of ${name}`}</label><input class="input" id="rmpw" data-f="rmpw" type="password" autocomplete="current-password" value="${fv("rmpw")}" ${err("rm") ? html`aria-invalid="true" aria-describedby="rm-e"` : ""}>${err("rm") ? html`<p class="err" id="rm-e" role="alert">${I("circle-alert", "s16")}<span>${err("rm")}</span></p>` : ""}</div>`,
       foot: html`<button class="btn btn-danger-outline btn-block" type="button" data-act="rm-next">Continue</button><button class="btn btn-ghost btn-block" type="button" data-act="back">Keep my wallet</button>`,
     };
   }
@@ -467,8 +475,8 @@ screens.remove = () => {
     title: "Remove wallet",
     header: hdr({ title: "Remove wallet" }),
     main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("triangle-alert")}</div><h1>Last check</h1><p>${(S.b!.state.wallets ?? []).length > 1 ? "After this, that wallet is gone from this computer. The others stay, locked, until you unlock one." : "After this, PrivateBit on this computer starts empty. There is no undo."}</p></div>
-  <div class="card pad-sm"><label class="check"><input type="checkbox" data-f="rmAck" ${ack ? html`checked` : ""}> <span>I have my ${S.b!.state.mnemonicWords ? `${S.b!.state.mnemonicWords} recovery words` : "recovery words"}${S.b!.state.hasPassphrase ? " and my extra passphrase" : ""} written down</span></label></div>
+  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("triangle-alert")}</div><h1>Last check</h1><p>${!many ? "After this, PrivateBit on this computer starts empty. There is no undo." : isOpen ? `After this, ${name} is gone from this computer. The others stay, locked, until you unlock one.` : `After this, ${name} is gone from this computer. ${list.find((w) => w.active)?.name ?? "The open wallet"} stays open.`}</p></div>
+  <div class="card pad-sm"><label class="check"><input type="checkbox" data-f="rmAck" ${ack ? html`checked` : ""}> <span>I have the ${t?.words ? `${t.words} recovery words` : "recovery words"}${t?.hasPassphrase ? " and the extra passphrase" : ""} of ${name} written down</span></label></div>
   ${errP("rm")}`,
     foot: html`<button class="btn btn-danger btn-block" type="button" data-act="rm-final" ${ack && !busy("rm") ? "" : html`aria-disabled="true" disabled`}>${busy("rm") ? html`${I("loader-circle", "s16 spin")}Removing…` : "Remove wallet from this computer"}</button><button class="btn btn-ghost btn-block" type="button" data-act="back">Keep my wallet</button>`,
   };
@@ -482,7 +490,9 @@ actions["rm-next"] = async () => {
   const ok = await run(
     "rm",
     async () => {
-      await call({ type: "SHOW_WORDS", password: pw });
+      const t = rmTarget();
+      if (t && !t.active) await call({ type: "CHECK_WALLET_PASSWORD", id: t.id, password: pw });
+      else await call({ type: "SHOW_WORDS", password: pw });
       return true;
     },
     "rm",
@@ -493,8 +503,16 @@ actions["rm-next"] = async () => {
   render();
 };
 actions["rm-final"] = async () => {
-  const r = await run("rm", () => call<{ left: number }>({ type: "REMOVE_WALLET", password: fv("rmpw") }), "rm");
+  const t = rmTarget();
+  const r = await run("rm", () => call<{ left: number; removedOpen?: boolean }>({ type: "REMOVE_WALLET", password: fv("rmpw"), id: t?.id }), "rm");
   if (!r) return;
+  if (r.removedOpen === false) {
+    S.f = {};
+    await refresh();
+    toast(`${t?.name ?? "Wallet"} removed from this computer.`);
+    go("wallets", {}, { reset: true });
+    return;
+  }
   S.f = {};
   S.d = {};
   await refresh();
@@ -513,24 +531,24 @@ function fullSettings(): Safe {
   return html`<div class="topbar"><h1>Settings</h1><span class="cap">Changes save when you select Save in each section</span></div>
   <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
   <div class="stack" style="gap:var(--s-8)">
-    <section class="sect" id="wallets"><header><h2>Wallets</h2><p>Several wallets can sit on this computer. One is open at a time. Each has its own password, and its own extra passphrase if you set one. A new wallet is 24 words.</p></header>
-      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("key-round", "s16")}Wallets on this computer</button></div></section>
-    <section class="sect" id="net"><header><h2>Network and data source</h2><p>Blocks are downloaded from the source below. PrivateBit matches them to your keys on this computer. A public service sees your IP, the blocks you download, and the payments you broadcast. It is not given your receive code.</p></header>
+    <section class="sect" id="wallets"><header><h2>Wallets</h2><p>Open now: <strong>${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"}</strong>. Several wallets can sit on this computer, one open at a time, each with its own password. Rename, add, import or remove them in one place.</p></header>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("wallet", "s16")}Manage wallets</button></div></section>
+    <section class="sect" id="net"><header><h2>Network and data source</h2><p>Blocks are downloaded from the source below. PrivateBit matches them to your keys on this computer.</p></header>
       ${networkForm()}
       <div class="row"><button class="btn btn-primary" type="button" data-act="net-save">Save</button></div></section>
     <section class="sect" id="ap"><header><h2>Appearance</h2><p>Dark is the default. Your choice stays on this computer.</p></header>
       <div class="field" style="max-width:420px"><p class="label" id="apf">Theme</p>${themeSeg("apf")}</div>
-      <p class="small muted"><button class="link" type="button" data-act="go" data-to="migrate">Move coins from another wallet</button></p></section>
+</section>
     <section class="sect" id="priv"><header><h2>Privacy</h2><p>Each switch says who would learn something.</p></header>${privacyList()}
       ${pr.usd ? html`<p class="small muted">USD price from <span class="mono">${PRICE_HOST}</span>, asked directly every 10 minutes while unlocked. If the price is older than 30 minutes it shows in amber with its time.</p>` : ""}</section>
-    <section class="sect" id="pj"><header><h2>Payment links</h2><p>Messages are encrypted for the other PrivateBit user. The relay hides your IP from the mailbox. Use two different operators.</p></header>
+    <section class="sect" id="pj"><header><h2>Payment links</h2><p>Two servers carry payment link messages. Each one sees only what is listed under it.</p></header>
       ${payjoinForm()}
       <div class="row"><button class="btn btn-primary" type="button" data-act="pj-save">Save</button></div></section>
     <section class="sect" id="sec"><header><h2>Security</h2><p>Lock deletes payment link keys. Auto lock waits while a payment is in progress.</p></header>
       <div class="field"><span class="label" id="alf">Lock after no use for</span><div style="max-width:420px">${lockSeg("alf")}</div><p class="help">Waits while a payment link or Payjoin payment is in progress.</p></div>
-      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove wallet</button></div></section>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "wallet"}</button></div></section>
     <section class="sect" id="bk"><header><h2>Backup and finding coins</h2><p>Your recovery words restore everything except the labels you typed.</p></header>
-      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button></div>
+      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>
       <p class="cap">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p></section>
   </div></div>`;
 }

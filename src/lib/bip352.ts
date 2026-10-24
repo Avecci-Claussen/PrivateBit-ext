@@ -285,7 +285,7 @@ export function precomputeLabels(scanSecret: Uint8Array, labels: Iterable<number
 }
 
 /**
- * detectOurUtxos — trial t_k against taproot x-only outputs.
+ * detectOurUtxos: trial t_k against taproot x-only outputs.
  * `outputs` are 32-byte x-only keys (or 33-byte compressed).
  */
 export function detectOurUtxos(args: {

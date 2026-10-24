@@ -16,3 +16,4 @@ tr.sel td{background:var(--c-surface2)}
 details > summary{list-style-position:inside}
 button.action{padding:0 4px}
 .panel .li .t{white-space:normal}
+.fp-overlay .sheet .grab{display:none}

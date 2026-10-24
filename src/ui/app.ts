@@ -144,11 +144,17 @@ export async function refreshUntilReady(tries = 20): Promise<boolean> {
   return !!S.b;
 }
 
+let lastMarkup = "";
 export function render(): void {
   if (!root) return;
   const fn = screens[S.route] ?? screens.boot!;
   const view = fn();
   document.title = `PrivateBit: ${view.title}`;
+  const markup = renderer(view);
+  // The 2 s background refresh re-renders every screen. When nothing changed, keep the DOM:
+  // replacing it would move keyboard and screen reader focus and drop a click in flight.
+  if (markup === lastMarkup && root.firstChild) return;
+  lastMarkup = markup;
   const active = document.activeElement as HTMLElement | null;
   const id = active?.id;
   const sel =
@@ -158,7 +164,7 @@ export function render(): void {
   const scroller = document.getElementById("main");
   const st = scroller?.scrollTop ?? 0;
   const winY = window.scrollY;
-  root.innerHTML = renderer(view);
+  root.innerHTML = markup;
   const m2 = document.getElementById("main");
   if (m2) m2.scrollTop = st;
   if (S.mode === "full") window.scrollTo(0, winY);

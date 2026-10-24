@@ -2402,13 +2402,42 @@ export class PrivateBit {
     await this.remember(core);
   }
 
+  /** Check one wallet's password without opening it. */
+  async checkWalletPassword(id: string, password: string): Promise<void> {
+    const open = await this.core();
+    const core = id === open.walletId ? open : this.coreFor(id);
+    try {
+      await core.checkPassword(password);
+    } finally {
+      if (core !== open) core.close();
+    }
+  }
+
   /**
-   * Remove the open wallet only. The others stay, and one of them is opened (locked).
-   * Removing the last wallet wipes every PrivateBit key; wiped tells the caller.
+   * Remove one wallet: the open one by default, or another by id (its own password).
+   * The others stay. Removing the open wallet opens another one, locked. Removing the last
+   * wallet wipes every PrivateBit key; wiped tells the caller.
    */
-  async removeWallet(password: string): Promise<{ wiped: boolean }> {
+  async removeWallet(password: string, id?: string): Promise<{ wiped: boolean; removedOpen: boolean }> {
+    const open = await this.core();
+    if (id && id !== open.walletId) {
+      const index = await this.index();
+      if (!index || !index.wallets.some((w) => w.id === id)) throw new Error("no such wallet");
+      await this.checkWalletPassword(id, password);
+      const other = this.coreFor(id);
+      await other.cancelOpenPayjoins("wallet removed").catch(() => undefined);
+      await other.deleteOwnKeys();
+      await this.root.remove(walletKeys(id));
+      await saveIndex(this.root, { ...index, wallets: index.wallets.filter((w) => w.id !== id) });
+      return { wiped: false, removedOpen: false };
+    }
+    return { ...(await this.removeOpenWallet(password)), removedOpen: true };
+  }
+
+  private async removeOpenWallet(password: string): Promise<{ wiped: boolean }> {
     const core = await this.core();
     await core.checkPassword(password);
+    await core.cancelOpenPayjoins("wallet removed").catch(() => undefined);
     const index = await this.index();
     const ids = new Set([core.walletId, ...(index?.wallets ?? []).map((w) => w.id)]);
     if (!index || index.wallets.length <= 1) {

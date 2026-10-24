@@ -11,7 +11,7 @@ export const FRACTAL = {
   name: "Fractal Bitcoin",
   chainId: FRACTAL_CHAIN_ID,
   coinType: FRACTAL_COIN_TYPE,
-  /** BIP352 v0 HRP. UI must always say Fractal — this collides with BTC sp1. */
+  /** BIP352 v0 HRP. UI must always say Fractal: this collides with BTC sp1. */
   spHrp: "sp",
   bech32: "bc",
   pubKeyHash: 0x00,

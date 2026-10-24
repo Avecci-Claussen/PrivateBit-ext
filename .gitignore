@@ -6,3 +6,4 @@ dist/
 .env.local
 .env.*.local
 secrets.local.ts
+dist-e2e/

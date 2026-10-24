@@ -188,7 +188,7 @@ function dangerousSighash(t: number | undefined): boolean {
 /**
  * BIP78 sender checklist (unsecured directory / pjos=0).
  * Original outputs must remain a subsequence: same scripts, amounts not decreased.
- * That is payment-output substitution disabled — a malicious mailbox cannot redirect the pay.
+ * That is payment-output substitution disabled: a malicious mailbox cannot redirect the pay.
  */
 export function validatePayjoinProposal(proposalB64: string, originalB64: string): string[] {
   const bad: string[] = [];

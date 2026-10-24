@@ -8,12 +8,18 @@ export default defineConfig({
   envPrefix: "PRIVATEBIT_BUILD_NEVER_",
   publicDir: "public",
   plugins: [
-    {
-      name: "copy-manifest",
-      closeBundle() {
-        copyFileSync(resolve(__dirname, "manifest.json"), resolve(__dirname, "dist/manifest.json"));
-      },
-    },
+    (() => {
+      let outDir = resolve(__dirname, "dist");
+      return {
+        name: "copy-manifest",
+        configResolved(cfg: { build: { outDir: string } }) {
+          outDir = resolve(__dirname, cfg.build.outDir);
+        },
+        closeBundle() {
+          copyFileSync(resolve(__dirname, "manifest.json"), resolve(outDir, "manifest.json"));
+        },
+      };
+    })(),
   ],
   build: {
     outDir: "dist",

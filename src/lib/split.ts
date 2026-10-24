@@ -53,7 +53,7 @@ export function checkSplit(amounts: bigint[], spendable: bigint): SplitCheck {
   return { ok: true, amounts };
 }
 
-/** Fisher–Yates. Entropy is supplied at the moment the user hits Shuffle, not earlier. */
+/** Fisher-Yates. Entropy is supplied at the moment the user hits Shuffle, not earlier. */
 export function shufflePieces<T>(items: T[], entropy: Uint8Array): T[] {
   if (items.length < 2) return items.slice();
   if (entropy.length < items.length) throw new Error("shuffle entropy too short");

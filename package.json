@@ -6,6 +6,7 @@
   "description": "Private Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
   "scripts": {
     "build": "tsc --noEmit && vite build && node scripts/check-dist.mjs dist",
+    "build:e2e": "vite build --mode e2e --outDir dist-e2e",
     "check:dist": "node scripts/check-dist.mjs dist",
     "test": "vitest run",
     "test:watch": "vitest",

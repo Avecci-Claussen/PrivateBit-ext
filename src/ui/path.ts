@@ -8,7 +8,7 @@ export function pathPreview(from: PathLeg, to: PathLeg): Safe {
     html`<div class="path-leg"><span class="path-k">${k}</span><span class="path-t">${p.title}</span>${p.sub ? html`<span class="path-d">${p.sub}</span>` : ""}</div>`;
   return html`<div class="card path" aria-label="From and to">
   ${leg("From", from)}
-  <div class="path-join" aria-hidden="true">${I("arrow-down-left", "s16")}</div>
+  <div class="path-join" aria-hidden="true">${I("arrow-down", "s16")}</div>
   ${leg("To", to)}
 </div>`;
 }

@@ -202,7 +202,7 @@ function progress(s: SessionView, H: Safe) {
     header: hdr({ title: "Payment link", net: true, right: html`<span class="badge">${I("loader-circle", "spin")}Working</span>` }),
     main: html`
   <div class="hero-amt"><p class="cap">Incoming</p><p class="a">${amt ? fbShort(amt, { unit: false }) : "Payment"}${amt ? html`<span class="unit"> FB</span>` : ""}</p>${amt && usd(amt) ? html`<p class="fiat">${usd(amt)}</p>` : ""}</div>
-  ${pathPreview({ title: "Them", sub: "They sent their part, encrypted" }, { title: "You", sub: "Your coin is being added" })}
+  ${pathPreview({ title: "Them", sub: "They sent their part, encrypted" }, { title: "You", sub: "Your coin is added and signed" })}
   <ol class="steps" aria-label="Payment progress">
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Link shared</p><p class="sd">${when(s.createdAt)}</p></div></li>
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Payer sent their part</p><p class="sd">Encrypted. The mailbox could not read it.</p></div></li>

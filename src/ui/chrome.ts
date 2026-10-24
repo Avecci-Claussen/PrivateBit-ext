@@ -2,8 +2,29 @@ import { S, type View, type Foot } from "./app.ts";
 import { html, I, MARK, NETLOGO, raw, fbShort, type Safe } from "./kit.ts";
 import { status } from "./derive.ts";
 
+/** PrivateBit runs on Fractal Bitcoin only, so the network is a label, not a menu. */
 export function netChip(): Safe {
-  return html`<button class="net" type="button" data-act="sheet" data-sheet="network" aria-haspopup="dialog" aria-label="Network: Fractal Bitcoin. Change network">${NETLOGO("fractal")}Fractal${I("chevron-down", "s16")}</button>`;
+  return html`<span class="net static" title="Fractal Bitcoin">${NETLOGO("fractal")}Fractal</span>`;
+}
+
+type WalletRow = NonNullable<NonNullable<typeof S.b>["state"]["wallets"]>[number];
+export function openWallet(): WalletRow | undefined {
+  return S.b?.state.wallets?.find((w) => w.active);
+}
+/** Name of the open wallet, shown wherever you could act on the wrong one. */
+export function walletName(): string {
+  return openWallet()?.name ?? "Wallet";
+}
+/** Header switcher: the open wallet's name; opens the wallet list. */
+export function walletChip(): Safe {
+  const n = walletName();
+  return html`<button class="wchip" type="button" data-act="sheet" data-sheet="wallets" aria-haspopup="dialog" aria-label="Open wallet: ${n}. Switch wallet">${I("wallet", "s16")}<span class="wname">${n}</span>${I("chevron-down", "s16")}</button>`;
+}
+/** Full page sidebar switcher: name and how many wallets sit on this computer. */
+function walletSwitch(): Safe {
+  const n = walletName();
+  const count = S.b?.state.wallets?.length ?? 1;
+  return html`<button class="wswitch" type="button" data-act="sheet" data-sheet="wallets" aria-haspopup="dialog" aria-label="Open wallet: ${n}. Switch wallet"><span class="ico">${I("wallet", "s16")}</span><span class="body"><span class="t">${n}</span><span class="d">${count === 1 ? "1 wallet on this computer" : `${count} wallets on this computer`}</span></span>${I("chevrons-up-down", "s16")}</button>`;
 }
 
 const PSTAT: Record<string, [string, string, string]> = {
@@ -22,7 +43,7 @@ export function hdr(o: { title?: string; back?: boolean; net?: boolean; right?: 
   if (o.title !== undefined) {
     return html`<header class="hdr">${o.back !== false ? html`<button class="icon-btn back" type="button" data-act="back" aria-label="Back">${I("arrow-left")}</button>` : ""}<h1 class="hdr-title">${o.title}</h1>${o.net ? netChip() : ""}${o.right ?? ""}${o.close ? html`<button class="icon-btn" type="button" data-act="home" aria-label="Close">${I("x")}</button>` : ""}</header>`;
   }
-  return html`<header class="hdr">${MARK(24)}${netChip()}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="lock" aria-label="Lock wallet">${I("lock")}</button></header>`;
+  return html`<header class="hdr">${MARK(24)}${walletChip()}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="lock" aria-label="Lock wallet">${I("lock")}</button></header>`;
 }
 
 export function tabs(active: string): Safe {
@@ -91,9 +112,9 @@ export function fullHtml(v: View): string {
     ? v.page.s
     : html`<div class="topbar"><h1>${v.title}</h1></div><section class="panel flowpanel">${v.main}${v.foot ? raw(footHtml(v.foot).replace('class="foot', 'class="foot inpanel')) : ""}</section>`.s;
   const side = html`<aside class="side"><div class="brandrow">${MARK(28, false)}<span class="wordmark">PrivateBit</span></div>
-  <div>${netChip()}</div>${sideNav()}
+  ${walletSwitch()}<div>${netChip()}</div>${sideNav()}
   <div class="foot-s">${pstat()}<button class="btn btn-secondary btn-sm" type="button" data-act="lock">${I("lock", "s16")}Lock</button></div></aside>`;
-  const mbar = html`<div class="mobilebar">${MARK(24, false)}${netChip()}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="sheet" data-sheet="menu" aria-label="Open menu" aria-haspopup="dialog">${I("menu")}</button></div>`;
+  const mbar = html`<div class="mobilebar">${MARK(24, false)}${walletChip()}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="sheet" data-sheet="menu" aria-label="Open menu" aria-haspopup="dialog">${I("menu")}</button></div>`;
   const ov = overlayFor(v);
   const app = `<div class="app">${side.s}<div style="min-width:0">${mbar.s}<main class="content" id="main">${inner}</main></div></div>`;
   return `${ov ? `<div inert>${app}</div><div class="fp-overlay">${ov}</div>` : app}${toastHtml() ? `<div class="fp-toast">${toastHtml()}</div>` : ""}`;
@@ -107,17 +128,23 @@ function sheet(id: string, title: string, body: Safe): Safe {
 }
 
 export const sheets: Record<string, () => Safe> = {
-  network: () => {
-    const st = S.b?.state;
-    const bal = st?.unlocked ? `${fbShort(st.balance ?? "0")}. ` : "";
+  wallets: () => {
+    const list = S.b?.state.wallets ?? [];
     return sheet(
-      "ns-h",
-      "Network",
-      html`<div class="opt-list" role="radiogroup" aria-labelledby="ns-h">
-    <button class="opt" role="radio" aria-checked="true" type="button" data-act="sheet-close">${NETLOGO("fractal", "lg")}<span class="body"><span class="t">Fractal Bitcoin</span><span class="d">${bal}Blocks every 30 seconds.</span></span>${I("check")}</button>
-    <button class="opt" role="radio" aria-checked="false" aria-disabled="true" type="button">${NETLOGO("btc", "lg")}<span class="body"><span class="t">Bitcoin</span><span class="d">Not available in this version.</span></span><span class="plan">Unavailable</span></button>
-  </div>`,
+      "ws-h",
+      "Wallets",
+      html`<ul class="list wlist" aria-labelledby="ws-h">${list.map((w) => html`<li><button class="li" type="button" data-act="wallet-switch" data-id="${w.id}" ${w.active ? raw('aria-current="true"') : ""}><span class="ico">${I("wallet")}</span><span class="body"><span class="t">${w.name}</span><span class="d">${w.active ? "Open now" : "Switch and unlock"}</span></span>${w.active ? I("check", "s16") : I("chevron-right", "s16 chev")}</button></li>`)}</ul>
+  <button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="wallets">${I("settings", "s16")}Manage wallets</button>`,
     );
+  },
+  switchwarn: () => {
+    const p = S.b?.state.payjoin;
+    const to = (S.b?.state.wallets ?? []).find((w) => w.id === S.f.switchTo)?.name ?? "the other wallet";
+    const what = p?.role === "send" ? "A Payjoin payment is still waiting." : "A payment link is still open.";
+    return html`<div class="scrim" aria-hidden="true"></div><div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="sw-h" aria-describedby="sw-d">
+  <span class="ico warn">${I("triangle-alert")}</span><h2 id="sw-h">Switch to ${to} and end the payment?</h2>
+  <p id="sw-d" class="small muted">${what} Switching ends it and deletes its keys, so it cannot finish. ${walletName()} locks. Nothing is broadcast.</p>
+  <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="sheet-close">Stay in ${walletName()}</button><button class="btn btn-danger-outline btn-block" type="button" data-act="wallet-switch-force">Switch and end payment</button></div></div>`;
   },
   privacy: () => {
     const h = S.b?.health;

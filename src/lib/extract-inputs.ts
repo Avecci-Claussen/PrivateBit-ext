@@ -135,7 +135,7 @@ export function extractEligibleVins(vins: RawVin[]): EligibleVin[] | null {
       continue;
     }
 
-    // P2SH: a9 14 {20} 87  — nested P2WPKH redeem 00 14 {20}
+    // P2SH: a9 14 {20} 87 : nested P2WPKH redeem 00 14 {20}
     if (spk.length === 23 && spk[0] === 0xa9 && spk[1] === 0x14 && spk[22] === 0x87) {
       const redeem = scriptSig.length > 1 ? scriptSig.slice(1) : scriptSig;
       const nestedP2wpkh =
