@@ -543,6 +543,7 @@ export class WalletCore {
       chainMoved = true;
     }
     if (scanMoved || chainMoved) await this.loadChain();
+    await this.sealPlainSessions();
     return { scan: scanMoved, chain: chainMoved };
   }
 
@@ -776,6 +777,17 @@ export class WalletCore {
     await this.writeGrant(unlocked);
     await this.retireStaleBackup(unlocked, password);
     await this.migrateAtRest();
+    await this.afterUnlock();
+  }
+
+  /** Work that waited for the data key: link deadlines and payments found while locked. */
+  private async afterUnlock(): Promise<void> {
+    try {
+      await this.closeExpired();
+      await this.notePayjoinPaid(await this.loadScan());
+    } catch {
+      /* the next scan step runs it again */
+    }
   }
 
   /** Check the password without changing anything (backup screen, remove wallet). */
@@ -827,6 +839,7 @@ export class WalletCore {
     await saveSession(this.kv, unlocked);
     await this.writeGrant(unlocked);
     await this.migrateAtRest();
+    await this.afterUnlock();
   }
 
   /**
@@ -881,21 +894,24 @@ export class WalletCore {
       }
     }
     this.cancelScan();
+    if (await this.dataKey()) {
+      // Done while the data key is still there: the sessions are sealed with it.
+      const sessions = await this.loadPayjoinSessions();
+      let dirty = false;
+      for (const s of sessions) {
+        if (s.inputSecret) {
+          s.inputSecret = undefined;
+          dirty = true;
+        }
+      }
+      if (dirty) await this.savePayjoinSessions(sessions);
+    }
     this.keyCache = undefined;
     this.sessionCache = undefined;
     this.accountCache = undefined;
     await clearSession(this.kv);
     await this.clearHpkeSecrets();
     await this.kv.remove([PJ_SEND]);
-    const sessions = await this.loadPayjoinSessions();
-    let dirty = false;
-    for (const s of sessions) {
-      if (s.inputSecret) {
-        s.inputSecret = undefined;
-        dirty = true;
-      }
-    }
-    if (dirty) await this.savePayjoinSessions(sessions);
   }
 
   async requireAccount(): Promise<{ vault: UnlockedVault; account: Account; scan: ScanStore }> {
@@ -1119,10 +1135,13 @@ export class WalletCore {
   }
 
   /** Scripts of payment links that are open, or closed less than a week ago. */
-  private async watchesToKeep(): Promise<Set<string>> {
+  private async watchesToKeep(): Promise<Set<string> | null> {
     const keep = new Set<string>();
     const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    for (const s of await this.loadPayjoinSessions()) {
+    // Locked in the meantime: the sessions cannot be read, so nothing is pruned this time.
+    const sessions = await this.readPayjoinSessions();
+    if (!sessions) return null;
+    for (const s of sessions) {
       const open = s.status === "waiting" || s.status === "proposed";
       if (open || (s.closedAt ?? s.expiresAt ?? 0) > weekAgo) {
         if (s.scriptPubKey) keep.add(s.scriptPubKey.toLowerCase());
@@ -1418,6 +1437,9 @@ export class WalletCore {
   }
 
   private async notePayjoinPaid(scan: ScanStore): Promise<void> {
+    // Locked: the coins are still found (their scripts are in the coin list); the link is
+    // marked paid at the next unlock, which runs this again.
+    if (!(await this.dataKey())) return;
     // Receiver Payjoin: done when the proposal's txid shows up (our reserved coin spent by it,
     // or one of its outputs found), or when the link's address is paid at all. A link that
     // ended without payment in the last week is still matched, for a payer who broadcast late.
@@ -1912,13 +1934,40 @@ export class WalletCore {
     await this.kv.remove([...V1_LIVE_KEYS, "privatebit.session", SCAN_GRANT_KEY]);
   }
 
-  async loadPayjoinSessions(): Promise<PayjoinReceiveSession[]> {
-    const got = await this.kv.get([PJ_SESSIONS]);
-    return (got[PJ_SESSIONS] as PayjoinReceiveSession[]) ?? [];
+  /**
+   * Payment link sessions, sealed with the data key (audit M7): they hold the link's tweaks,
+   * scripts and the reserved coin. Null when they cannot be read (locked). A plaintext copy
+   * from an older build is still read, and sealed as soon as the data key is there.
+   */
+  private async readPayjoinSessions(): Promise<PayjoinReceiveSession[] | null> {
+    const got = await this.loadSealed<PayjoinReceiveSession[]>(PJ_SESSIONS, () => []);
+    if (got.status === "ok" || got.status === "missing") return got.value;
+    if (got.status === "plain") {
+      if (await this.dataKey()) await this.sealPlainSessions();
+      return got.value;
+    }
+    return null;
   }
 
+  async loadPayjoinSessions(): Promise<PayjoinReceiveSession[]> {
+    return (await this.readPayjoinSessions()) ?? [];
+  }
+
+  /** Needs the data key: while locked nothing about payment links is written. */
   async savePayjoinSessions(sessions: PayjoinReceiveSession[]): Promise<void> {
-    await this.kv.set({ [PJ_SESSIONS]: sessions });
+    await this.saveSealed(PJ_SESSIONS, sessions);
+  }
+
+  /** Seal a plaintext session list in place. The sealed copy is checked before it replaces the plain one. */
+  private async sealPlainSessions(): Promise<boolean> {
+    const key = await this.dataKey();
+    const raw = (await this.kv.get([PJ_SESSIONS]))[PJ_SESSIONS];
+    if (!key || raw === undefined || raw === null || isSealed(raw)) return false;
+    const sealed = sealJson(key, PJ_SESSIONS, raw);
+    if (JSON.stringify(openJson(key, PJ_SESSIONS, sealed)) !== JSON.stringify(raw)) throw new Error("session migration check failed");
+    // Same key: the plaintext value is overwritten, not left next to the sealed one.
+    await this.kv.set({ [PJ_SESSIONS]: sealed });
+    return true;
   }
 
   /**
@@ -2010,6 +2059,8 @@ export class WalletCore {
 
   /** Open sessions past their deadline end: a link that was never paid, a proposal never broadcast. */
   private async closeExpired(): Promise<void> {
+    // Locked: deadlines are applied at the next unlock (the link's keys are gone anyway).
+    if (!(await this.dataKey())) return;
     const now = Date.now();
     const sessions = await this.loadPayjoinSessions();
     const gone: string[] = [];

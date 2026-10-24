@@ -322,7 +322,8 @@ describe("BIP77 two-party Payjoin", () => {
     await expect(alice.w.requireAccount()).rejects.toThrow(/locked/);
     const whileLocked = await alice.w.servicePayjoin();
     expect(whileLocked.processed).toBe(0);
-    expect((await alice.w.loadPayjoinSessions())[0]?.status).toBe("waiting");
+    // Sessions are sealed with the data key (audit M7): nothing is readable while locked.
+    expect(await alice.w.loadPayjoinSessions()).toEqual([]);
 
     await alice.w.unlock("pw");
     const serviced = await alice.w.servicePayjoin();
