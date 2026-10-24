@@ -1,4 +1,5 @@
 import type { Kv } from "./lib/vault.ts";
+import { baseName } from "./lib/layout.ts";
 
 const SESSION_KEYS = new Set([
   "privatebit.session",
@@ -25,7 +26,7 @@ export function chromeKv(): Kv {
       const session: Record<string, unknown> = {};
       const local: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(items)) {
-        (SESSION_KEYS.has(k) ? session : local)[k] = v;
+        (SESSION_KEYS.has(baseName(k)) ? session : local)[k] = v;
       }
       if (Object.keys(local).length) await chrome.storage.local.set(local);
       if (Object.keys(session).length) await chrome.storage.session.set(session);

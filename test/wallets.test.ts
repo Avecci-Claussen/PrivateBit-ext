@@ -99,10 +99,12 @@ describe("several wallets", () => {
     });
     const mine = coinFor((await w.requireAccount()).account, "bb".repeat(32), "7");
     const mixed = await w.loadScan();
+    // Separate namespaces: nothing of the first wallet is visible here.
+    expect(mixed.utxos).toEqual([]);
     mixed.lastHeight = 500_100;
-    mixed.utxos.push(structuredClone(theirs), mine);
+    mixed.utxos.push(mine);
     await w.saveScan(mixed);
-    expect((await w.state()).balance).toBe("49");
+    expect((await w.state()).balance).toBe("7");
 
     await w.lock();
     await w.unlock("two");

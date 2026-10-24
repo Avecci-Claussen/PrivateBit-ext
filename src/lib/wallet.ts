@@ -83,17 +83,21 @@ import {
 import { createMnemonic } from "./vault.ts";
 import { deriveDataKey, deriveScanKey, isSealed, openJson, sealJson } from "./datastore.ts";
 import {
-  ensureIndex,
+  WALLET_SCOPED,
+  GLOBAL_KEYS,
   INDEX_KEY,
-  LIVE_KEYS,
+  LEGACY_ID,
   loadIndex,
-  MOUNTED_KEY,
-  packKey,
+  migrateLayout,
   saveIndex,
-  stagePack,
-  switchWallet as mountWallet,
+  scopedKv,
+  V1_LIVE_KEYS,
+  V1_MOUNTED_KEY,
+  v1PackKey,
+  walletKeys,
   type WalletEntry,
-} from "./wallets.ts";
+  type WalletIndex,
+} from "./layout.ts";
 import {
   carryCoinMeta,
   coinStatus,
@@ -229,31 +233,6 @@ const CHAIN_SECRETS_KEY = "privatebit.chain.secrets";
 const HISTORY_KEY = "privatebit.history";
 const COINMETA_KEY = "privatebit.coinmeta";
 const ONETIME_KEY = "privatebit.onetime";
-/** Every storage key this wallet may write, so Remove wallet can prove nothing is left. */
-export const ALL_KEYS = [
-  "privatebit.vault",
-  "privatebit.vault.bak",
-  "privatebit.session",
-  SCAN_GRANT_KEY,
-  SCAN_KEY,
-  CHAIN_KEY,
-  CHAIN_SECRETS_KEY,
-  HISTORY_KEY,
-  COINMETA_KEY,
-  ONETIME_KEY,
-  "privatebit.prefs",
-  "privatebit.price",
-  "privatebit.activity",
-  "privatebit.lockinfo",
-  "privatebit.health",
-  "privatebit.onboard",
-  "privatebit.fees",
-  "privatebit.pj.sessions",
-  "privatebit.pj.send",
-  "privatebit.pj.hpke",
-  INDEX_KEY,
-  MOUNTED_KEY,
-];
 /** Sealed with the scan key, which block matching keeps after Lock. Everything else uses the data key. */
 const SCAN_SEALED = new Set([SCAN_KEY, CHAIN_SECRETS_KEY]);
 const PJ_SEND = "privatebit.pj.send";
@@ -273,18 +252,58 @@ function encodeP2tr(xonly: Uint8Array): string {
 
 type ScanMark = { epoch: number; spendPub: string };
 
-export class PrivateBit {
+/** Test hooks shared by every wallet on one PrivateBit. */
+export type CoreHooks = {
   /** Tests inject MemoryDirectory.ohttpTransport(). Production uses fetch. */
   mailboxTransport?: MailboxTransport;
   /** Tests inject the directory's OHTTP public config so RK URIs include OH. */
   ohttpConfig?: OhttpKeyConfig;
   /** Tests inject a mock chain. Production uses UniSat / Core. */
   sourceOverride?: ChainSource;
+};
 
+/**
+ * One wallet. Its Kv is scoped to its own namespace (layout.ts), so everything it reads and
+ * writes, including from a scan or Payjoin that outlives a switch, stays inside that wallet.
+ * PrivateBit (below) owns the directory and decides which WalletCore is open.
+ */
+export class WalletCore {
   constructor(
     readonly kv: Kv,
     public chainCfg: ChainConfig = DEFAULT_CHAIN,
+    readonly hooks: CoreHooks = {},
+    readonly walletId: string = LEGACY_ID,
   ) {}
+
+  get mailboxTransport(): MailboxTransport | undefined {
+    return this.hooks.mailboxTransport;
+  }
+  get ohttpConfig(): OhttpKeyConfig | undefined {
+    return this.hooks.ohttpConfig;
+  }
+  set ohttpConfig(v: OhttpKeyConfig | undefined) {
+    this.hooks.ohttpConfig = v;
+  }
+  get sourceOverride(): ChainSource | undefined {
+    return this.hooks.sourceOverride;
+  }
+
+  /** Lock and drop the scan grant: only the open wallet matches blocks. */
+  async closeForSwitch(): Promise<void> {
+    await this.lock();
+    await this.kv.remove([SCAN_GRANT_KEY]);
+    this.close();
+  }
+
+  /** Bumped by PrivateBit when this wallet is closed, so its scan stops at the next check. */
+  close(): void {
+    this.walletEpoch += 1;
+    this.keyCache = undefined;
+    this.grantCache = undefined;
+    this.sessionCache = undefined;
+    this.accountCache = undefined;
+    this.scanHex = undefined;
+  }
 
   /** Keys for the unlocked wallet, derived once per session. Dropped at Lock. */
   private keyCache?: { sig: string; key: Uint8Array; scanKey: Uint8Array; spendPub: string };
@@ -325,11 +344,37 @@ export class PrivateBit {
     return run;
   }
 
-  private keysFor(session: UnlockedVault): NonNullable<PrivateBit["keyCache"]> {
+  /** Session words turned into a seed once (BIP39 PBKDF2 is slow), reused until the session changes. */
+  private sessionCache?: { raw: string; vault: UnlockedVault };
+
+  private async session(): Promise<UnlockedVault | null> {
+    const raw = (await this.kv.get(["privatebit.session"]))["privatebit.session"];
+    if (!raw) {
+      this.sessionCache = undefined;
+      return null;
+    }
+    const text = JSON.stringify(raw);
+    if (this.sessionCache?.raw === text) return this.sessionCache.vault;
+    const vault = await loadSession(this.kv);
+    if (!vault) return null;
+    this.sessionCache = { raw: text, vault };
+    return vault;
+  }
+
+  /** Full account (spend key included) derived once per session. */
+  private accountCache?: { vault: UnlockedVault; account: Account };
+  private accountOf(vault: UnlockedVault): Account {
+    if (this.accountCache?.vault === vault) return this.accountCache.account;
+    const account = accountFromVault(vault);
+    this.accountCache = { vault, account };
+    return account;
+  }
+
+  private keysFor(session: UnlockedVault): NonNullable<WalletCore["keyCache"]> {
     const sig = `${session.mnemonic}\n${session.passphrase}`;
     const c = this.keyCache;
     if (c && c.sig === sig) return c;
-    const account = accountFromVault(session);
+    const account = this.accountOf(session);
     const next = { sig, key: deriveDataKey(session.seed), scanKey: deriveScanKey(session.seed), spendPub: hex(account.spendPub) };
     this.keyCache = next;
     return next;
@@ -337,7 +382,7 @@ export class PrivateBit {
 
   /** Data key for history, labels, frozen marks and Payjoin. Only while unlocked. */
   async dataKey(): Promise<Uint8Array | null> {
-    const session = await loadSession(this.kv);
+    const session = await this.session();
     if (!session) {
       this.keyCache = undefined;
       return null;
@@ -346,7 +391,7 @@ export class PrivateBit {
   }
 
   /** Scan-only keys kept for matching after Lock. */
-  private async grant(): Promise<NonNullable<PrivateBit["grantCache"]> | null> {
+  private async grant(): Promise<NonNullable<WalletCore["grantCache"]> | null> {
     const g = await loadScanGrant(this.kv);
     if (!g) {
       this.grantCache = undefined;
@@ -366,7 +411,7 @@ export class PrivateBit {
 
   /** Key for the coin list and chain settings. Unlocked, or after Lock from the scan grant. */
   async scanKey(): Promise<Uint8Array | null> {
-    const session = await loadSession(this.kv);
+    const session = await this.session();
     if (session) return this.keysFor(session).scanKey;
     return (await this.grant())?.key ?? null;
   }
@@ -504,44 +549,9 @@ export class PrivateBit {
     return this.sourceOverride ?? openChain(this.chainCfg);
   }
 
-  private async walletSummaries(): Promise<WalletState["wallets"]> {
-    const index = await ensureIndex(this.kv);
-    if (!index) return undefined;
-    return index.wallets.map((w) => ({
-      id: w.id,
-      name: w.name,
-      active: w.id === index.active,
-      birthday: w.birthday,
-      words: w.words,
-      hasPassphrase: w.hasPassphrase,
-      checked: w.checked,
-    }));
-  }
-
-  /** Remember word count and passphrase presence for the open wallet. Never stores the words. */
-  private async rememberOpen(name?: string): Promise<void> {
-    const blob = await loadVaultBlob(this.kv);
-    const index = await ensureIndex(this.kv);
-    if (!blob || !index) return;
-    const session = await loadSession(this.kv);
-    const words = session ? session.mnemonic.trim().split(/\s+/).length : undefined;
-    const next = index.wallets.map((w) => {
-      if (w.id !== index.active) return w;
-      const entry: WalletEntry = {
-        ...w,
-        birthday: blob.birthday,
-        ...(name && (w.name === "Wallet" || w.name.startsWith("Wallet ")) ? { name } : {}),
-        ...(words ? { words } : {}),
-        ...(session ? { hasPassphrase: session.passphrase.length > 0 } : {}),
-      };
-      return entry;
-    });
-    await saveIndex(this.kv, { ...index, wallets: next });
-  }
-
   async state(): Promise<WalletState> {
     const blob = await loadVaultBlob(this.kv);
-    const session = await loadSession(this.kv);
+    const session = await this.session();
     const hasBackup = !!(await loadVaultBackup(this.kv));
     if (!blob) {
       return { hasVault: false, hasBackup, unlocked: false, chain: redactChain(this.chainCfg) };
@@ -553,11 +563,10 @@ export class PrivateBit {
         hasBackup,
         unlocked: false,
         chain: redactChain(this.chainCfg),
-        wallets: await this.walletSummaries(),
       };
     }
     const scan = await this.loadScan();
-    const account = accountFromVault(session);
+    const account = this.accountOf(session);
     const meta = await this.loadCoinMeta();
     const frozen = frozenOutpoints(meta);
     const unspent = scan.utxos.filter((u) => !u.spent);
@@ -628,7 +637,6 @@ export class PrivateBit {
       hasHistory: Object.keys(hist.entries).length > 0,
       mnemonicWords: words,
       hasPassphrase: session.passphrase.length > 0,
-      wallets: await this.walletSummaries(),
     };
   }
 
@@ -647,7 +655,6 @@ export class PrivateBit {
     await this.writeGrant(unlocked);
     await this.saveHistory(emptyHistory());
     await this.saveScan(emptyScanStore(args.birthday));
-    await this.rememberOpen();
     return mnemonic;
   }
 
@@ -669,7 +676,6 @@ export class PrivateBit {
     await this.kv.remove([HISTORY_KEY, COINMETA_KEY, ONETIME_KEY]);
     await this.saveHistory(emptyHistory());
     await this.saveScan(emptyScanStore(args.birthday));
-    await this.rememberOpen(args.name);
   }
 
   private restoredScan(account: Account, birthday: number): { scan: ScanStore; ot: OneTimeStore } {
@@ -703,80 +709,6 @@ export class PrivateBit {
     const seeded = this.restoredScan(accountFromVault(unlocked), args.birthday);
     await this.saveOneTime(seeded.ot);
     await this.saveScan(seeded.scan);
-    await this.rememberOpen(args.name);
-  }
-
-  /**
-   * Add a wallet beside the one that is open, then open the new one.
-   * The previous wallet stays on this computer, locked, until you switch back.
-   */
-  async addWallet(args: {
-    mnemonic: string;
-    password: string;
-    passphrase?: string;
-    birthday: number;
-    name?: string;
-    kind: "create" | "import";
-  }): Promise<void> {
-    if (args.birthday <= 0) throw new Error("birthday height required (Fractal tip is past 2M; 0 is genesis)");
-    const unlocked = vaultFromMnemonic(args);
-    const words = unlocked.mnemonic.split(" ").length;
-    if (args.kind === "create" && words !== 24) throw new Error("A new wallet uses 24 words.");
-    if (!(await loadVaultBlob(this.kv))) {
-      if (args.kind === "import") await this.restore(args);
-      else await this.createChecked(args);
-      await this.rememberOpen(args.name);
-      return;
-    }
-    const index = await ensureIndex(this.kv);
-    if (!index) throw new Error("no wallet on this computer");
-    const id = hex(randomBytes(8));
-    const name = args.name?.trim() || `Wallet ${index.wallets.length + 1}`;
-    const key = deriveDataKey(unlocked.seed);
-    const account = accountFromVault(unlocked);
-    const values: Record<string, unknown> = { "privatebit.vault": lockVault(unlocked, args.password) };
-    const carried = splitChainSecrets(this.chainCfg);
-    values["privatebit.chain"] = carried.plain;
-    if (carried.secrets.unisatToken || carried.secrets.rpcPassword) {
-      values["privatebit.chain.secrets"] = sealJson(key, CHAIN_SECRETS_KEY, carried.secrets);
-    }
-    if (args.kind === "import") {
-      const seeded = this.restoredScan(account, args.birthday);
-      values["privatebit.scan"] = sealJson(key, SCAN_KEY, seeded.scan);
-      values["privatebit.history"] = sealJson(key, HISTORY_KEY, emptyHistory(true));
-      values["privatebit.onetime"] = sealJson(key, ONETIME_KEY, seeded.ot);
-    } else {
-      values["privatebit.scan"] = sealJson(key, SCAN_KEY, emptyScanStore(args.birthday));
-      values["privatebit.history"] = sealJson(key, HISTORY_KEY, emptyHistory());
-    }
-    await stagePack(this.kv, id, values);
-    await saveIndex(this.kv, {
-      ...index,
-      wallets: [
-        ...index.wallets,
-        { id, name, createdAt: Date.now(), birthday: args.birthday, words, hasPassphrase: unlocked.passphrase.length > 0 },
-      ],
-    });
-    this.walletEpoch += 1;
-    this.sideWorkAt = 0;
-    this.keyCache = undefined;
-    this.scanHex = undefined;
-    await mountWallet(this.kv, id);
-    await saveSession(this.kv, unlocked);
-    await this.writeGrant(unlocked);
-    await this.loadChain();
-    await this.keepOnlyThisWallet(account);
-  }
-
-  /** Lock and open a different wallet. Its password is asked afterwards. */
-  async openWallet(id: string): Promise<void> {
-    this.walletEpoch += 1;
-    this.sideWorkAt = 0;
-    this.keyCache = undefined;
-    this.grantCache = undefined;
-    this.scanHex = undefined;
-    await mountWallet(this.kv, id);
-    await this.loadChain();
   }
 
   /** Birthday is plaintext on the vault blob. Rewinds scan so that height is scanned again. */
@@ -785,7 +717,7 @@ export class PrivateBit {
     const blob = await loadVaultBlob(this.kv);
     if (!blob) throw new Error("no vault");
     await persistVault(this.kv, { ...blob, birthday });
-    const session = await loadSession(this.kv);
+    const session = await this.session();
     if (session) {
       await saveSession(this.kv, { ...session, birthday });
       await this.writeGrant({ ...session, birthday });
@@ -794,7 +726,6 @@ export class PrivateBit {
     let next = emptyScanStore(birthday);
     for (const w of prev.watch ?? []) next = addWatch(next, w);
     await this.saveScan(next);
-    await this.rememberOpen();
   }
 
   async unlock(password: string): Promise<void> {
@@ -806,8 +737,6 @@ export class PrivateBit {
     await this.writeGrant(unlocked);
     await this.retireStaleBackup(unlocked, password);
     await this.migrateAtRest();
-    await this.rememberOpen();
-    await this.keepOnlyThisWallet(accountFromVault(unlocked));
   }
 
   /** Check the password without changing anything (backup screen, remove wallet). */
@@ -868,6 +797,8 @@ export class PrivateBit {
       }
     }
     this.keyCache = undefined;
+    this.sessionCache = undefined;
+    this.accountCache = undefined;
     await clearSession(this.kv);
     await this.clearHpkeSecrets();
     await this.kv.remove([PJ_SEND]);
@@ -883,96 +814,18 @@ export class PrivateBit {
   }
 
   async requireAccount(): Promise<{ vault: UnlockedVault; account: Account; scan: ScanStore }> {
-    const vault = await loadSession(this.kv);
+    const vault = await this.session();
     if (!vault) throw new Error("locked");
-    return { vault, account: accountFromVault(vault), scan: await this.loadScan() };
+    return { vault, account: this.accountOf(vault), scan: await this.loadScan() };
   }
 
   async scanOnce(): Promise<ScanProgress> {
     return this.enqueueScan(() => this.scanOnceUnlocked());
   }
 
-  /** Script this account can spend, or null when the coin is not ours. */
-  private ownedScript(account: Account, u: { tweak: string; label: number | null; kind?: "sp" | "bip86"; index?: number; scriptPubKey: string }): string | null {
-    const spk = u.scriptPubKey.toLowerCase();
-    try {
-      if (u.kind === "bip86") {
-        if (u.index === undefined) return null;
-        const want = account.oneTime(u.index).scriptPubKey.toLowerCase();
-        return want === spk ? want : null;
-      }
-      const tweak = fromHex(u.tweak);
-      const sec = spendSecret({
-        spendSecret: account.spendSecret,
-        tweak,
-        label: u.label,
-        scanSecret: account.scanSecret,
-      });
-      const xonly = secp256k1.getPublicKey(sec, true).slice(1);
-      if (hex(taprootScriptPubKey(xonly)).toLowerCase() === spk) return spk;
-      const pj = tweakSpend(account.spendSecret, tweak);
-      return hex(taprootScriptPubKey(pj.xonly)).toLowerCase() === spk ? spk : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * A scan that was still running can save the previous wallet's coins into the one just opened.
-   * Drop those coins and the activity rows that came from them. Our own coins stay.
-   */
-  private async keepOnlyThisWallet(account: Account): Promise<void> {
-    const index = await loadIndex(this.kv);
-    if (!index || index.wallets.length < 2) return;
-    await this.dropForeignPayjoins(account);
-    const scan = await this.loadScan();
-    const utxos = scan.utxos.filter((u) => this.ownedScript(account, u) !== null);
-    const watch = (scan.watch ?? []).filter((w) => this.ownedScript(account, w) !== null);
-    const hist = await this.loadHistory();
-    const live = new Set<string>();
-    for (const u of utxos) {
-      live.add(u.txid);
-      if (u.spentBy) live.add(u.spentBy);
-    }
-    const entries: HistoryStore["entries"] = {};
-    for (const [txid, entry] of Object.entries(hist.entries)) if (live.has(txid)) entries[txid] = entry;
-    const droppedCoins = utxos.length !== scan.utxos.length;
-    const droppedWatch = watch.length !== (scan.watch ?? []).length;
-    const droppedHist = Object.keys(entries).length !== Object.keys(hist.entries).length;
-    if (!droppedCoins && !droppedWatch && !droppedHist) return;
-    const next: ScanStore = { ...scan, utxos, watch };
-    await this.saveSealed(SCAN_KEY, next);
-    if (droppedHist) await this.saveHistory({ ...hist, entries });
-  }
-
-  /** A payment link belongs to this wallet only if this wallet's spend key created it. */
-  private payjoinIsMine(account: Account, s: PayjoinReceiveSession): boolean {
-    if (!s.tweak || !s.scriptPubKey) return false;
-    try {
-      const pay = tweakSpend(account.spendSecret, fromHex(s.tweak));
-      return hex(taprootScriptPubKey(pay.xonly)).toLowerCase() === s.scriptPubKey.toLowerCase();
-    } catch {
-      return false;
-    }
-  }
-
-  private sendIsMine(account: Account, s: PayjoinSendSession): boolean {
-    return s.signableInputs.some((inp) => this.ownedScript(account, inp) !== null);
-  }
-
-  /** Drop another wallet's links if they were left in the open wallet's storage. */
-  private async dropForeignPayjoins(account: Account): Promise<void> {
-    const sessions = await this.loadPayjoinSessions();
-    const mine = sessions.filter((s) => this.payjoinIsMine(account, s));
-    if (mine.length !== sessions.length) await this.savePayjoinSessions(mine);
-    const sends = await this.loadPayjoinSends();
-    const mySends = sends.filter((s) => this.sendIsMine(account, s));
-    if (mySends.length !== sends.length) await this.savePayjoinSends(mySends);
-  }
-
   private async scanStillHere(mark: ScanMark): Promise<boolean> {
     if (mark.epoch !== this.walletEpoch) return false;
-    const session = await loadSession(this.kv);
+    const session = await this.session();
     if (session) return this.keysFor(session).spendPub === mark.spendPub;
     const grant = await this.grant();
     return !!grant && grant.spendPub === mark.spendPub;
@@ -981,8 +834,8 @@ export class PrivateBit {
   private async scanOnceUnlocked(): Promise<ScanProgress> {
     const epoch = this.walletEpoch;
     const idle: ScanProgress = { done: false, lastHeight: 0, tip: 0, height: 0, txIndex: 0, txCount: 0, skipped: 0 };
-    const session = await loadSession(this.kv);
-    const full = session ? accountFromVault(session) : undefined;
+    const session = await this.session();
+    const full = session ? this.accountOf(session) : undefined;
     const grant = full ? null : await this.grant();
     const account: ScanAccount | undefined = full ?? grant?.account;
     if (!account) return idle;
@@ -1006,8 +859,6 @@ export class PrivateBit {
     let store = await this.loadScan();
     if (started - this.sideWorkAt >= 20_000) {
       this.sideWorkAt = started;
-      if (full) await this.keepOnlyThisWallet(full);
-      if (mark.epoch !== this.walletEpoch) return stopped();
       store = await this.loadScan();
       if (full) store = await this.ensureOneTimeWatches(full, store);
       store = await this.recoverWatches(account, source, store);
@@ -1176,23 +1027,13 @@ export class PrivateBit {
 
   /** Outpoints that automatic selection must never use: reserved, frozen, one-time coins. */
   async blockedOutpoints(): Promise<{ reserved: Set<string>; frozen: Set<string> }> {
-    const session = await loadSession(this.kv);
-    const account = session ? accountFromVault(session) : undefined;
-    const receive = account ? await this.payjoinsForAccount(account) : await this.loadPayjoinSessions();
+    const receive = await this.loadPayjoinSessions();
     const reserved = new Set(
       receive
         .filter((s) => s.status === "waiting" && s.reserved)
         .map((s) => `${s.reserved!.txid}:${s.reserved!.vout}`),
     );
-    let sends = await this.loadPayjoinSends();
-    if (account) {
-      const index = await loadIndex(this.kv);
-      if (index && index.wallets.length >= 2) {
-        const mine = sends.filter((s) => this.sendIsMine(account, s));
-        if (mine.length !== sends.length) await this.savePayjoinSends(mine);
-        sends = mine;
-      }
-    }
+    const sends = await this.loadPayjoinSends();
     for (const s of sends) {
       if (s.status !== "waiting") continue;
       for (const inp of s.signableInputs) reserved.add(`${inp.txid}:${inp.vout}`);
@@ -1229,21 +1070,12 @@ export class PrivateBit {
     if (!request.pj) return;
     const { account } = await this.requireAccount();
     const rk = request.receiverKey ? hex(request.receiverKey).toLowerCase() : "";
-    const own = (await this.payjoinsForAccount(account)).some((s) => {
+    void account;
+    const own = (await this.loadPayjoinSessions()).some((s) => {
       if (rk && s.hpkePub && s.hpkePub.toLowerCase() === rk) return true;
       return s.pj === request.pj || s.bip21 === request.raw;
     });
     if (own) throw new PolicyError("This is your own payment link. Share it with the person paying you.");
-  }
-
-  /** This wallet's links only. With two wallets, a link from the other one is removed from this list. */
-  private async payjoinsForAccount(account: Account): Promise<PayjoinReceiveSession[]> {
-    const sessions = await this.loadPayjoinSessions();
-    const index = await loadIndex(this.kv);
-    if (!index || index.wallets.length < 2) return sessions;
-    const mine = sessions.filter((s) => this.payjoinIsMine(account, s));
-    if (mine.length !== sessions.length) await this.savePayjoinSessions(mine);
-    return mine;
   }
 
   async plan(destination: string, amount: bigint, opts: PlanOptions = {}): Promise<PlanPayload> {
@@ -1380,7 +1212,7 @@ export class PrivateBit {
 
   /** True while this wallet can match blocks. Lock leaves this on until the browser quits or you switch. */
   async canIndex(): Promise<boolean> {
-    if (await loadSession(this.kv)) return true;
+    if (await this.session()) return true;
     return !!(await loadScanGrant(this.kv));
   }
 
@@ -1395,14 +1227,14 @@ export class PrivateBit {
   private async noteChecked(height: number): Promise<void> {
     const index = await loadIndex(this.kv);
     if (!index) return;
-    const row = index.wallets.find((w) => w.id === index.active);
+    const row = index.wallets.find((w) => w.id === this.walletId);
     if (!row || row.checked === height) return;
     row.checked = height;
     await saveIndex(this.kv, index);
   }
 
   async loadScan(): Promise<ScanStore> {
-    const session = await loadSession(this.kv);
+    const session = await this.session();
     const grant = session ? null : await this.grant();
     const birthday = session?.birthday ?? grant?.birthday ?? DEFAULT_BIRTHDAY;
     const got = await this.loadSealed<ScanStore>(SCAN_KEY, () => emptyScanStore(birthday));
@@ -1449,9 +1281,9 @@ export class PrivateBit {
       const want = maxFunded + ONE_TIME_RESTORE_WINDOW;
       const have = nextOneTimeIndex(ot);
       if (maxFunded >= 0 && want >= have) {
-        const session = await loadSession(this.kv);
+        const session = await this.session();
         if (session) {
-          const account = accountFromVault(session);
+          const account = this.accountOf(session);
           let sc = scan;
           let o = ot;
           for (let i = have; i <= want; i++) {
@@ -1766,10 +1598,7 @@ export class PrivateBit {
   /** Payment links and Payjoin sends for the UI. No keys, no PSBTs. */
   async sessions(): Promise<SessionView[]> {
     await this.closeExpired();
-    const session = await loadSession(this.kv);
-    const account = session ? accountFromVault(session) : undefined;
-    const recSrc = account ? await this.payjoinsForAccount(account) : await this.loadPayjoinSessions();
-    const rec = recSrc.map((s): SessionView => ({
+    const rec = (await this.loadPayjoinSessions()).map((s): SessionView => ({
       role: "receive",
       id: s.id,
       status: s.status,
@@ -1783,16 +1612,7 @@ export class PrivateBit {
       checkedAt: s.checkedAt,
       txid: s.txid,
     }));
-    let sendSrc = await this.loadPayjoinSends();
-    if (account) {
-      const index = await loadIndex(this.kv);
-      if (index && index.wallets.length >= 2) {
-        const mine = sendSrc.filter((s) => this.sendIsMine(account, s));
-        if (mine.length !== sendSrc.length) await this.savePayjoinSends(mine);
-        sendSrc = mine;
-      }
-    }
-    const snd = sendSrc.map((s): SessionView => ({
+    const snd = (await this.loadPayjoinSends()).map((s): SessionView => ({
       role: "send",
       id: s.id,
       status: s.status,
@@ -1838,34 +1658,10 @@ export class PrivateBit {
     await this.kv.set({ [PJ_HPKE]: all });
   }
 
-  /**
-   * Remove the open wallet only. Other wallets on this computer are untouched and one of them
-   * is opened (locked). Only removing the last wallet wipes everything; wiped tells the caller.
-   */
-  async removeWallet(password: string): Promise<{ wiped: boolean }> {
-    await this.checkPassword(password);
-    this.keyCache = undefined;
-    this.grantCache = undefined;
-    this.scanHex = undefined;
-    this.walletEpoch += 1;
-    const index = await loadIndex(this.kv);
-    const packs = (index?.wallets ?? []).map((w) => packKey(w.id));
-    if (!index || index.wallets.length <= 1) {
-      await this.kv.remove([...ALL_KEYS, ...LIVE_KEYS, ...packs]);
-      return { wiped: true };
-    }
-    const doomed = index.active;
-    const other = index.wallets.find((w) => w.id !== doomed);
-    if (!other) {
-      await this.kv.remove([...ALL_KEYS, ...LIVE_KEYS, ...packs]);
-      return { wiped: true };
-    }
-    await mountWallet(this.kv, other.id);
-    const fresh = await loadIndex(this.kv);
-    if (fresh) await saveIndex(this.kv, { ...fresh, wallets: fresh.wallets.filter((w) => w.id !== doomed) });
-    await this.kv.remove([packKey(doomed)]);
-    await this.loadChain();
-    return { wiped: false };
+  /** Delete every key of this wallet's namespace. PrivateBit updates the directory. */
+  async deleteOwnKeys(): Promise<void> {
+    this.close();
+    await this.kv.remove([...V1_LIVE_KEYS, "privatebit.session", SCAN_GRANT_KEY]);
   }
 
   async loadPayjoinSessions(): Promise<PayjoinReceiveSession[]> {
@@ -1998,10 +1794,10 @@ export class PrivateBit {
    * unlocked (chrome.storage.session). Lock wipes keys and this is a no-op.
    */
   private async servicePayjoinNow(): Promise<{ processed: number; errors: string[] }> {
-    const vault = await loadSession(this.kv);
+    const vault = await this.session();
     if (!vault) return { processed: 0, errors: [] };
     await this.closeExpired();
-    const account = accountFromVault(vault);
+    const account = this.accountOf(vault);
     const cfg = this.payjoinCfg();
     const sessions = await this.loadPayjoinSessions();
     let processed = 0;
@@ -2149,6 +1945,332 @@ export class PrivateBit {
     }
     await this.savePayjoinSends(sends);
     return processed;
+  }
+}
+
+
+/** Every storage key PrivateBit may write: per-wallet names (before scoping) and shared ones. */
+export const ALL_KEYS: string[] = [...WALLET_SCOPED, ...GLOBAL_KEYS];
+
+function newWalletId(): string {
+  return hex(randomBytes(8));
+}
+
+type Delegated<K extends keyof WalletCore> = WalletCore[K] extends (...a: infer A) => infer R ? (...a: A) => R : never;
+
+/**
+ * All wallets on this computer. Owns the directory (layout.ts) and the one WalletCore that is
+ * open. Every wallet operation goes to the open core; a core that was closed keeps its own
+ * namespace, so a late write from it cannot land in another wallet.
+ */
+export class PrivateBit {
+  private hooks: CoreHooks = {};
+  private current?: WalletCore;
+  private layoutReady?: Promise<unknown>;
+  /** Namespace a brand-new install will use for its first wallet. */
+  private firstId?: string;
+
+  constructor(
+    readonly root: Kv,
+    private defaultChain: ChainConfig = DEFAULT_CHAIN,
+  ) {}
+
+  get mailboxTransport(): MailboxTransport | undefined {
+    return this.hooks.mailboxTransport;
+  }
+  set mailboxTransport(v: MailboxTransport | undefined) {
+    this.hooks.mailboxTransport = v;
+  }
+  get ohttpConfig(): OhttpKeyConfig | undefined {
+    return this.hooks.ohttpConfig;
+  }
+  set ohttpConfig(v: OhttpKeyConfig | undefined) {
+    this.hooks.ohttpConfig = v;
+  }
+  get sourceOverride(): ChainSource | undefined {
+    return this.hooks.sourceOverride;
+  }
+  set sourceOverride(v: ChainSource | undefined) {
+    this.hooks.sourceOverride = v;
+  }
+  get chainCfg(): ChainConfig {
+    return this.current?.chainCfg ?? this.defaultChain;
+  }
+  /** The open wallet's scoped storage (tests read the session through it). */
+  get kv(): Kv {
+    return this.current?.kv ?? this.root;
+  }
+  get activeId(): string | undefined {
+    return this.current?.walletId;
+  }
+
+  /** Runs the one-time storage migration before anything else touches storage. */
+  private async ready(): Promise<void> {
+    if (!this.layoutReady) {
+      this.layoutReady = migrateLayout(this.root).catch((e) => {
+        this.layoutReady = undefined;
+        throw e;
+      });
+    }
+    await this.layoutReady;
+  }
+
+  private coreFor(id: string): WalletCore {
+    return new WalletCore(scopedKv(this.root, id), this.current?.chainCfg ?? this.defaultChain, this.hooks, id);
+  }
+
+  /** The open wallet. With no wallet yet, an empty namespace for the first one. */
+  async core(): Promise<WalletCore> {
+    await this.ready();
+    const index = await loadIndex(this.root);
+    const id = index?.active ?? (this.firstId ??= newWalletId());
+    if (!this.current || this.current.walletId !== id) {
+      this.current?.close();
+      this.current = new WalletCore(scopedKv(this.root, id), this.defaultChain, this.hooks, id);
+      await this.current.loadChain();
+    }
+    return this.current;
+  }
+
+  private async index(): Promise<WalletIndex | null> {
+    await this.ready();
+    return loadIndex(this.root);
+  }
+
+  private async summaries(): Promise<WalletState["wallets"]> {
+    const index = await this.index();
+    if (!index) return undefined;
+    return index.wallets.map((w) => ({
+      id: w.id,
+      name: w.name,
+      active: w.id === index.active,
+      birthday: w.birthday,
+      words: w.words,
+      hasPassphrase: w.hasPassphrase,
+      checked: w.checked,
+    }));
+  }
+
+  /** Record word count, passphrase presence and birthday for a wallet. Never the words. */
+  private async remember(core: WalletCore, name?: string): Promise<void> {
+    const st = await core.state();
+    if (!st.hasVault) return;
+    const index = (await this.index()) ?? { v: 2 as const, active: core.walletId, wallets: [] };
+    const prev = index.wallets.find((w) => w.id === core.walletId);
+    const entry: WalletEntry = {
+      id: core.walletId,
+      name: name?.trim() || prev?.name || (index.wallets.length ? `Wallet ${index.wallets.length + 1}` : "Wallet"),
+      createdAt: prev?.createdAt ?? Date.now(),
+      birthday: (await loadVaultBlob(core.kv))?.birthday ?? prev?.birthday ?? 0,
+      ...(st.mnemonicWords ? { words: st.mnemonicWords } : prev?.words ? { words: prev.words } : {}),
+      ...(st.unlocked ? { hasPassphrase: !!st.hasPassphrase } : prev?.hasPassphrase !== undefined ? { hasPassphrase: prev.hasPassphrase } : {}),
+      ...(prev?.checked !== undefined ? { checked: prev.checked } : {}),
+    };
+    const wallets = prev ? index.wallets.map((w) => (w.id === entry.id ? entry : w)) : [...index.wallets, entry];
+    await saveIndex(this.root, { v: 2, active: index.active, wallets });
+  }
+
+  private async activate(id: string): Promise<void> {
+    const index = await this.index();
+    if (!index || !index.wallets.some((w) => w.id === id)) throw new Error("no such wallet");
+    await saveIndex(this.root, { ...index, active: id });
+  }
+
+  async state(): Promise<WalletState> {
+    const core = await this.core();
+    const st = await core.state();
+    return { ...st, wallets: await this.summaries() };
+  }
+
+  async create(args: Parameters<WalletCore["create"]>[0]): Promise<string> {
+    if (await this.index()) throw new Error("A wallet is already on this computer. Unlock it, or restore from recovery words.");
+    const core = await this.core();
+    const words = await core.create(args);
+    await this.remember(core);
+    return words;
+  }
+
+  async createChecked(args: Parameters<WalletCore["createChecked"]>[0]): Promise<void> {
+    if (await this.index()) throw new Error("A wallet is already on this computer. Unlock it, or restore from recovery words.");
+    const core = await this.core();
+    await core.createChecked(args);
+    await this.remember(core, args.name);
+  }
+
+  /** First wallet from words, or the open wallet restored over itself (forgot password). */
+  async restore(args: Parameters<WalletCore["restore"]>[0]): Promise<void> {
+    const core = await this.core();
+    await core.restore(args);
+    await this.remember(core, args.name);
+  }
+
+  /**
+   * Add a wallet in its own namespace and open it. The wallet that was open is locked and
+   * stops matching blocks until you switch back and unlock it.
+   */
+  async addWallet(args: {
+    mnemonic: string;
+    password: string;
+    passphrase?: string;
+    birthday: number;
+    name?: string;
+    kind: "create" | "import";
+  }): Promise<void> {
+    if (args.birthday <= 0) throw new Error("birthday height required (Fractal tip is past 2M; 0 is genesis)");
+    const unlocked = vaultFromMnemonic(args);
+    if (args.kind === "create" && unlocked.mnemonic.split(" ").length !== 24) throw new Error("A new wallet uses 24 words.");
+    const index = await this.index();
+    if (!index) {
+      if (args.kind === "import") await this.restore(args);
+      else await this.createChecked(args);
+      return;
+    }
+    const prev = await this.core();
+    const carried = prev.chainCfg;
+    await prev.closeForSwitch();
+    const id = newWalletId();
+    const core = this.coreFor(id);
+    if (args.kind === "import") await core.restore(args);
+    else await core.createChecked(args);
+    await core.saveChain(carried);
+    const name = args.name?.trim() || `Wallet ${index.wallets.length + 1}`;
+    await saveIndex(this.root, {
+      v: 2,
+      active: id,
+      wallets: [...index.wallets, { id, name, createdAt: Date.now(), birthday: args.birthday }],
+    });
+    await this.remember(core, name);
+    this.current = core;
+  }
+
+  /** Lock the open wallet and open another one. Its password is asked afterwards. */
+  async openWallet(id: string): Promise<void> {
+    const index = await this.index();
+    if (!index || !index.wallets.some((w) => w.id === id)) throw new Error("no such wallet");
+    const prev = await this.core();
+    await prev.closeForSwitch();
+    await this.activate(id);
+    await this.core();
+  }
+
+  async renameWallet(id: string, name: string): Promise<void> {
+    const clean = name.replace(/\s+/g, " ").trim().slice(0, 40);
+    if (!clean) throw new Error("Give the wallet a name.");
+    const index = await this.index();
+    if (!index || !index.wallets.some((w) => w.id === id)) throw new Error("no such wallet");
+    await saveIndex(this.root, { ...index, wallets: index.wallets.map((w) => (w.id === id ? { ...w, name: clean } : w)) });
+  }
+
+  async unlock(password: string): Promise<void> {
+    const core = await this.core();
+    await core.unlock(password);
+    await this.remember(core);
+  }
+
+  async setBirthday(birthday: number): Promise<void> {
+    const core = await this.core();
+    await core.setBirthday(birthday);
+    await this.remember(core);
+  }
+
+  /**
+   * Remove the open wallet only. The others stay, and one of them is opened (locked).
+   * Removing the last wallet wipes every PrivateBit key; wiped tells the caller.
+   */
+  async removeWallet(password: string): Promise<{ wiped: boolean }> {
+    const core = await this.core();
+    await core.checkPassword(password);
+    const index = await this.index();
+    const ids = new Set([core.walletId, ...(index?.wallets ?? []).map((w) => w.id)]);
+    if (!index || index.wallets.length <= 1) {
+      core.close();
+      const keys = new Set<string>([...GLOBAL_KEYS, ...V1_LIVE_KEYS, "privatebit.session", SCAN_GRANT_KEY, V1_MOUNTED_KEY]);
+      for (const id of ids) {
+        for (const k of walletKeys(id)) keys.add(k);
+        keys.add(v1PackKey(id));
+      }
+      await this.root.remove([...keys]);
+      this.current = undefined;
+      this.firstId = undefined;
+      return { wiped: true };
+    }
+    await core.deleteOwnKeys();
+    await this.root.remove(walletKeys(core.walletId));
+    const rest = index.wallets.filter((w) => w.id !== core.walletId);
+    await saveIndex(this.root, { v: 2, active: rest[0]!.id, wallets: rest });
+    this.current = undefined;
+    await this.core();
+    return { wiped: false };
+  }
+
+  // Everything below runs on the open wallet.
+  private d<K extends keyof WalletCore>(k: K): Delegated<K> {
+    return (async (...a: unknown[]) => {
+      const core = await this.core();
+      return (core[k] as (...x: unknown[]) => unknown).apply(core, a);
+    }) as unknown as Delegated<K>;
+  }
+  lock = this.d("lock");
+  checkPassword = this.d("checkPassword");
+  changePassword = this.d("changePassword");
+  restoreBackup = this.d("restoreBackup");
+  requireAccount = this.d("requireAccount");
+  scanOnce = this.d("scanOnce");
+  scanToTip = this.d("scanToTip");
+  followTip = this.d("followTip");
+  canIndex = this.d("canIndex");
+  catchingUp = this.d("catchingUp");
+  dataKey = this.d("dataKey");
+  migrateAtRest = this.d("migrateAtRest");
+  loadScan = this.d("loadScan");
+  saveScan = this.d("saveScan");
+  loadHistory = this.d("loadHistory");
+  saveHistory = this.d("saveHistory");
+  history = this.d("history");
+  setActivityLabel = this.d("setActivityLabel");
+  loadCoinMeta = this.d("loadCoinMeta");
+  saveCoinMeta = this.d("saveCoinMeta");
+  setCoinMeta = this.d("setCoinMeta");
+  coins = this.d("coins");
+  loadOneTime = this.d("loadOneTime");
+  saveOneTime = this.d("saveOneTime");
+  issueOneTime = this.d("issueOneTime");
+  oneTimeView = this.d("oneTimeView");
+  planSweep = this.d("planSweep");
+  sweepOneTime = this.d("sweepOneTime");
+  replaceOneTime = this.d("replaceOneTime");
+  planSplit = this.d("planSplit");
+  splitCoin = this.d("splitCoin");
+  startMigration = this.d("startMigration");
+  migrationStatus = this.d("migrationStatus");
+  finishMigration = this.d("finishMigration");
+  cancelMigration = this.d("cancelMigration");
+  loadChain = this.d("loadChain");
+  saveChain = this.d("saveChain");
+  sessions = this.d("sessions");
+  cancelLink = this.d("cancelLink");
+  cancelSend = this.d("cancelSend");
+  loadPayjoinSessions = this.d("loadPayjoinSessions");
+  savePayjoinSessions = this.d("savePayjoinSessions");
+  offerPayjoin = this.d("offerPayjoin");
+  loadPayjoinSends = this.d("loadPayjoinSends");
+  savePayjoinSends = this.d("savePayjoinSends");
+  waitingPayjoin = this.d("waitingPayjoin");
+  servicePayjoin = this.d("servicePayjoin");
+  blockedOutpoints = this.d("blockedOutpoints");
+  planSend = this.d("planSend");
+  plan = this.d("plan");
+  assertNotOwnLink = this.d("assertNotOwnLink");
+  maxAmount = this.d("maxAmount");
+  feeRates = this.d("feeRates");
+  broadcast = this.d("broadcast");
+
+  /** Chain source for the open wallet's settings. */
+  source(): ChainSource {
+    return this.hooks.sourceOverride ?? openChain(this.chainCfg);
+  }
+  payjoinCfg(): PayjoinConfig {
+    return (this.current ?? this.coreFor(this.firstId ??= newWalletId())).payjoinCfg();
   }
 }
 

@@ -1,3 +1,4 @@
+import { scopedName } from "../src/lib/layout.ts";
 import { describe, expect, it } from "vitest";
 import { isSealed } from "../src/lib/datastore.ts";
 import { memoryKv, type Kv } from "../src/lib/vault.ts";
@@ -38,7 +39,7 @@ describe("encryption at rest", () => {
     await w.issueOneTime();
     const d = kv.dump();
     for (const k of ["privatebit.scan", "privatebit.history", "privatebit.coinmeta", "privatebit.onetime"]) {
-      expect(isSealed(d[k]), k).toBe(true);
+      expect(isSealed(d[scopedName(w.activeId!, k)]), k).toBe(true);
     }
     const text = JSON.stringify(d);
     expect(text).not.toContain("aa".repeat(32));
@@ -53,7 +54,7 @@ describe("encryption at rest", () => {
     await w.lock();
     // What an older build left behind.
     const legacyScan: ScanStore = { utxos: [utxo("bb".repeat(32), "50000")], lastHeight: 20, tip: 20 };
-    await kv.set({
+    await w.kv.set({
       "privatebit.scan": legacyScan,
       "privatebit.chain": { kind: "unisat", url: "https://open-api-fractal.unisat.io", unisatToken: "user-token-123", payjoinDirectory: "https://payjo.in" },
     });
@@ -61,10 +62,11 @@ describe("encryption at rest", () => {
     expect((await w.loadChain()).unisatToken).toBe("user-token-123");
     await w.unlock("pw");
     const d = kv.dump();
-    expect(isSealed(d["privatebit.scan"])).toBe(true);
-    expect(isSealed(d["privatebit.chain.secrets"])).toBe(true);
+    const at = (k: string) => d[scopedName(w.activeId!, k)];
+    expect(isSealed(at("privatebit.scan"))).toBe(true);
+    expect(isSealed(at("privatebit.chain.secrets"))).toBe(true);
     expect(JSON.stringify(d)).not.toContain("user-token-123");
-    expect((d["privatebit.chain"] as { url: string }).url).toBe("https://open-api-fractal.unisat.io");
+    expect((at("privatebit.chain") as { url: string }).url).toBe("https://open-api-fractal.unisat.io");
     const st = await w.state();
     expect(st.balance).toBe("50000");
     expect((await w.loadChain()).unisatToken).toBe("user-token-123");
@@ -74,7 +76,7 @@ describe("encryption at rest", () => {
     expect((await w.state()).balance).toBeUndefined();
     await expect(w.history()).rejects.toThrow(/locked/);
     // After the browser quits the grant is gone too: nothing is readable.
-    await kv.remove(["privatebit.scan.grant"]);
+    await w.kv.remove(["privatebit.scan.grant"]);
     expect((await w.loadScan()).utxos).toHaveLength(0);
     await expect(w.saveScan(legacyScan)).rejects.toThrow(/locked/);
   });

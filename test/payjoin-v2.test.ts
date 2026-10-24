@@ -284,7 +284,9 @@ describe("BIP77 two-party Payjoin", () => {
       name: "Other",
       kind: "create",
     });
-    await alice.w.savePayjoinSessions(created);
+    // Each wallet has its own namespace: the new wallet never sees the first one's links.
+    expect(created.some((s) => s.id === link.id)).toBe(true);
+    expect(await alice.w.loadPayjoinSessions()).toEqual([]);
     await expect(alice.w.assertNotOwnLink(link.bip21)).resolves.toBeUndefined();
     expect((await alice.w.sessions()).some((s) => s.id === link.id)).toBe(false);
 

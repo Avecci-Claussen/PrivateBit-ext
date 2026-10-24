@@ -4,6 +4,7 @@ import { accountFromVault } from "../src/lib/keys.ts";
 import { createMnemonic, unlockVault, vaultFromMnemonic, type VaultBlob } from "../src/lib/vault.ts";
 import { PrivateBit } from "../src/lib/wallet.ts";
 import { dumpKv } from "./helpers/kv.ts";
+import { scopedName } from "../src/lib/layout.ts";
 
 describe("audit: emergency fixes", () => {
   it("lock leaves no recovery words, seed or spend key anywhere in storage", async () => {
@@ -20,7 +21,7 @@ describe("audit: emergency fixes", () => {
     }
     expect(text).not.toContain(words);
     expect(text).not.toContain(hex(account.spendSecret));
-    const grant = kv.dump()["privatebit.scan.grant"] as Record<string, unknown>;
+    const grant = kv.dump()[scopedName(w.activeId!, "privatebit.scan.grant")] as Record<string, unknown>;
     expect(Object.keys(grant).sort()).toEqual(["birthday", "scanKey", "scanSecret", "spendPub", "v"]);
     expect(await w.canIndex()).toBe(true);
     await expect(w.history()).rejects.toThrow(/locked/);
@@ -32,7 +33,7 @@ describe("audit: emergency fixes", () => {
     const w = new PrivateBit(kv);
     const words = await w.create({ password: "password1", birthday: 100 });
     await w.lock();
-    await kv.set({ "privatebit.scan.grant": { mnemonic: words, passphrase: "", birthday: 100 } });
+    await w.kv.set({ "privatebit.scan.grant": { mnemonic: words, passphrase: "", birthday: 100 } });
     expect(await w.canIndex()).toBe(false);
     expect(kv.text()).not.toContain(words);
   });
@@ -42,11 +43,11 @@ describe("audit: emergency fixes", () => {
     const w = new PrivateBit(kv);
     await w.create({ password: "password1", birthday: 100 });
     // An older build kept the vault under the old password as the "previous" copy.
-    await kv.set({ "privatebit.vault.bak": kv.dump()["privatebit.vault"] });
+    await w.kv.set({ "privatebit.vault.bak": kv.dump()[scopedName(w.activeId!, "privatebit.vault")] });
     await w.changePassword("password1", "password2");
     const d = kv.dump();
-    expect(() => unlockVault(d["privatebit.vault"] as VaultBlob, "password1")).toThrow(/wrong password/);
-    expect(d["privatebit.vault.bak"]).toBeUndefined();
+    expect(() => unlockVault(d[scopedName(w.activeId!, "privatebit.vault")] as VaultBlob, "password1")).toThrow(/wrong password/);
+    expect(d[scopedName(w.activeId!, "privatebit.vault.bak")]).toBeUndefined();
     expect((await w.state()).hasBackup).toBe(false);
     await w.lock();
     await expect(w.unlock("password1")).rejects.toThrow(/wrong password/);
