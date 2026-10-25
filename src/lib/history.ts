@@ -44,6 +44,8 @@ export type HistoryEntry = {
   /** Set by PrivateBit when it built the transaction, so the scan does not reclassify it. */
   fromWallet?: boolean;
   change?: string;
+  /** The one-time change recovery already looked at this Payjoin (audit M8, independent). */
+  changeChecked?: boolean;
   /** How many Silent Payment pieces a split created. */
   pieces?: number;
 };

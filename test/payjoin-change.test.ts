@@ -204,11 +204,27 @@ describe("Payjoin sender change", () => {
     await sender.w.saveHistory(hist);
     expect(spendableBalance(await sender.w.loadScan())).toBe(0n);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (sender.w as any).current.recoverPayjoinChange(
-      sender.account,
-      c.source,
-    );
+    // Audit M8 (independent): public mode asks the block explorer once, without any token.
+    const asked: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      asked.push(url);
+      expect(JSON.stringify(init?.headers ?? {})).not.toMatch(/authorization|bearer/i);
+      if (url.endsWith(`/api/tx/${txid}/hex`)) return new Response(c.broadcasts[0]!, { status: 200 });
+      return new Response("", { status: 404 });
+    }) as typeof fetch;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (sender.w as any).current.recoverPayjoinChange(sender.account, c.source);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (sender.w as any).current.changeChecked.clear();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (sender.w as any).current.recoverPayjoinChange(sender.account, c.source);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(asked).toEqual([`https://mempool.fractalbitcoin.io/api/tx/${txid}/hex`]);
     expect(spendableBalance(await sender.w.loadScan())).toBe(built.change);
     expect((await sender.w.loadHistory()).entries[txid]!.change).toBe(
       built.change.toString(),

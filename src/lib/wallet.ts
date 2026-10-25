@@ -1,4 +1,5 @@
 import * as btc from "@scure/btc-signer";
+import { MEMPOOL_BITCOIN, MEMPOOL_FRACTAL, mempoolTxHex } from "./mempool.ts";
 import { spendSecret, taprootScriptPubKey } from "./bip352.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
@@ -1263,20 +1264,27 @@ export class WalletCore {
   private async recoverPayjoinChange(account: ScanAccount, source: ChainSource): Promise<void> {
     const hist = await this.loadHistory();
     const todo = Object.values(hist.entries).filter(
-      (e) => e.kind === "payjoin-sent" && !e.change && !this.changeChecked.has(e.txid),
+      (e) => e.kind === "payjoin-sent" && !e.change && !e.changeChecked && !this.changeChecked.has(e.txid),
     );
     if (todo.length === 0) return;
     let found = false;
     for (const e of todo.slice(0, 8)) {
       this.changeChecked.add(e.txid);
-      let txHex: string;
+      // Audit M8 (independent): one look per Payjoin, ever. With your node, ask the node. In public
+      // mode ask the block explorer, never with the data service token, and take the height from history.
+      let txHex: string | undefined;
       try {
-        txHex = await source.getTxHex(e.txid);
+        txHex = source.kind === "core" ? await source.getTxHex(e.txid) : await mempoolTxHex(e.txid, this.net === "bitcoin" ? MEMPOOL_BITCOIN : MEMPOOL_FRACTAL);
       } catch {
+        txHex = undefined;
+      }
+      if (!txHex) {
         this.changeChecked.delete(e.txid);
         continue;
       }
-      const height = source.getTxHeight ? ((await source.getTxHeight(e.txid).catch(() => null)) ?? 0) : 0;
+      e.changeChecked = true;
+      found = true;
+      const height = source.kind === "core" && source.getTxHeight ? ((await source.getTxHeight(e.txid).catch(() => null)) ?? 0) : (e.height ?? 0);
       for (let attempt = 0; attempt < 3; attempt++) {
         const snap = await this.coins_.read();
         const next = await applyTxHex(account, source, snap.store, txHex, height);
