@@ -452,7 +452,7 @@ async function switchNetwork(network: NetworkId): Promise<void> {
 }
 
 // Website connections: content script ports, approval popups, events.
-const dapp = installDapp({ wallet, switchNetwork: async (n) => {
+const dapp = installDapp({ wallet, rejectLimit: import.meta.env.MODE === "e2e" ? 100 : undefined, switchNetwork: async (n) => {
   await networkReady;
   await switchNetwork(n);
 } });

@@ -331,6 +331,8 @@ ok("remove names the wallet", (await page.locator("h1").last().innerText()).incl
 await shot("full-remove-step1-dark-1280");
 await page.fill("#rmpw", PW_A);
 await click('[data-act="rm-next"]');
+// scrypt 2^17 (audit M1) takes a moment before the refusal shows.
+await page.locator("#rm-e").waitFor({ timeout: 10000 }).catch(() => undefined);
 ok("wrong password (the open wallet's) is refused for Savings", await page.locator("#rm-e").isVisible());
 await page.fill("#rmpw", PW_B);
 await click('[data-act="rm-next"]');

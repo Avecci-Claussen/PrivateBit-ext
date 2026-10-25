@@ -15,6 +15,8 @@ export type DappDeps = {
   wallet: PrivateBit;
   /** Same path as the Settings chain switch. */
   switchNetwork: (net: NetworkId) => Promise<void>;
+  /** Rejections within 2 minutes before a site has to wait (L10). The e2e build raises it. */
+  rejectLimit?: number;
 };
 
 type Pending = {
@@ -107,7 +109,7 @@ export function installDapp(deps: DappDeps) {
   const pushRate = new RateLimit(5, 60_000);
   // Audit L10 (independent): after several rejections in a row a site waits before it can ask again.
   const rejects = new Map<string, number[]>();
-  const REJECT_LIMIT = 3;
+  const REJECT_LIMIT = deps.rejectLimit ?? 3;
   const REJECT_WINDOW_MS = 2 * 60_000;
   const REJECT_COOLDOWN_MS = 60_000;
   function noteReject(origin: string): void {
