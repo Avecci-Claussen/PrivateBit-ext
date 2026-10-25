@@ -3,7 +3,7 @@ import { spendSecret, taprootScriptPubKey } from "./bip352.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
 import { sha256 } from "@noble/hashes/sha256";
-import { forgetSharedFrom, IncompleteBlock, loadSharedBlock, pruneSharedBelow, UnsupportedBlock, type SharedBlock } from "./blockshare.ts";
+import { setSharedChainNetwork, forgetSharedFrom, IncompleteBlock, loadSharedBlock, pruneSharedBelow, UnsupportedBlock, type SharedBlock } from "./blockshare.ts";
 import { cancellable, openChain, type ChainSource } from "./chain.ts";
 import type { Account, ScanAccount } from "./keys.ts";
 import { accountFromVault, p2trAddressFromScriptHex, scanAccountFrom } from "./keys.ts";
@@ -100,6 +100,7 @@ import {
   migrateLayout,
   saveIndex,
   scopedKv,
+  netKv,
   V1_LIVE_KEYS,
   V1_MOUNTED_KEY,
   v1PackKey,
@@ -141,7 +142,7 @@ import { ONE_TIME_RESTORE_WINDOW } from "./keys.ts";
 import { feeRatesOf } from "./chain.ts";
 import type { FeeRates } from "./requests.ts";
 import { leftoverLimit, maxSendable, type LeftoverPref } from "./coinselect.ts";
-import { FRACTAL_CHAIN_ID, splitChainSecrets, type ChainSecrets } from "./network.ts";
+import { FRACTAL_CHAIN_ID, isNetworkId, netInfo, splitChainSecrets, type ChainSecrets, type NetworkId } from "./network.ts";
 import { parseBip21 } from "./bip21.ts";
 
 export type WalletState = {
@@ -285,6 +286,8 @@ const ONETIME_KEY = "privatebit.onetime";
 /** Sealed with the scan key, which block matching keeps after Lock. Everything else uses the data key. */
 /** Held payments are sealed with the scan key so the worker can still send them after Lock. */
 const DELAYED_KEY = "privatebit.delayed";
+/** Bitcoin only: the first block to read (plain number, not secret). */
+const BIRTHDAY_KEY = "privatebit.birthday";
 const SCAN_SEALED = new Set([SCAN_KEY, CHAIN_SECRETS_KEY, DELAYED_KEY]);
 const PJ_SEND = "privatebit.pj.send";
 const PJ_HPKE = "privatebit.pj.hpke";
@@ -344,7 +347,15 @@ export class WalletCore {
     public chainCfg: ChainConfig = DEFAULT_CHAIN,
     readonly hooks: CoreHooks = {},
     readonly walletId: string = LEGACY_ID,
+    readonly net: NetworkId = "fractal",
   ) {}
+
+  /** Bitcoin: where reading starts (the vault's birthday is a Fractal height). */
+  private startHeight?: number;
+  private birthdayFor(fractalBirthday?: number): number {
+    if (this.net === "fractal") return fractalBirthday ?? DEFAULT_BIRTHDAY;
+    return this.startHeight ?? netInfo(this.net).defaultBirthday;
+  }
 
   get mailboxTransport(): MailboxTransport | undefined {
     return this.hooks.mailboxTransport;
@@ -444,7 +455,7 @@ export class WalletCore {
   private accountCache?: { vault: UnlockedVault; account: Account };
   private accountOf(vault: UnlockedVault): Account {
     if (this.accountCache?.vault === vault) return this.accountCache.account;
-    const account = accountFromVault(vault);
+    const account = accountFromVault(vault, 0, this.net);
     this.accountCache = { vault, account };
     return account;
   }
@@ -495,9 +506,15 @@ export class WalletCore {
     return (await this.grant())?.key ?? null;
   }
 
+  /** After a chain switch while unlocked: leave this chain's scan keys too, so it keeps reading after Lock. */
+  async ensureGrant(): Promise<void> {
+    const session = await this.session();
+    if (session && !(await loadScanGrant(this.kv))) await this.writeGrant(session);
+  }
+
   /** Leave only what matching needs for after Lock. Never the words, seed or spend secret. */
   private async writeGrant(unlocked: UnlockedVault): Promise<void> {
-    const account = accountFromVault(unlocked);
+    const account = accountFromVault(unlocked, 0, this.net);
     await saveScanGrant(this.kv, {
       v: 2,
       scanSecret: hex(account.scanSecret),
@@ -627,7 +644,7 @@ export class WalletCore {
   }
 
   source(): ChainSource {
-    return this.sourceOverride ?? openChain(this.chainCfg);
+    return this.sourceOverride ?? openChain(this.chainCfg, this.net);
   }
 
   async state(): Promise<WalletState> {
@@ -785,7 +802,7 @@ export class WalletCore {
     // History is rebuilt from the scan; typed labels cannot come back.
     await this.kv.remove([HISTORY_KEY, COINMETA_KEY, ONETIME_KEY]);
     await this.saveHistory(emptyHistory(true));
-    const seeded = this.restoredScan(accountFromVault(unlocked), args.birthday);
+    const seeded = this.restoredScan(accountFromVault(unlocked, 0, this.net), args.birthday);
     await this.saveOneTime(seeded.ot);
     await this.saveScan(seeded.scan);
   }
@@ -793,6 +810,16 @@ export class WalletCore {
   /** Birthday is plaintext on the vault blob. Rewinds scan so that height is scanned again. */
   async setBirthday(birthday: number): Promise<void> {
     if (birthday <= 0) throw new Error("birthday height required (Fractal tip is past 2M; 0 is genesis)");
+    if (this.net !== "fractal") {
+      // Bitcoin keeps its own start; the vault's birthday stays the Fractal one.
+      await this.kv.set({ [BIRTHDAY_KEY]: birthday });
+      this.startHeight = birthday;
+      const prevB = await this.loadScan();
+      let nextB = emptyScanStore(birthday);
+      for (const w of prevB.watch ?? []) nextB = addWatch(nextB, w);
+      await this.coins_.replace(nextB);
+      return;
+    }
     const blob = await loadVaultBlob(this.kv);
     if (!blob) throw new Error("no vault");
     await persistVault(this.kv, { ...blob, birthday });
@@ -1321,7 +1348,7 @@ export class WalletCore {
       ...planPayload(built),
       ...(built.feeRate !== undefined ? { feeRate: built.feeRate } : {}),
       inputLabels: groupInputLabels(inputs, (op) => meta[op]?.label),
-      planId: planDigest(built.psbtBase64, { chain: `fractal:${FRACTAL_CHAIN_ID}`, wallet: this.walletId }),
+      planId: planDigest(built.psbtBase64, { chain: netInfo(this.net).planChain, wallet: this.walletId }),
     };
   }
 
@@ -1636,7 +1663,7 @@ export class WalletCore {
   private async readScanFromDisk(): Promise<ScanStore> {
     const session = await this.session();
     const grant = session ? null : await this.grant();
-    const birthday = session?.birthday ?? grant?.birthday ?? DEFAULT_BIRTHDAY;
+    const birthday = this.birthdayFor(session?.birthday ?? grant?.birthday);
     const got = await this.loadSealed<ScanStore>(SCAN_KEY, () => emptyScanStore(birthday));
     if (got.status === "missing") return emptyScanStore(birthday);
     if (got.status === "unreadable") {
@@ -1737,7 +1764,7 @@ export class WalletCore {
       // No key at all (browser restarted while locked): nothing is readable, not even from memory.
       this.coins_.invalidate();
       const session = await this.session();
-      return emptyScanStore(session?.birthday ?? DEFAULT_BIRTHDAY);
+      return emptyScanStore(this.birthdayFor(session?.birthday));
     }
     try {
       return (await this.coins_.read()).store;
@@ -1745,7 +1772,7 @@ export class WalletCore {
       if (e instanceof Error && e.message === "locked") {
         const session = await this.session();
         const grant = session ? null : await this.grant();
-        return emptyScanStore(session?.birthday ?? grant?.birthday ?? DEFAULT_BIRTHDAY);
+        return emptyScanStore(this.birthdayFor(session?.birthday ?? grant?.birthday));
       }
       throw e;
     }
@@ -2035,6 +2062,10 @@ export class WalletCore {
   }
 
   async loadChain(): Promise<ChainConfig> {
+    if (this.net !== "fractal") {
+      const b = (await this.kv.get([BIRTHDAY_KEY]))[BIRTHDAY_KEY];
+      this.startHeight = typeof b === "number" && b > 0 ? b : undefined;
+    }
     const got = await this.kv.get([CHAIN_KEY]);
     const stored = got[CHAIN_KEY] as ChainConfig | undefined;
     const migrated = migrateChainConfig(stored ?? DEFAULT_CHAIN);
@@ -2596,8 +2627,30 @@ export class PrivateBit {
     await this.layoutReady;
   }
 
+  /** The chain every wallet is shown on. One at a time; switching keeps the wallet unlocked. */
+  net: NetworkId = "fractal";
+
   private coreFor(id: string): WalletCore {
-    return new WalletCore(scopedKv(this.root, id), this.current?.chainCfg ?? this.defaultChain, this.hooks, id);
+    return new WalletCore(netKv(scopedKv(this.root, id), this.net), this.current?.chainCfg ?? this.defaultChain, this.hooks, id, this.net);
+  }
+
+  /**
+   * Show the open wallet on another chain. Nothing is locked or moved: each chain has its own
+   * coins, history and settings. Scanning for the old chain stops; the new one starts after Lock too.
+   */
+  async setNetwork(net: NetworkId): Promise<void> {
+    if (!isNetworkId(net)) throw new Error("unknown network");
+    if (net === this.net && this.current?.net === net) return;
+    this.net = net;
+    setSharedChainNetwork(net);
+    const old = this.current;
+    if (old) {
+      await old.settle().catch(() => undefined);
+      old.close();
+      this.current = undefined;
+    }
+    const core = await this.core();
+    await core.ensureGrant().catch(() => undefined);
   }
 
   /** The open wallet. With no wallet yet, an empty namespace for the first one. */
@@ -2607,7 +2660,7 @@ export class PrivateBit {
     const id = index?.active ?? (this.firstId ??= newWalletId());
     if (!this.current || this.current.walletId !== id) {
       this.current?.close();
-      this.current = new WalletCore(scopedKv(this.root, id), this.defaultChain, this.hooks, id);
+      this.current = new WalletCore(netKv(scopedKv(this.root, id), this.net), this.defaultChain, this.hooks, id, this.net);
       await this.current.loadChain();
     }
     return this.current;
@@ -2941,7 +2994,7 @@ export class PrivateBit {
 
   /** Chain source for the open wallet's settings. */
   source(): ChainSource {
-    return this.hooks.sourceOverride ?? openChain(this.chainCfg);
+    return this.hooks.sourceOverride ?? openChain(this.chainCfg, this.net);
   }
   payjoinCfg(): PayjoinConfig {
     return (this.current ?? this.coreFor(this.firstId ??= newWalletId())).payjoinCfg();

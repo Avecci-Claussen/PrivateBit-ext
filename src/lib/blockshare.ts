@@ -1,8 +1,9 @@
 import { parseBlockTransactions, type LightTx } from "./blockparse.ts";
-import { hex } from "./bytes.ts";
+import { fromHex, hex } from "./bytes.ts";
 import type { ChainSource } from "./chain.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
-import { mempoolBlockRaw, mempoolTxHex } from "./mempool.ts";
+import { MEMPOOL_BITCOIN, mempoolBlockRaw, mempoolTxHex } from "./mempool.ts";
+import type { NetworkId } from "./network.ts";
 import { parseTxHex } from "./tx.ts";
 import { sha256 } from "@noble/hashes/sha256";
 
@@ -154,7 +155,27 @@ function backend(): Backend {
   return idbBackend;
 }
 
-const DB = "privatebit-chain";
+/** One cache per chain. Fractal keeps the original name so nothing already saved is lost. */
+let sharedNet: NetworkId = "fractal";
+const dbName = (): string => (sharedNet === "fractal" ? "privatebit-chain" : `privatebit-chain-${sharedNet}`);
+
+/** The open wallet's network. Changing it closes the other chain's cache and clears memory copies. */
+export function setSharedChainNetwork(net: NetworkId): void {
+  if (net === sharedNet) return;
+  sharedNet = net;
+  scriptCache.clear();
+  indexedHeights.clear();
+  memoryBlocks.clear();
+  memoryScripts.clear();
+  pending.clear();
+  const old = dbConn;
+  dbConn = undefined;
+  void old?.then((db) => db.close()).catch(() => undefined);
+}
+
+export function sharedChainNetwork(): NetworkId {
+  return sharedNet;
+}
 /** v2: blocks carry their hash, incomplete blocks were never stored. v1 copies are dropped. */
 const DB_VERSION = 2;
 let dbConn: Promise<IDBDatabase> | undefined;
@@ -163,7 +184,7 @@ let dbConn: Promise<IDBDatabase> | undefined;
 function idbOpen(): Promise<IDBDatabase> {
   if (dbConn) return dbConn;
   dbConn = new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open(DB, DB_VERSION);
+    const req = indexedDB.open(dbName(), DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const name of ["blocks", "scripts"]) {
@@ -198,7 +219,7 @@ export async function clearSharedChain(): Promise<void> {
   db?.close();
   dbConn = undefined;
   await new Promise<void>((resolve) => {
-    const req = indexedDB.deleteDatabase(DB);
+    const req = indexedDB.deleteDatabase(dbName());
     req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
 }
@@ -457,12 +478,32 @@ export async function buildSharedBlock(
 
 async function fetchRaw(source: ChainSource, height: number): Promise<Uint8Array> {
   if (source.getBlockRaw) return source.getBlockRaw(height);
-  return mempoolBlockRaw(height);
+  return mempoolBlockRaw(height, source.net === "bitcoin" ? MEMPOOL_BITCOIN : undefined);
 }
 
 async function fetchParent(source: ChainSource, txid: string): Promise<string | undefined> {
-  if (source.kind === "core") return source.getTxHex(txid);
+  if (source.kind === "core" || source.net === "bitcoin") return source.getTxHex(txid).catch(() => undefined);
   return mempoolTxHex(txid);
+}
+
+/** Bitcoin: fill the script cache for this block's taproot transactions from block pages. */
+async function prefillPrevouts(source: ChainSource, raw: Uint8Array, height: number): Promise<void> {
+  if (source.net !== "bitcoin" || !source.blockPrevouts) return;
+  const txs = parseBlockTransactions(raw);
+  if (!txs) return;
+  const indexes: number[] = [];
+  txs.forEach((tx, i) => {
+    if (taprootOutputs(tx).length === 0) return;
+    if (tx.vin.some((v) => !isCoinbase(v.txid) && !scriptCache.has(`${v.txid}:${v.vout}`))) indexes.push(i);
+  });
+  if (!indexes.length) return;
+  const { hash } = headerHashes(raw);
+  try {
+    const got = await source.blockPrevouts(height, hash, indexes);
+    for (const [k, script] of Object.entries(got)) cacheScript(k, scriptToKeep(fromHex(script)));
+  } catch {
+    // Parents are fetched one by one instead (slow, but complete).
+  }
 }
 
 /** A reorg replaced these heights: drop their saved copies and scripts. */
@@ -481,9 +522,11 @@ async function buildAndStore(height: number, source: ChainSource): Promise<Share
   const t0 = Date.now();
   const stats: Partial<BlockStats> = { height };
   try {
-    stats.lookbackBlocks = await ensureLookback(height, source);
+    // Bitcoin blocks are about 2 MB: reading earlier blocks for scripts costs more than the page lookups.
+    stats.lookbackBlocks = source.net === "bitcoin" ? 0 : await ensureLookback(height, source);
     const t1 = Date.now();
     const raw = await fetchRaw(source, height);
+    await prefillPrevouts(source, raw, height);
     const t2 = Date.now();
     const built = await buildSharedBlock(raw, height, (txid) => fetchParent(source, txid), stats);
     await backend().putBlock(height, built.block);

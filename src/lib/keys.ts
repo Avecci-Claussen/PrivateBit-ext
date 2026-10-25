@@ -9,7 +9,7 @@ import {
   precomputeLabels,
   type LabelBook,
 } from "./bip352.ts";
-import { derivationPath, FRACTAL } from "./network.ts";
+import { derivationPath, FRACTAL, type NetworkId } from "./network.ts";
 import type { UnlockedVault } from "./vault.ts";
 
 export type Account = {
@@ -55,9 +55,15 @@ export type OneTimeKey = {
 
 const N = secp256k1.CURVE.n;
 
-export function oneTimeKeyFromHd(hd: HDKey, index: number): OneTimeKey {
+/**
+ * Bitcoin one-time addresses use account 352' under m/86'/0', so they never overlap with the
+ * ordinary m/86'/0'/0' account another wallet would show for the same words.
+ */
+export const ONE_TIME_ACCOUNT_PATH_BITCOIN = "m/86'/0'/352'/0";
+
+export function oneTimeKeyFromHd(hd: HDKey, index: number, net: NetworkId = "fractal"): OneTimeKey {
   if (!Number.isInteger(index) || index < 0 || index >= 0x80000000) throw new Error("bad one-time index");
-  const path = `${ONE_TIME_ACCOUNT_PATH}/${index}`;
+  const path = `${net === "bitcoin" ? ONE_TIME_ACCOUNT_PATH_BITCOIN : ONE_TIME_ACCOUNT_PATH}/${index}`;
   const node = hd.derive(path);
   if (!node.privateKey) throw new Error("one-time derive failed");
   const d0 = node.privateKey;
@@ -71,18 +77,19 @@ export function oneTimeKeyFromHd(hd: HDKey, index: number): OneTimeKey {
   if (qPub[0] === 0x03) q = N - q;
   const secret = ser256(q);
   const output = qPub.slice(1);
-  const net: typeof btc.NETWORK = {
+  // Fractal and Bitcoin use the same address prefixes.
+  const addrNet: typeof btc.NETWORK = {
     bech32: FRACTAL.bech32,
     pubKeyHash: FRACTAL.pubKeyHash,
     scriptHash: FRACTAL.scriptHash,
     wif: FRACTAL.wif,
   };
-  const address = btc.Address(net).encode({ type: "tr", pubkey: output });
+  const address = btc.Address(addrNet).encode({ type: "tr", pubkey: output });
   return { index, path, internal, output, scriptPubKey: "5120" + hex(output), address, secret };
 }
 
-export function oneTimeKey(seed: Uint8Array, index: number): OneTimeKey {
-  return oneTimeKeyFromHd(HDKey.fromMasterSeed(seed), index);
+export function oneTimeKey(seed: Uint8Array, index: number, net: NetworkId = "fractal"): OneTimeKey {
+  return oneTimeKeyFromHd(HDKey.fromMasterSeed(seed), index, net);
 }
 
 const TAPROOT_NET: typeof btc.NETWORK = {
@@ -102,9 +109,9 @@ export function p2trAddressFromScriptHex(scriptPubKey: string): string | null {
   }
 }
 
-export function accountFromVault(vault: UnlockedVault, extraLabels = 0): Account {
+export function accountFromVault(vault: UnlockedVault, extraLabels = 0, net: NetworkId = "fractal"): Account {
   const hd = HDKey.fromMasterSeed(vault.seed);
-  const paths = derivationPath(0);
+  const paths = derivationPath(0, net);
   const spendNode = hd.derive(paths.spend);
   const scanNode = hd.derive(paths.scan);
   if (!spendNode.privateKey || !scanNode.privateKey) {
@@ -128,6 +135,6 @@ export function accountFromVault(vault: UnlockedVault, extraLabels = 0): Account
     changeSpendPub,
     labels,
     birthday: vault.birthday,
-    oneTime: (index: number) => oneTimeKeyFromHd(hd, index),
+    oneTime: (index: number) => oneTimeKeyFromHd(hd, index, net),
   };
 }

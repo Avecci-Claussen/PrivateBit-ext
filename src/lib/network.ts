@@ -21,6 +21,80 @@ export const FRACTAL = {
   defaultUnisat: "https://open-api-fractal.unisat.io",
 } as const;
 
+/** Bitcoin mainnet. Same address formats; the wallet keys come from the standard BIP352 path. */
+export const BITCOIN = {
+  id: "bitcoin",
+  name: "Bitcoin",
+  coinType: 0,
+  spHrp: "sp",
+  bech32: "bc",
+  pubKeyHash: 0x00,
+  scriptHash: 0x05,
+  wif: 0x80,
+} as const;
+
+export type NetworkId = "fractal" | "bitcoin";
+export const NETWORK_IDS: NetworkId[] = ["fractal", "bitcoin"];
+
+export type NetworkInfo = {
+  id: NetworkId;
+  /** Shown everywhere the chain is named. */
+  name: string;
+  /** Short name on the network chip. */
+  short: string;
+  unit: string;
+  coinType: number;
+  /** Explorer that serves blocks, fees and broadcasts in public mode. */
+  explorer: string;
+  /** Link for a transaction, for people. */
+  txUrl: (txid: string) => string;
+  /** Plan id domain (audit M10): a plan for one chain never confirms on the other. */
+  planChain: string;
+  /** A block hash only this chain has, to tell which chain a node follows. Both share the genesis block. */
+  checkpoint: { height: number; hash: string };
+  /** A wallet first opened on this network starts reading here at the earliest. */
+  defaultBirthday: number;
+  /** Price lookups for this coin. */
+  price: { coingecko: string; mexc: string };
+};
+
+export const NETWORKS: Record<NetworkId, NetworkInfo> = {
+  fractal: {
+    id: "fractal",
+    name: "Fractal Bitcoin",
+    short: "Fractal",
+    unit: "FB",
+    coinType: FRACTAL_COIN_TYPE,
+    explorer: "https://mempool.fractalbitcoin.io",
+    txUrl: (txid) => `https://mempool.fractalbitcoin.io/tx/${txid}`,
+    planChain: `fractal:${FRACTAL_CHAIN_ID}`,
+    checkpoint: { height: 2_200_000, hash: "00000000000000010eee723c7e38b605003765c9b3a26bd5c0a3b44c39803653" },
+    defaultBirthday: 2_231_692,
+    price: { coingecko: "fractal-bitcoin", mexc: "FBUSDT" },
+  },
+  bitcoin: {
+    id: "bitcoin",
+    name: "Bitcoin",
+    short: "Bitcoin",
+    unit: "BTC",
+    coinType: BITCOIN.coinType,
+    explorer: "https://mempool.space",
+    txUrl: (txid) => `https://mempool.space/tx/${txid}`,
+    planChain: "bitcoin:main",
+    checkpoint: { height: 900_000, hash: "000000000000000000010538edbfd2d5b809a33dd83f284aeea41c6d0d96968a" },
+    defaultBirthday: 972_900,
+    price: { coingecko: "bitcoin", mexc: "BTCUSDT" },
+  },
+};
+
+export function isNetworkId(v: unknown): v is NetworkId {
+  return v === "fractal" || v === "bitcoin";
+}
+
+export function netInfo(id: NetworkId | undefined): NetworkInfo {
+  return NETWORKS[id && isNetworkId(id) ? id : "fractal"];
+}
+
 /**
  * First Fractal Silent Payment send we scan for.
  * txid 0a6013191e7965a1f41d901e926cdbc2c2f80b5d58a5f8916e438eebc19168b0
@@ -34,13 +108,14 @@ export const DEFAULT_BIRTHDAY = 2_231_692;
 export type ChainKind = "core" | "unisat";
 
 /** Secrets that are stored encrypted (privatebit.chain.secrets), never in privatebit.chain. */
-export type ChainSecrets = { unisatToken?: string; rpcPassword?: string };
+export type ChainSecrets = { unisatToken?: string; rpcPassword?: string; sendNodePassword?: string };
 
 export function splitChainSecrets(cfg: ChainConfig): { plain: ChainConfig; secrets: ChainSecrets } {
-  const { unisatToken, rpcPassword, ...plain } = cfg;
+  const { unisatToken, rpcPassword, sendNodePassword, ...plain } = cfg;
   const secrets: ChainSecrets = {};
   if (unisatToken) secrets.unisatToken = unisatToken;
   if (rpcPassword) secrets.rpcPassword = rpcPassword;
+  if (sendNodePassword) secrets.sendNodePassword = sendNodePassword;
   return { plain: plain as ChainConfig, secrets };
 }
 
@@ -55,7 +130,21 @@ export type ChainConfig = {
   /** BIP77 mailbox (HPKE payloads, 7168 bytes). ntfy.sh cannot carry those. */
   payjoinDirectory?: string;
   ohttpRelay?: string;
+  /**
+   * Public mode only: "node" sends payments through the user's own node at sendNodeUrl, so the
+   * public service never sees them. A node in "core" mode always sends through itself.
+   */
+  sendVia?: "public" | "node";
+  sendNodeUrl?: string;
+  sendNodeUser?: string;
+  sendNodePassword?: string;
 };
+
+function sendRoute(cfg?: Omit<Partial<ChainConfig>, "kind">): Pick<ChainConfig, "sendVia" | "sendNodeUrl" | "sendNodeUser" | "sendNodePassword"> {
+  const url = cfg?.sendNodeUrl?.trim();
+  if (cfg?.sendVia !== "node" || !url) return url ? { sendVia: "public", sendNodeUrl: url, sendNodeUser: cfg?.sendNodeUser, sendNodePassword: cfg?.sendNodePassword } : {};
+  return { sendVia: "node", sendNodeUrl: url, sendNodeUser: cfg.sendNodeUser, sendNodePassword: cfg.sendNodePassword };
+}
 
 /** Public BIP77 directory. Payloads are HPKE; OHTTP needs a relay. */
 export const DEFAULT_PAYJOIN_DIRECTORY = "https://payjo.in";
@@ -101,6 +190,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
       unisatToken: token,
       payjoinDirectory,
       ohttpRelay,
+      ...sendRoute(cfg),
     };
   }
   const url = (cfg?.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
@@ -110,6 +200,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
     unisatToken: token,
     payjoinDirectory,
     ohttpRelay,
+    ...sendRoute(cfg),
   };
 }
 
@@ -125,11 +216,13 @@ export function redactChain(cfg: ChainConfig): ChainConfig {
     ...cfg,
     rpcPassword: cfg.rpcPassword ? REDACTED : undefined,
     unisatToken: cfg.unisatToken ? REDACTED : undefined,
+    sendNodePassword: cfg.sendNodePassword ? REDACTED : undefined,
   };
 }
 
-export function derivationPath(account = 0): { spend: string; scan: string } {
-  const a = `${BIP352_PURPOSE}'/${FRACTAL_COIN_TYPE}'/${account}'`;
+/** BIP352 key paths. Fractal keeps its own coin type (unchanged); Bitcoin uses the standard 0. */
+export function derivationPath(account = 0, net: NetworkId = "fractal"): { spend: string; scan: string } {
+  const a = `${BIP352_PURPOSE}'/${netInfo(net).coinType}'/${account}'`;
   return {
     spend: `m/${a}/0'/0`,
     scan: `m/${a}/1'/0`,

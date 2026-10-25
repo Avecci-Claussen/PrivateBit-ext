@@ -1,3 +1,4 @@
+import { secp256k1 } from "@noble/curves/secp256k1";
 import { encodeBip21 } from "./bip21.ts";
 import type { PaymentRequest } from "./bip21.ts";
 import {
@@ -159,7 +160,7 @@ export async function takeProposalV2(args: {
   validate?: (proposal: string, original: string) => string[];
 }): Promise<PayjoinOutcome | { empty: true }> {
   const t = transportOf(args.cfg, args.pj);
-  const got = await getProposal(t, args.pj);
+  const got = await getProposal(t, args.pj, secp256k1.getPublicKey(args.replySk, true));
   if (got.status === 410) {
     return { ok: false, reason: "BIP77 session expired", originalPsbtBase64: args.originalPsbt };
   }
@@ -216,6 +217,7 @@ export async function sendPayjoinV2(args: {
     attempts: args.poll?.attempts ?? SENDER_POLL_ATTEMPTS,
     delayMs: args.poll?.delayMs ?? SENDER_POLL_MS,
     sleep: args.poll?.sleep,
+    replyPk: secp256k1.getPublicKey(posted.replySk, true),
   });
   if (got.status === 410) {
     return { ok: false, reason: "BIP77 session expired", originalPsbtBase64: args.originalPsbt };
@@ -393,7 +395,7 @@ export async function receiverPostProposal(
 ): Promise<void> {
   const t = transportOf(cfg, session.pj);
   const messageB = encryptMessageB(new TextEncoder().encode(proposalB64), receiver, replyPkCompressed);
-  const posted = await postProposal(t, session.pj, messageB);
+  const posted = await postProposal(t, session.pj, messageB, replyPkCompressed);
   if (posted.status !== MAILBOX_OK) throw new Error(`mailbox POST proposal ${posted.status}`);
 }
 

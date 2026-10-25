@@ -134,6 +134,18 @@ function ohttpSend(
   });
 }
 
+/**
+ * A directory holds a GET on an empty mailbox open for about 30 seconds before it answers
+ * "nothing yet". Waiting less than that turned every quiet poll into a timeout error.
+ */
+export const LONG_POLL_MS = 45_000;
+
+function emptyOnLongPoll(method: string, e: unknown): MailboxResponse {
+  const name = (e as { name?: string })?.name;
+  if (method === "GET" && (name === "TimeoutError" || name === "AbortError")) return toResponse(MAILBOX_EMPTY, "");
+  throw e;
+}
+
 /** POST encapsulated requests to an OHTTP relay (RFC 9458). */
 export function ohttpRelayTransport(cfg: OhttpKeyConfig, relay: string): MailboxTransport {
   const send = (method: string, url: string, body?: MailboxBody): Promise<MailboxResponse> =>
@@ -142,10 +154,10 @@ export function ohttpRelayTransport(cfg: OhttpKeyConfig, relay: string): Mailbox
         method: "POST",
         headers: { "content-type": "message/ohttp-req" },
         body: wire as unknown as BodyInit,
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(method === "GET" ? LONG_POLL_MS : 20_000),
       });
       return new Uint8Array(await res.arrayBuffer());
-    });
+    }).catch((e) => emptyOnLongPoll(method, e));
   return {
     get: (url) => send("GET", url),
     post: (url, body) => send("POST", url, body),
@@ -162,10 +174,10 @@ export function ohttpGatewayTransport(cfg: OhttpKeyConfig, directory: string): M
         method: "POST",
         headers: { "content-type": "message/ohttp-req" },
         body: wire as unknown as BodyInit,
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(method === "GET" ? LONG_POLL_MS : 20_000),
       });
       return new Uint8Array(await res.arrayBuffer());
-    });
+    }).catch((e) => emptyOnLongPoll(method, e));
   return {
     get: (url) => send("GET", url),
     post: (url, body) => send("POST", url, body),
@@ -327,27 +339,45 @@ export async function getOriginal(transport: MailboxTransport, pj: string): Prom
   return transport.get(mailboxUrls(pj).original);
 }
 
+/**
+ * BIP77: the proposal goes to the sender's own reply mailbox, named by the short id of the
+ * sender's reply key. A directory only has "/<id>" mailboxes; "/<id>/proposal" is a 404 on
+ * payjo.in (this was why every Payjoin through payjo.in stopped after the receiver's step).
+ */
+export function replyMailboxUrl(pj: string, replyPkCompressed: Uint8Array): string {
+  const raw = stripFrag(pj.trim());
+  const url = new URL(raw.includes("://") ? raw : `http://${raw}`);
+  // The pj= URL is "<directory>/<receiver id>"; the reply mailbox sits next to it.
+  const parts = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+  parts[parts.length ? parts.length - 1 : 0] = mailboxShortId(replyPkCompressed);
+  url.hash = "";
+  url.search = "";
+  url.pathname = `/${parts.join("/")}`;
+  return url.toString();
+}
+
 export async function postProposal(
   transport: MailboxTransport,
   pj: string,
   payload: MailboxBody,
+  replyPkCompressed?: Uint8Array,
 ): Promise<MailboxResponse> {
-  return transport.post(mailboxUrls(pj).proposal, payload);
+  return transport.post(replyPkCompressed ? replyMailboxUrl(pj, replyPkCompressed) : mailboxUrls(pj).proposal, payload);
 }
 
-export async function getProposal(transport: MailboxTransport, pj: string): Promise<MailboxResponse> {
-  return transport.get(mailboxUrls(pj).proposal);
+export async function getProposal(transport: MailboxTransport, pj: string, replyPkCompressed?: Uint8Array): Promise<MailboxResponse> {
+  return transport.get(replyPkCompressed ? replyMailboxUrl(pj, replyPkCompressed) : mailboxUrls(pj).proposal);
 }
 
 export async function pollProposal(
   transport: MailboxTransport,
   pj: string,
-  args: { attempts: number; delayMs: number; sleep?: (ms: number) => Promise<void> },
+  args: { attempts: number; delayMs: number; sleep?: (ms: number) => Promise<void>; replyPk?: Uint8Array },
 ): Promise<MailboxResponse> {
   const sleep = args.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   let last: MailboxResponse = toResponse(MAILBOX_EMPTY, "");
   for (let i = 0; i < args.attempts; i++) {
-    last = await getProposal(transport, pj);
+    last = await getProposal(transport, pj, args.replyPk);
     if (last.status === MAILBOX_OK && last.bytes.length > 0) return last;
     if (last.status === 410) return last;
     if (i + 1 < args.attempts) await sleep(args.delayMs);

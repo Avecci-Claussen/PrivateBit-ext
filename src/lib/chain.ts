@@ -2,9 +2,9 @@ import { fromHex } from "./bytes.ts";
 import { netFetch, noteRateLimited } from "./net.ts";
 import { rejectAddressUtxoAsSot } from "./policy.ts";
 import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
-import { FRACTAL, migrateChainConfig, type ChainConfig, type ChainKind } from "./network.ts";
+import { FRACTAL, migrateChainConfig, netInfo, type ChainConfig, type ChainKind, type NetworkId } from "./network.ts";
 import { effectiveUnisatToken } from "./builtin-key.ts";
-import { mempoolBlockHash, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
+import { mempoolBlockHash, mempoolBlockPrevouts, mempoolBlockRaw, mempoolBlockTxids, mempoolBroadcast, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
 
 export type Tip = { height: number; hash: string };
 
@@ -28,6 +28,13 @@ export type ChainSource = {
   estimateFeeSatPerVb(): Promise<number>;
   /** Fee tiers for the picker. Optional so test doubles can omit it. */
   feeRates?(): Promise<FeeRates>;
+  /** Which chain this source reads. Missing means Fractal (older test doubles). */
+  net?: NetworkId;
+  /**
+   * Prevout scripts ("txid:vout" to script hex) for the transactions at `indexes` of a block.
+   * Bitcoin blocks are big; this replaces thousands of parent lookups with a few pages.
+   */
+  blockPrevouts?(height: number, hash: string, indexes: number[]): Promise<Record<string, string>>;
 };
 
 /** Fee tiers for any source; falls back to one rate for every tier. */
@@ -160,20 +167,87 @@ async function unisatGet<T>(url: string, headers: Record<string, string>): Promi
 
 type RpcAuth = { user?: string; password?: string };
 
+/** Plain words for what went wrong talking to the user's own node. */
+export class NodeError extends Error {
+  constructor(
+    message: string,
+    readonly code: "auth" | "unreachable" | "timeout" | "not-json" | "http" | "rpc",
+  ) {
+    super(message);
+    this.name = "NodeError";
+  }
+}
+
 async function rpc(url: string, auth: RpcAuth, method: string, params: unknown[] = []): Promise<unknown> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (auth.user) {
     headers.authorization = `Basic ${btoa(`${auth.user}:${auth.password ?? ""}`)}`;
   }
   // Your own node gets a timeout too: a stalled node must not freeze the scan.
-  const res = await netFetch(
-    url,
-    { method: "POST", headers, body: JSON.stringify({ jsonrpc: "1.0", id: "privatebit", method, params }) },
-    { timeoutMs: method === "getblock" ? 30_000 : 15_000 },
-  );
-  const body = (await res.json()) as { result: unknown; error: { message: string } | null };
-  if (body.error) throw new Error(body.error.message);
-  return body.result;
+  let res: Response;
+  try {
+    res = await netFetch(
+      url,
+      { method: "POST", headers, body: JSON.stringify({ jsonrpc: "1.0", id: "privatebit", method, params }) },
+      { timeoutMs: method === "getblock" ? 30_000 : 15_000 },
+    );
+  } catch (e) {
+    if (e instanceof RateLimitedError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/timed out/i.test(msg)) throw new NodeError("Your node did not answer in time. Check that it is running and not busy starting up.", "timeout");
+    throw new NodeError("Your node could not be reached. Check the address and port, and that the node allows connections from this computer (rpcallowip, rpcbind).", "unreachable");
+  }
+  return readRpcBody(res);
+}
+
+/** Exported for tests: turn a node's HTTP answer into a result or a plain error. */
+export async function readRpcBody(res: Response): Promise<unknown> {
+  if (res.status === 401 || res.status === 403) throw new NodeError("Your node rejected the username or password.", "auth");
+  const text = await res.text().catch(() => "");
+  if (!text.trim()) {
+    throw new NodeError(res.ok ? "Your node sent an empty answer. Check that the address points to the RPC port." : `Your node answered with error ${res.status} and no details.`, res.ok ? "not-json" : "http");
+  }
+  let body: { result?: unknown; error?: { message?: string; code?: number } | null };
+  try {
+    body = JSON.parse(text) as typeof body;
+  } catch {
+    throw new NodeError("Your node did not answer like a Bitcoin node. Check that the address points to the RPC port, not a web page.", "not-json");
+  }
+  if (body && body.error) {
+    if (body.error.code === -28) throw new NodeError(`Your node is still starting: ${body.error.message ?? "please wait"}`, "rpc");
+    throw new NodeError(body.error.message || `Your node answered with error ${res.status}.`, "rpc");
+  }
+  if (!res.ok) throw new NodeError(`Your node answered with error ${res.status}.`, "http");
+  return body?.result;
+}
+
+/** Bitcoin Core writes `__cookie__:password` to its .cookie file. Returns null for anything else. */
+export function parseCookie(text: string): { user: string; password: string } | null {
+  const line = text.trim().split(/\r?\n/)[0]?.trim() ?? "";
+  const i = line.indexOf(":");
+  if (i <= 0) return null;
+  const user = line.slice(0, i);
+  const password = line.slice(i + 1);
+  if (user !== "__cookie__" || !/^[0-9a-fA-F]{16,}$/.test(password)) return null;
+  return { user, password };
+}
+
+export type NodeCheck = { height: number; chain: string; txindex: boolean | "unknown"; blocks: number; headers: number };
+
+/** Test a node: which chain it is on, how far it is, and whether its transaction index is on. */
+export async function checkNode(cfg: { url: string; rpcUser?: string; rpcPassword?: string }): Promise<NodeCheck> {
+  const auth = { user: cfg.rpcUser, password: cfg.rpcPassword };
+  const info = (await rpc(cfg.url, auth, "getblockchaininfo")) as { chain?: string; blocks?: number; headers?: number };
+  let txindex: boolean | "unknown" = "unknown";
+  try {
+    const idx = (await rpc(cfg.url, auth, "getindexinfo")) as Record<string, { synced?: boolean }> | null;
+    txindex = !!idx && typeof idx === "object" && "txindex" in idx ? idx.txindex?.synced !== false : false;
+  } catch (e) {
+    if (e instanceof NodeError && e.code === "auth") throw e;
+    txindex = "unknown";
+  }
+  const blocks = Number(info?.blocks ?? 0);
+  return { height: blocks, blocks, headers: Number(info?.headers ?? blocks), chain: String(info?.chain ?? "unknown"), txindex };
 }
 
 export function coreSource(cfg: ChainConfig): ChainSource {
@@ -211,6 +285,21 @@ export function coreSource(cfg: ChainConfig): ChainSource {
     },
     async broadcast(txHex) {
       return String(await rpc(cfg.url, auth, "sendrawtransaction", [txHex]));
+    },
+    async blockPrevouts(_height, hash) {
+      // Bitcoin Core 25 and later list each input's prevout at verbosity 3; no txindex needed.
+      const block = (await rpc(cfg.url, auth, "getblock", [hash, 3])) as {
+        tx?: { vin?: { txid?: string; vout?: number; prevout?: { scriptPubKey?: { hex?: string } } }[] }[];
+      };
+      const out: Record<string, string> = {};
+      for (const tx of block.tx ?? []) {
+        for (const vin of tx.vin ?? []) {
+          const spk = vin.prevout?.scriptPubKey?.hex;
+          if (vin.txid && typeof vin.vout === "number" && typeof spk === "string") out[`${vin.txid}:${vin.vout}`] = spk.toLowerCase();
+        }
+      }
+      if (Object.keys(out).length === 0 && (block.tx?.length ?? 0) > 1) throw new Error("node did not list prevouts");
+      return out;
     },
     async estimateFeeSatPerVb() {
       const r = (await rpc(cfg.url, auth, "estimatesmartfee", [2])) as { feerate?: number };
@@ -378,10 +467,45 @@ export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): Ch
   };
 }
 
-export function openChain(cfg: ChainConfig): ChainSource {
+export function openChain(cfg: ChainConfig, net: NetworkId = "fractal"): ChainSource {
   const migrated = migrateChainConfig(cfg);
-  if (migrated.kind === "core") return coreSource(migrated);
-  return withExplorerBlocks(unisatSource(migrated));
+  if (migrated.kind === "core") return { ...coreSource(migrated), net };
+  const pub = net === "bitcoin" ? explorerSource(netInfo("bitcoin").explorer, "bitcoin") : { ...withExplorerBlocks(unisatSource(migrated)), net };
+  return withSendRoute(pub, migrated);
+}
+
+/**
+ * "Send payments through: Your own node". Reading still uses the public service; the signed
+ * payment goes only to the node, so the public service never sees it or the IP sending it.
+ * There is no fallback to the public service: if the node is down, the send fails and says so.
+ */
+export function withSendRoute(source: ChainSource, cfg: ChainConfig): ChainSource {
+  if (cfg.kind === "core" || cfg.sendVia !== "node" || !cfg.sendNodeUrl) return source;
+  const node = coreSource({ kind: "core", url: cfg.sendNodeUrl, rpcUser: cfg.sendNodeUser, rpcPassword: cfg.sendNodePassword });
+  return { ...source, broadcast: (txHex) => node.broadcast(txHex) };
+}
+
+/** Public mode on Bitcoin: everything from one Esplora explorer (mempool.space). */
+export function explorerSource(base: string, net: NetworkId): ChainSource {
+  return {
+    kind: "unisat",
+    net,
+    getTip: () => mempoolTip(base),
+    getBlockHash: (height) => mempoolBlockHash(height, base),
+    getBlockRaw: (height) => mempoolBlockRaw(height, base),
+    getBlockTxids: (height) => mempoolBlockTxids(height, base),
+    async getTxHex(txid) {
+      const got = await mempoolTxHex(txid, base);
+      if (!got) throw new Error(`transaction ${txid} not found`);
+      return got;
+    },
+    broadcast: (txHex) => mempoolBroadcast(txHex, base),
+    async estimateFeeSatPerVb() {
+      return Math.max(1, Math.ceil(parseRecommendedFees(await mempoolFees(base)).normal));
+    },
+    feeRates: async () => parseRecommendedFees(await mempoolFees(base)),
+    blockPrevouts: (_height, hash, indexes) => mempoolBlockPrevouts(hash, indexes, base),
+  };
 }
 
 /**

@@ -14,6 +14,7 @@
  * namespaces once, writing and verifying the new copies before the old keys are removed.
  */
 import type { Kv } from "./vault.ts";
+import type { NetworkId } from "./network.ts";
 
 export const INDEX_KEY = "privatebit.wallets";
 export const LEGACY_ID = "legacy";
@@ -35,8 +36,70 @@ export const WALLET_SCOPED = [
   "privatebit.session",
   "privatebit.scan.grant",
   "privatebit.delayed",
+  "privatebit.birthday",
+  // Bitcoin copies of the per-chain keys (NET_SCOPED). Fractal keeps the original names.
+  "privatebit.btc.scan",
+  "privatebit.btc.chain",
+  "privatebit.btc.chain.secrets",
+  "privatebit.btc.history",
+  "privatebit.btc.coinmeta",
+  "privatebit.btc.onetime",
+  "privatebit.btc.pj.sessions",
+  "privatebit.btc.pj.send",
+  "privatebit.btc.pj.hpke",
+  "privatebit.btc.scan.grant",
+  "privatebit.btc.delayed",
+  "privatebit.btc.birthday",
 ] as const;
 const SCOPED = new Set<string>(WALLET_SCOPED);
+
+/** Keys that hold one chain's data. The vault and the unlock session are shared by both chains. */
+export const NET_SCOPED = [
+  "privatebit.scan",
+  "privatebit.chain",
+  "privatebit.chain.secrets",
+  "privatebit.history",
+  "privatebit.coinmeta",
+  "privatebit.onetime",
+  "privatebit.pj.sessions",
+  "privatebit.pj.send",
+  "privatebit.pj.hpke",
+  "privatebit.scan.grant",
+  "privatebit.delayed",
+  "privatebit.birthday",
+] as const;
+const NET_SET = new Set<string>(NET_SCOPED);
+
+export function netKeyName(key: string, net: NetworkId): string {
+  if (net === "fractal" || !NET_SET.has(key)) return key;
+  return `${PREFIX}btc.${key.slice(PREFIX.length)}`;
+}
+
+/** One wallet's storage for one chain: per-chain keys get the chain's names, the rest pass through. */
+export function netKv(inner: Kv, net: NetworkId): Kv {
+  if (net === "fractal") return inner;
+  const map = (k: string): string => netKeyName(k, net);
+  return {
+    async get(keys) {
+      const mapped = keys.map(map);
+      const got = await inner.get(mapped);
+      const out: Record<string, unknown> = {};
+      keys.forEach((k, i) => {
+        const v = got[mapped[i]!];
+        if (v !== undefined) out[k] = v;
+      });
+      return out;
+    },
+    async set(items) {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(items)) out[map(k)] = v;
+      await inner.set(out);
+    },
+    async remove(keys) {
+      await inner.remove(keys.map(map));
+    },
+  };
+}
 
 /** Shared by all wallets on this computer. */
 export const GLOBAL_KEYS = [
