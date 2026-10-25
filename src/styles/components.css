@@ -510,3 +510,6 @@ ul.list,ul.wrows{list-style:none;margin:0;padding:0}
 /* larger text: decoration gives way to content */
 :root[data-fs=lg] .ledger{display:none}
 details.card > summary{padding-right:4px}
+
+/* A checkbox or switch alone in a table cell: the touch area is 48 x 48, the control stays its size. */
+.cell-hit{display:inline-flex;align-items:center;justify-content:center;min-width:48px;min-height:48px;margin:-8px 0;cursor:pointer}
