@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sample dApp (local test page)</title>
+<style>
+  :root{color-scheme:light dark;font:15px/1.5 system-ui,sans-serif}
+  body{max-width:860px;margin:24px auto;padding:0 16px}
+  h1{font-size:22px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin:12px 0}
+  button{min-height:36px;padding:6px 10px;border-radius:8px;border:1px solid #8884;cursor:pointer;font:inherit}
+  textarea,input{width:100%;box-sizing:border-box;font:13px/1.4 ui-monospace,monospace;padding:6px;border-radius:6px;border:1px solid #8886}
+  pre{background:#8881;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto}
+  label{display:block;margin-top:8px;font-weight:600}
+</style>
+</head>
+<body>
+<h1>Sample dApp</h1>
+<p>Local test page for the PrivateBit provider. It calls every method on <code>window.privatebit</code> and logs the answer. Nothing here is a real service.</p>
+<p id="detected">Looking for a wallet…</p>
+<div class="grid" id="buttons"></div>
+<label for="msg">Message</label><input id="msg" value="Sign in to Sample dApp, nonce 42">
+<label for="psbt">PSBT (hex or base64)</label><textarea id="psbt" rows="3"></textarea>
+<label for="to">Send to</label><input id="to" placeholder="bc1p…">
+<label for="sats">Amount (sats)</label><input id="sats" value="1000">
+<label for="raw">Raw transaction (hex)</label><textarea id="raw" rows="2"></textarea>
+<h2>Log</h2>
+<pre id="log" aria-live="polite"></pre>
+<h2>Events</h2>
+<pre id="events"></pre>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const log = (k, v) => { $("log").textContent = `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}\n` + $("log").textContent; };
+  const w = () => window.privatebit;
+  window.__events = [];
+  const methods = {
+    requestAccounts: () => w().requestAccounts(),
+    getAccounts: () => w().getAccounts(),
+    getNetwork: () => w().getNetwork(),
+    switchNetwork: () => w().switchNetwork("livenet"),
+    getChain: () => w().getChain(),
+    "switchChain BTC": () => w().switchChain("BITCOIN_MAINNET"),
+    "switchChain FB": () => w().switchChain("FRACTAL_BITCOIN_MAINNET"),
+    getPublicKey: () => w().getPublicKey(),
+    getBalance: () => w().getBalance(),
+    getInscriptions: () => w().getInscriptions(0, 10),
+    "signMessage ecdsa": () => w().signMessage($("msg").value, "ecdsa"),
+    "signMessage bip322": () => w().signMessage($("msg").value, "bip322-simple"),
+    signPsbt: () => w().signPsbt($("psbt").value.trim(), { autoFinalized: true }),
+    signPsbts: () => w().signPsbts([$("psbt").value.trim()], [{ autoFinalized: false }]),
+    pushPsbt: () => w().pushPsbt($("psbt").value.trim()),
+    pushTx: () => w().pushTx({ rawtx: $("raw").value.trim() }),
+    sendBitcoin: () => w().sendBitcoin($("to").value.trim(), Number($("sats").value), { memo: "sample" }),
+    disconnect: () => w().disconnect(),
+  };
+  for (const [name, fn] of Object.entries(methods)) {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.dataset.m = name;
+    b.onclick = async () => { try { log(name, await fn()); } catch (e) { log(`${name} error ${e.code}`, e.message); } };
+    $("buttons").appendChild(b);
+  }
+  function hook() {
+    if (!w()) return false;
+    $("detected").textContent = `Wallet found: privatebit (compatibility name ${window.unisat === window.privatebit ? "also set" : "taken by another wallet"}).`;
+    for (const ev of ["accountsChanged", "networkChanged", "chainChanged"]) w().on(ev, (d) => { window.__events.push([ev, d]); $("events").textContent += `${ev}: ${JSON.stringify(d)}\n`; });
+    return true;
+  }
+  if (!hook()) window.addEventListener("privatebit#initialized", hook, { once: true });
+</script>
+</body>
+</html>

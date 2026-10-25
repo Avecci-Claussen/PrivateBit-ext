@@ -84,7 +84,7 @@ function reviewBlock(r: Review, n: number, of: number): Safe {
   return html`<section class="stack" aria-label="Transaction ${n} of ${of}">
   ${of > 1 ? html`<p class="io-h">Transaction ${n} of ${of}</p>` : ""}
   ${r.refuse ? html`<div class="banner danger" role="alert">${I("ban", "s16")}<div><span class="bt">PrivateBit will not sign this</span>${r.refuse}</div></div>` : ""}
-  <div class="hero-amt"><p class="cap">Leaves this site's account</p><p class="a">${fbShort(net > 0n ? net : 0n, { unit: false })}<span class="unit"> ${UNIT()}</span></p>${fee !== null ? html`<p class="fiat">Includes the network fee</p>` : ""}</div>
+  <div class="hero-amt"><p class="cap">Leaves this site's account</p><p class="a">${fb(net > 0n ? net : 0n, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(net > 0n ? net : 0n)}${fee !== null ? ", network fee included" : ""}</p></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">You sign</span><span class="v"><span>${mine.length} ${mine.length === 1 ? "input" : "inputs"}, ${fb(spent)}</span><span class="cap">From this site's account only</span></span></div>
     ${notMine.length ? html`<div class="r"><span class="k">Not yours</span><span class="v"><span>${notMine.length} ${notMine.length === 1 ? "input" : "inputs"}</span><span class="cap">Added by the site or someone else. You do not sign ${notMine.length === 1 ? "it" : "them"}.</span></span></div>` : ""}
@@ -169,7 +169,7 @@ screens.dapp = () => {
       header: siteHeader(v, "Send from the site account"),
       main: html`${originCard(v)}
   ${s.error ? html`<div class="banner danger" role="alert">${I("ban", "s16")}<div><span class="bt">This payment cannot be made</span>${s.error}</div></div>` : ""}
-  <div class="hero-amt"><p class="cap">You send</p><p class="a">${fbShort(s.amount, { unit: false })}<span class="unit"> ${UNIT()}</span></p></div>
+  <div class="hero-amt"><p class="cap">You send</p><p class="a">${fb(s.amount, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(s.amount)}</p></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">To</span><span class="v"><span class="mono" style="word-break:break-all">${codeHi(s.to, 8, 8)}</span></span></div>
     ${accountRow(v)}

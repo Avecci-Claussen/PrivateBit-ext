@@ -251,6 +251,10 @@ describe("provider request validation", () => {
     expect(code(() => parseRequest("signPsbt", ["00", { toSignInputs: [{ index: -1 }] }]))).toBe(ERR.invalid);
     expect(code(() => parseRequest("signMessage", ["x".repeat(10_001)]))).toBe(ERR.invalid);
   });
+  it("null optional params (JSON over the port) mean omitted", () => {
+    expect(parseRequest("signMessage", ["hi", null])).toMatchObject({ type: "ecdsa" });
+    expect(parseRequest("signPsbt", ["70736274ff", null])).toMatchObject({ options: { autoFinalized: true } });
+  });
   it("signMessage defaults to ecdsa", () => {
     expect(parseRequest("signMessage", ["hi"])).toEqual({ method: "signMessage", text: "hi", type: "ecdsa" });
     expect(parseRequest("signMessage", ["hi", "bip322-simple"])).toMatchObject({ type: "bip322-simple" });

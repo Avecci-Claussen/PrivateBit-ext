@@ -166,6 +166,8 @@ export function installDapp(deps: DappDeps) {
       default:
         break;
     }
+    // Locked: a request that needs approval opens its window now, which asks to unlock first.
+    if (NEEDS_APPROVAL.has(req.method) && req.method !== "switchNetwork" && !(await unlocked())) return ask(origin, req, port);
     await requireConnected(origin);
     switch (req.method) {
       case "getNetwork":
@@ -277,6 +279,10 @@ export function installDapp(deps: DappDeps) {
     const rec = await wallet.siteRecord(p.origin);
     base.connected = !!rec?.connected;
     if (p.req.method === "requestAccounts") return base;
+    if (!base.connected) {
+      settle(id, new DappError(ERR.unauthorized, "connect first with requestAccounts"));
+      throw new Error("This site is not connected. Nothing was signed.");
+    }
     const { key } = await wallet.siteKey(p.origin);
     base.address = key.address;
     base.balance = (await wallet.siteBalance(key.index)).total;

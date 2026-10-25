@@ -18,6 +18,8 @@ import { evenPriv, sessionTweak } from "./lib/schnorr-util.ts";
 import { memoryKv } from "./lib/vault.ts";
 import { accountFromVault } from "./lib/keys.ts";
 import { PrivateBit } from "./lib/wallet.ts";
+import * as btc from "@scure/btc-signer";
+import { fromHex } from "./lib/bytes.ts";
 
 // Each chain gets its own short mock chain just past its default start height.
 const tipOf = (net: NetworkId): number => netInfo(net).defaultBirthday + 40;
@@ -28,6 +30,9 @@ function u32le(n: number): Uint8Array {
 }
 
 /** A tiny linked chain: each block has one coinbase paying an OP_RETURN. */
+/** Test only: when set, the mock chain "accepts" a transaction and returns its txid. Nothing leaves the browser. */
+const mock = { accept: false, seen: [] as string[] };
+
 function mockChain(netNow: () => NetworkId): ChainSource {
   const headers = new Map<number, Uint8Array>();
   const header = (h: number): Uint8Array => {
@@ -79,8 +84,10 @@ function mockChain(netNow: () => NetworkId): ChainSource {
     async getTxHex() {
       throw new Error("not in the mock chain");
     },
-    async broadcast() {
-      throw new Error("the end-to-end run never broadcasts");
+    async broadcast(txHex: string) {
+      if (!mock.accept) throw new Error("the end-to-end run never broadcasts");
+      mock.seen.push(txHex);
+      return btc.Transaction.fromRaw(fromHex(txHex), { allowUnknownOutputs: true, allowUnknownInputs: true, disableScriptCheck: true }).id;
     },
     async estimateFeeSatPerVb() {
       return 2;
@@ -117,6 +124,45 @@ export function installE2E(wallet: PrivateBit): void {
       }, { flush: true });
       if (label) await wallet.setCoinMeta(`${coin.txid}:0`, { label });
       return coin.txid;
+    },
+    /** Let the mock chain take transactions (kept in memory, never sent). */
+    acceptBroadcasts(on = true) {
+      mock.accept = on;
+      return mock.seen.length;
+    },
+    seenBroadcasts() {
+      return mock.seen.slice();
+    },
+    /** A connected site's account on the open chain (address, script, path). */
+    async siteInfo(origin: string) {
+      const core = await wallet.core();
+      const { account } = await core.requireAccount();
+      const site = await core.siteRecord(origin);
+      if (!site) return null;
+      const k = account.site!(site.index);
+      return { address: k.address, script: k.scriptPubKey, path: k.path, index: site.index, connected: site.connected, output: hex(k.output) };
+    },
+    /** Give a site account one synthetic coin (fake outpoint, test only). */
+    async fundSite(origin: string, value = "40000") {
+      const core = await wallet.core();
+      const { account } = await core.requireAccount();
+      const site = await core.siteRecord(origin);
+      if (!site) throw new Error("site not connected");
+      const k = account.site!(site.index);
+      const coin: LabeledUtxo = { txid: randomHex(32), vout: 0, value, scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, height: tipOf(wallet.net), spent: false, kind: "site", index: site.index };
+      await core.coins_.update((st) => {
+        const next = { ...st, utxos: [...st.utxos] };
+        upsertUtxo(next.utxos, coin);
+        return next;
+      }, { flush: true });
+      return { txid: coin.txid, vout: 0, script: k.scriptPubKey, value };
+    },
+    /** One private coin of the open wallet (txid, script), for the refusal test. */
+    async privateCoin() {
+      const core = await wallet.core();
+      const scan = await core.loadScan();
+      const u = scan.utxos.find((x) => !x.spent);
+      return u ? { txid: u.txid, vout: u.vout, script: u.scriptPubKey, value: u.value } : null;
     },
     /** Write a sent payment into history the way a real broadcast would (no transaction exists). */
     async addSent(e: { to: string; onchain: string; amount: string; fee: string; change: string; label?: string; kind?: "sent" | "split" | "self" }) {

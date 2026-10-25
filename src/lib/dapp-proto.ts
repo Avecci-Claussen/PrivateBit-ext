@@ -103,7 +103,8 @@ function signOptions(v: unknown): { autoFinalized: boolean; toSignInputs?: ToSig
 /** Check one request from a page. Throws DappError with -32602 for anything malformed. */
 export function parseRequest(method: unknown, params: unknown): DappRequest {
   if (typeof method !== "string") bad("method must be a string");
-  const p: unknown[] = Array.isArray(params) ? params : params === undefined ? [] : bad("params must be a list");
+  // Port messages are JSON: an omitted optional argument arrives as null.
+  const p: unknown[] = (Array.isArray(params) ? params : params === undefined || params === null ? [] : bad("params must be a list")).map((x) => (x === null ? undefined : x));
   if (p.length > 4) bad("too many params");
   switch (method) {
     case "requestAccounts":
