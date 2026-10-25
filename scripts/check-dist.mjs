@@ -40,6 +40,9 @@ const RULES = [
   { kind: "env variable name for the live test key", re: /PRIVATEBIT_LIVE_TEST_UNISAT_KEY/g },
   { kind: "process.env read", re: /process\.env\.[A-Z_]{3,}/g },
   { kind: "end-to-end test hook in a release build", re: /__pbE2E/g },
+  // Audit L7: the CSP has no unsafe-inline for styles, so a style attribute would be dropped.
+  { kind: "inline style attribute (blocked by the CSP)", re: /\bstyle=\\?"[^"\\]/g },
+  { kind: "unsafe-inline or unsafe-eval in a policy", re: /'unsafe-(?:inline|eval)'/g },
   { kind: "private key block", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
   { kind: "extended private key", re: /\b[xtyz]prv[1-9A-HJ-NP-Za-km-z]{100,}/g },
   { kind: "WIF private key", re: /(["'`])[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\1/g },

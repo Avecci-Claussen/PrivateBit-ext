@@ -98,7 +98,7 @@ screens.settings = () => {
     header: hdr(),
     nav: tabs("settings"),
     main: html`
-  <h1 style="font:var(--t-title)">Settings</h1>
+  <h1 data-st="9d50d4">Settings</h1>
   <div class="list">
   ${row("wallet", "Wallets", (() => { const n = (S.b!.state.wallets ?? []).length || 1; return `${n} ${n === 1 ? "wallet" : "wallets"}, ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"} open`; })(), "wallets")}
   ${row("blocks", "Network and data source", c.kind === "core" ? `${CHAIN_SHORT()}, your own node` : `${CHAIN_SHORT()}, public block data service`, "set-network")}
@@ -114,7 +114,7 @@ screens.settings = () => {
   ${row("globe", "Connected sites", "Websites you approved, each with its own account", "set-sites")}
 </div>
   ${S.mode === "popup" ? html`<button class="btn btn-secondary btn-block" type="button" data-act="open-full">${I("external-link", "s16")}Open full page</button>` : ""}
-  <p class="cap" style="text-align:center">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p>`,
+  <p class="cap" data-st="91a870">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p>`,
     page: fullSettings(),
   };
 };
@@ -130,8 +130,8 @@ loaders["set-network"] = () => {
 };
 function networkForm(): Safe {
   const own = fv("src", chain().kind === "core" ? "core" : "service") === "core";
-  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("current", "lg")}<span class="body grow"><span class="strong" style="display:block">${CHAIN()}</span><span class="small muted">Mainnet. Switch chains with the chip at the top.</span></span></div></div>
-  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Where block data comes from</legend><div class="opt-list" role="radiogroup">
+  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("current", "lg")}<span class="body grow"><span class="strong" data-st="2a1b75">${CHAIN()}</span><span class="small muted">Mainnet. Switch chains with the chip at the top.</span></span></div></div>
+  <fieldset class="field" data-st="e8f267"><legend class="label" data-st="4e420a">Where block data comes from</legend><div class="opt-list" role="radiogroup">
     <button class="opt" role="radio" aria-checked="${String(!own)}" type="button" data-act="set" data-k="src" data-v="service"><span class="body"><span class="t">Public block data service</span><span class="d">Easiest. The service sees your IP, the blocks and fee rates you ask for, and the payments you broadcast. It is not given your receive code.</span></span>${!own ? I("check") : ""}</button>
     <button class="opt" role="radio" aria-checked="${String(own)}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own ${CHAIN_SHORT()} node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
   ${own
@@ -179,7 +179,7 @@ async function testNode(cfg: ChainConfig, sendNode = false): Promise<NodeResult>
 }
 function nodeResult(t: NodeResult | undefined, forScan = false): Safe | string {
   if (!t) return "";
-  if (!t.ok) return html`<div class="banner danger" role="alert">${I("circle-x", "s16")}<div><span class="bt">Could not connect</span><span style="overflow-wrap:anywhere">${t.msg}</span></div></div>`;
+  if (!t.ok) return html`<div class="banner danger" role="alert">${I("circle-x", "s16")}<div><span class="bt">Could not connect</span><span data-st="115422">${t.msg}</span></div></div>`;
   const wrong = t.onChain === "other";
   const behind = t.onChain === "behind";
   const syncing = t.headers !== undefined && t.blocks !== undefined && t.headers - t.blocks > 2;
@@ -188,12 +188,12 @@ function nodeResult(t: NodeResult | undefined, forScan = false): Safe | string {
   lines.push(html`<li>At block ${num(t.height ?? t.blocks ?? 0)}${syncing ? `, still catching up to ${num(t.headers ?? 0)}` : ""}.</li>`);
   if (forScan) lines.push(html`<li>${t.txindex === true ? "Transaction index is on." : t.txindex === false ? "Transaction index is off. Finding coins still works, but checking older payments is slower. Add txindex=1 to its settings for the best results." : "Could not tell whether the transaction index is on."}</li>`);
   const cls = wrong ? "danger" : behind || syncing || (forScan && t.txindex === false) ? "warn" : "ok";
-  return html`<div class="banner ${cls}" role="status">${I(wrong ? "circle-x" : cls === "warn" ? "triangle-alert" : "circle-check", "s16")}<div><span class="bt">${wrong ? "Wrong chain" : "Connected"}</span><ul class="small" style="margin:4px 0 0;padding-left:18px">${lines}</ul></div></div>`;
+  return html`<div class="banner ${cls}" role="status">${I(wrong ? "circle-x" : cls === "warn" ? "triangle-alert" : "circle-check", "s16")}<div><span class="bt">${wrong ? "Wrong chain" : "Connected"}</span><ul class="small" data-st="5715f8">${lines}</ul></div></div>`;
 }
 /** Paste the node's .cookie file instead of typing a user and password. */
 function cookieField(id: string, userKey: string, passKey: string): Safe {
-  return html`<details class="card flat pad-sm" ${S.f[`${id}Open`] || err(id) ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle-k" data-k="${id}Open">Use the cookie file instead</summary><div class="field" style="margin-top:8px"><label class="label" for="${id}">Paste the contents of .cookie</label><input class="input mono" id="${id}" data-f="${id}" autocomplete="off" spellcheck="false" placeholder="__cookie__:…" aria-describedby="${id}-h"><p class="help" id="${id}-h">Found in the node's data folder. It changes each time the node restarts, so paste it again after a restart.</p>${err(id) ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err(id)}</span></p>` : ""}
-  <button class="btn btn-secondary btn-sm" type="button" data-act="cookie-use" data-id="${id}" data-u="${userKey}" data-p="${passKey}" style="align-self:flex-start">${I("clipboard-paste", "s16")}Use cookie</button></div></details>`;
+  return html`<details class="card flat pad-sm" ${S.f[`${id}Open`] || err(id) ? html`open` : ""}><summary class="small strong" data-st="3b6a3a" data-act="toggle-k" data-k="${id}Open">Use the cookie file instead</summary><div class="field" data-st="8a77e5"><label class="label" for="${id}">Paste the contents of .cookie</label><input class="input mono" id="${id}" data-f="${id}" autocomplete="off" spellcheck="false" placeholder="__cookie__:…" aria-describedby="${id}-h"><p class="help" id="${id}-h">Found in the node's data folder. It changes each time the node restarts, so paste it again after a restart.</p>${err(id) ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err(id)}</span></p>` : ""}
+  <button class="btn btn-secondary btn-sm" type="button" data-act="cookie-use" data-id="${id}" data-u="${userKey}" data-p="${passKey}" data-st="c9adc4">${I("clipboard-paste", "s16")}Use cookie</button></div></details>`;
 }
 actions["cookie-use"] = (el) => {
   const id = el.dataset.id!;
@@ -218,7 +218,7 @@ loaders["set-node"] = () => {
   S.f.nrp = c.rpcPassword ?? "";
   S.d.nodeTest = undefined;
 };
-async function hostPermission(url: string): Promise<boolean> {
+export async function hostPermission(url: string): Promise<boolean> {
   try {
     const u = new URL(url);
     if (u.hostname === "127.0.0.1" || u.hostname === "localhost") return true;
@@ -347,7 +347,7 @@ function priceForm(): Safe {
     ? html`<span class="mono">$${pc.usd >= 100 ? pc.usd.toLocaleString("en-US", { maximumFractionDigits: 0 }) : pc.usd.toFixed(4)}</span><span class="cap ${p.kind === "stale" ? "warn" : ""}">${p.kind === "stale" ? "Not updated since " : "Updated "}${hm(pc.fetchedAt)}${used ? `, from ${used}` : ""}</span>`
     : html`<span class="muted">${src === "off" ? "Off" : "None yet"}</span>`;
   return html`
-  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Price source</legend><div class="opt-list" role="radiogroup">
+  <fieldset class="field" data-st="e8f267"><legend class="label" data-st="4e420a">Price source</legend><div class="opt-list" role="radiogroup">
     ${opt("coingecko", "CoinGecko", `${PRICE_HOSTS.coingecko}. If it does not answer, MEXC is asked.`)}
     ${opt("mexc", "MEXC", `${PRICE_HOSTS.mexc}, the ${UNIT() === "BTC" ? "BTCUSDT" : "FBUSDT"} market. If it does not answer, CoinGecko is asked.`)}
     ${opt("off", "Off", "No price request is ever made. Amounts show in " + UNIT() + " only.")}</div></fieldset>
@@ -355,11 +355,11 @@ function priceForm(): Safe {
     <div class="r"><span class="k">Asks for</span><span class="v">${UNIT()} price in USD, nothing else</span></div>
     <div class="r"><span class="k">How often</span><span class="v">Every 10 minutes while unlocked</span></div>
     <div class="r"><span class="k">Last price</span><span class="v">${last}</span></div></div></div>
-  ${src !== "off" && pc?.error && pc.failedAt && (!pc.fetchedAt || pc.failedAt > pc.fetchedAt) ? html`<div class="banner warn" role="status">${I("triangle-alert", "s16")}<div><span class="bt">Neither price service answered at ${hm(pc.failedAt)}</span><span style="overflow-wrap:anywhere">${pc.error}</span> Your amounts in ${UNIT()} are exact and not affected.</div></div>` : ""}
+  ${src !== "off" && pc?.error && pc.failedAt && (!pc.fetchedAt || pc.failedAt > pc.fetchedAt) ? html`<div class="banner warn" role="status">${I("triangle-alert", "s16")}<div><span class="bt">Neither price service answered at ${hm(pc.failedAt)}</span><span data-st="115422">${pc.error}</span> Your amounts in ${UNIT()} are exact and not affected.</div></div>` : ""}
   ${src !== "off" ? html`<button class="btn btn-secondary" type="button" data-act="price-now" ${busy("price") ? html`aria-disabled="true"` : ""}>${I("refresh-cw", busy("price") ? "s16 spin" : "s16")}${busy("price") ? "Asking…" : "Update now"}</button>` : ""}
   <div class="list">
-    <div class="li" style="cursor:default"><span class="ico warn">${I("globe")}</span><span class="body"><span class="t">The price service learns</span><span class="d" style="white-space:normal">Your IP address and the time you asked.</span></span></div>
-    <div class="li" style="cursor:default"><span class="ico in">${I("shield-check")}</span><span class="body"><span class="t">The price service never learns</span><span class="d" style="white-space:normal">Your addresses, codes, coins or balance. The price is applied on this computer.</span></span></div></div>
+    <div class="li" data-st="2a9295"><span class="ico warn">${I("globe")}</span><span class="body"><span class="t">The price service learns</span><span class="d" data-st="f8f979">Your IP address and the time you asked.</span></span></div>
+    <div class="li" data-st="2a9295"><span class="ico in">${I("shield-check")}</span><span class="body"><span class="t">The price service never learns</span><span class="d" data-st="f8f979">Your addresses, codes, coins or balance. The price is applied on this computer.</span></span></div></div>
   <p class="small muted">A price older than 30 minutes shows in amber with its time. ${src !== "off" ? `${SOURCE_NAME[other]} is only asked when ${SOURCE_NAME[src]} fails.` : ""}</p>`;
 }
 actions["price-src"] = (el) => {
@@ -407,9 +407,9 @@ screens["set-sending"] = () => {
     title: "Sending",
     header: hdr({ title: "Sending" }),
     main: html`
-  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Send payments through</legend>
+  <fieldset class="field" data-st="e8f267"><legend class="label" data-st="4e420a">Send payments through</legend>
   ${core
-    ? html`<div class="card flat pad-sm"><div class="row">${I("server")}<span class="body grow"><span class="strong" style="display:block">Your own node</span><span class="small muted">PrivateBit reads blocks from your node, so payments go out through it too.</span></span></div></div>`
+    ? html`<div class="card flat pad-sm"><div class="row">${I("server")}<span class="body grow"><span class="strong" data-st="2a1b75">Your own node</span><span class="small muted">PrivateBit reads blocks from your node, so payments go out through it too.</span></span></div></div>`
     : html`<div class="opt-list" role="radiogroup">
       ${routeOpt("public", "The public service", "Easiest. The service sees your IP address together with each payment.")}
       ${routeOpt("node", `My own ${CHAIN_SHORT()} node`, "Blocks still come from the public service, but it never sees your payments.")}</div>`}</fieldset>
@@ -423,7 +423,7 @@ screens["set-sending"] = () => {
       <button class="btn btn-secondary" type="button" data-act="send-test" ${busy("stest") ? html`aria-disabled="true"` : ""}>${busy("stest") ? "Testing…" : "Test node"}</button></div>`
     : ""}
   ${errP("send")}
-  ${core ? "" : html`<button class="btn btn-primary" type="button" data-act="send-save" style="align-self:flex-start" ${busy("send") ? html`aria-disabled="true"` : ""}>Save route</button>`}
+  ${core ? "" : html`<button class="btn btn-primary" type="button" data-act="send-save" data-st="c9adc4" ${busy("send") ? html`aria-disabled="true"` : ""}>Save route</button>`}
   <div class="field"><p class="label" id="dl">Delay sending by a random time</p>${seg("dl", "delay-set", pr.sendDelay, DELAY_CHOICES, (v) => DELAY_NAME[v])}
     <p class="help">The time a payment reaches the network says less about when you were at your computer. It waits signed and encrypted here, even if you lock or close the window, and you can send it now or cancel it until then. Payment links always go right away.</p></div>
   <div class="list">${toggle("Randomize fee slightly", "Moves the fee rate a little up or down, never below the network minimum, so your payments do not all share one fee rate.", pr.randomizeFee, "rf", "randomizeFee")}</div>
@@ -500,7 +500,7 @@ loaders["set-payjoin"] = () => {
 function payjoinForm(): Safe {
   const same = host(fv("mb"), "") === host(fv("rl"), "") && fv("mb") !== "";
   const t = S.d.pjTest as PayjoinRouteCheck | undefined;
-  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("current")}<span class="body grow"><span class="strong" style="display:block">For ${CHAIN()}</span><span class="small muted">Each chain keeps its own mailbox and relay.</span></span></div></div>
+  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("current")}<span class="body grow"><span class="strong" data-st="2a1b75">For ${CHAIN()}</span><span class="small muted">Each chain keeps its own mailbox and relay.</span></span></div></div>
   <p class="small muted">Payment links pass encrypted messages through a mailbox. A relay sits in between so the mailbox never sees your IP, and the relay never sees the message.</p>
   <div class="field"><label class="label" for="mb">Mailbox</label><input class="input mono" id="mb" data-f="mb" data-live autocomplete="off" value="${fv("mb")}" aria-describedby="mb-h"><p class="help" id="mb-h">Sees: an encrypted 7 KB blob and when it was posted.</p></div>
   <div class="field"><label class="label" for="rl">Relay</label><input class="input mono" id="rl" data-f="rl" data-live autocomplete="off" value="${fv("rl")}" aria-describedby="rl-h"><p class="help" id="rl-h">Sees: your IP, not the content.</p></div>
@@ -590,7 +590,7 @@ screens["set-security"] = () => {
   <div class="field"><p class="label" id="al">Lock after no use for</p>${lockSeg("al")}
     <p class="help">Counts from your last click or key press in PrivateBit. Waits while a payment link or Payjoin payment is in progress, then locks when it ends. Finding coins continues while locked, until you quit the browser or switch wallets.</p></div>
   <div class="list">${row("key-round", "Change password", "Re-encrypts your keys here", "set-password")}</div>
-  <div class="card" style="border-color:var(--c-danger)"><div class="stack"><p class="strong">Remove wallet from this computer</p><p class="small muted">Deletes the encrypted vault, activity, coin labels and settings from this computer. Only your recovery words can bring the coins back.</p></div><button class="btn btn-danger-outline btn-block" type="button" data-act="go" data-to="remove">Remove wallet</button></div>`,
+  <div class="card" data-st="65a660"><div class="stack"><p class="strong">Remove wallet from this computer</p><p class="small muted">Deletes the encrypted vault, activity, coin labels and settings from this computer. Only your recovery words can bring the coins back.</p></div><button class="btn btn-danger-outline btn-block" type="button" data-act="go" data-to="remove">Remove wallet</button></div>`,
   };
 };
 
@@ -638,8 +638,8 @@ screens["set-backup"] = () => {
     return {
       title: "Backup",
       header: hdr({ title: "Backup" }),
-      main: html`<div class="stack"><h2 style="font:var(--t-title)">Your recovery words</h2><p class="muted">${w.length} words, in order. Anyone with these words can take your coins.</p></div>
-  <ol class="seed" aria-label="Recovery words" ${w.length > 12 ? html`style="grid-template-rows:repeat(12,auto)"` : ""}>${w.map((x, i) => html`<li><span class="ix">${i + 1}</span><span>${x}</span></li>`)}</ol>
+      main: html`<div class="stack"><h2 data-st="9d50d4">Your recovery words</h2><p class="muted">${w.length} words, in order. Anyone with these words can take your coins.</p></div>
+  <ol class="seed" aria-label="Recovery words" ${w.length > 12 ? html`data-st="4ae8bf"` : ""}>${w.map((x, i) => html`<li><span class="ix">${i + 1}</span><span>${x}</span></li>`)}</ol>
   ${st.hasPassphrase ? html`<p class="small muted">Your extra passphrase is not shown. You need it too.</p>` : ""}${kv}`,
       foot: html`<button class="btn btn-primary btn-block" type="button" data-act="backup-hide">${I("eye-off", "s16")}Hide words</button>`,
     };
@@ -648,7 +648,7 @@ screens["set-backup"] = () => {
     title: "Backup",
     header: hdr({ title: "Backup" }),
     main: html`
-  <div class="stack"><h2 style="font:var(--t-title)">Show recovery words</h2><p class="muted">Enter your password. Make sure nobody can see your screen.</p></div>
+  <div class="stack"><h2 data-st="9d50d4">Show recovery words</h2><p class="muted">Enter your password. Make sure nobody can see your screen.</p></div>
   <div class="field" data-enter="backup-show"><label class="label" for="bpw">Password</label><input class="input" id="bpw" data-f="bpw" type="password" autocomplete="current-password" value="${fv("bpw")}" ${err("bpw") ? html`aria-invalid="true" aria-describedby="bpw-e"` : ""}>${err("bpw") ? html`<p class="err" id="bpw-e" role="alert">${I("circle-alert", "s16")}<span>${err("bpw")}</span></p>` : ""}</div>
   ${kv}`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="backup-show">Show words</button>`,
@@ -680,7 +680,7 @@ screens["set-scan"] = () => {
     main: html`
   <div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Looking from block</span><span class="v mono">${num(st.birthday ?? defBirthday())}</span></div><div class="r"><span class="k">Checked up to</span><span class="v mono">${num(st.lastHeight ?? 0)}</span></div><div class="r"><span class="k">Status</span><span class="v">${done ? html`<span class="badge ok">${I("circle-check")}Up to date</span>` : !st.tip ? html`<span class="badge">${I("clock")}${syncLine()}</span>` : html`<span class="badge">${I("refresh-cw")}Finding coins, ${num(st.tip - (st.lastHeight ?? 0))} blocks to go</span>`}</span></div></div></div>
   <div class="field" data-enter="rescan"><label class="label" for="bk">Look again from block</label><input class="input mono" id="bk" data-f="bk" inputmode="numeric" autocomplete="off" value="${fv("bk")}" aria-describedby="bk-h" ${err("bk") ? html`aria-invalid="true"` : ""}><p class="help" id="bk-h">Use this if a payment is missing. Earlier blocks take longer. The default start is block ${num(defBirthday())}.</p>${errP("bk")}</div>
-  <button class="btn btn-ghost btn-sm" type="button" data-act="bk-default" style="align-self:flex-start">Use block ${num(defBirthday())}</button>`,
+  <button class="btn btn-ghost btn-sm" type="button" data-act="bk-default" data-st="c9adc4">Use block ${num(defBirthday())}</button>`,
     foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="rescan" ${busy("bk") ? html`aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Look again from this block</button>`,
   };
 };
@@ -729,7 +729,7 @@ screens.remove = () => {
       title: "Remove wallet",
       header: hdr({ title: "Remove wallet" }),
       main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("trash-2")}</div><h1>${many ? `Remove ${name}?` : "Remove PrivateBit from this computer?"}</h1><p>${many ? `This deletes ${name} from this computer: its vault, activity, coin labels and payment links. The other wallets stay. Coins stay on the chain.` : "This deletes the encrypted vault, activity history, coin labels, payment links and settings stored here. Your coins stay on the chain."}</p></div>
+  <div class="state" data-st="aa619b"><div class="big danger">${I("trash-2")}</div><h1>${many ? `Remove ${name}?` : "Remove PrivateBit from this computer?"}</h1><p>${many ? `This deletes ${name} from this computer: its vault, activity, coin labels and payment links. The other wallets stay. Coins stay on the chain.` : "This deletes the encrypted vault, activity history, coin labels, payment links and settings stored here. Your coins stay on the chain."}</p></div>
   <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Only the recovery words of ${name} can bring its coins back</span>Check you have them on paper before you continue. Labels you typed cannot be recovered.</div></div>
   ${isOpen && S.b!.state.payjoin ? html`<div class="banner danger">${I("hourglass", "s16")}<div>A payment link or Payjoin payment is still waiting. Removing the wallet ends it.</div></div>` : ""}
   <div class="field" data-enter="rm-next"><label class="label" for="rmpw">${isOpen ? "Password" : `Password of ${name}`}</label><input class="input" id="rmpw" data-f="rmpw" type="password" autocomplete="current-password" value="${fv("rmpw")}" ${err("rm") ? html`aria-invalid="true" aria-describedby="rm-e"` : ""}>${err("rm") ? html`<p class="err" id="rm-e" role="alert">${I("circle-alert", "s16")}<span>${err("rm")}</span></p>` : ""}</div>`,
@@ -741,7 +741,7 @@ screens.remove = () => {
     title: "Remove wallet",
     header: hdr({ title: "Remove wallet" }),
     main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big danger">${I("triangle-alert")}</div><h1>Last check</h1><p>${!many ? "After this, PrivateBit on this computer starts empty. There is no undo." : isOpen ? `After this, ${name} is gone from this computer. The others stay, locked, until you unlock one.` : `After this, ${name} is gone from this computer. ${list.find((w) => w.active)?.name ?? "The open wallet"} stays open.`}</p></div>
+  <div class="state" data-st="aa619b"><div class="big danger">${I("triangle-alert")}</div><h1>Last check</h1><p>${!many ? "After this, PrivateBit on this computer starts empty. There is no undo." : isOpen ? `After this, ${name} is gone from this computer. The others stay, locked, until you unlock one.` : `After this, ${name} is gone from this computer. ${list.find((w) => w.active)?.name ?? "The open wallet"} stays open.`}</p></div>
   <div class="card pad-sm"><label class="check"><input type="checkbox" data-f="rmAck" ${ack ? html`checked` : ""}> <span>I have the ${t?.words ? `${t.words} recovery words` : "recovery words"}${t?.hasPassphrase ? " and the extra passphrase" : ""} of ${name} written down</span></label></div>
   ${errP("rm")}`,
     foot: html`<button class="btn btn-danger btn-block" type="button" data-act="rm-final" ${ack && !busy("rm") ? "" : html`aria-disabled="true" disabled`}>${busy("rm") ? html`${I("loader-circle", "s16 spin")}Removing…` : "Remove wallet from this computer"}</button><button class="btn btn-ghost btn-block" type="button" data-act="back">Keep my wallet</button>`,
@@ -798,28 +798,28 @@ function fullSettings(): Safe {
   const pr = prefs();
   return html`<div class="topbar"><h1>Settings</h1><span class="cap">Changes save when you select Save in each section</span></div>
   <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#send">Sending</a><a href="#price">USD price</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a><a href="#sites">Connected sites</a></nav>
-  <div class="stack" style="gap:var(--s-8)">
+  <div class="stack" data-st="ea6e03">
     <section class="sect" id="wallets"><header><h2>Wallets</h2><p>Open now: <strong>${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"}</strong>. Several wallets can sit on this computer, one open at a time, each with its own password. Rename, add, import or remove them in one place.</p></header>
-      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("wallet", "s16")}Manage wallets</button></div></section>
+      <div class="row" data-st="62da06"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("wallet", "s16")}Manage wallets</button></div></section>
     <section class="sect" id="net"><header><h2>Network and data source</h2><p>Blocks are downloaded from the source below. PrivateBit matches them to your keys on this computer.</p></header>
       ${networkForm()}
       <div class="row"><button class="btn btn-primary" type="button" data-act="net-save">Save</button></div></section>
     <section class="sect" id="ap"><header><h2>Appearance</h2><p>Dark is the default. Your choice stays on this computer.</p></header>
-      <div class="field" style="max-width:420px"><p class="label" id="apf">Theme</p>${themeSeg("apf")}</div>
+      <div class="field" data-st="0fd874"><p class="label" id="apf">Theme</p>${themeSeg("apf")}</div>
 </section>
-    <section class="sect" id="send"><header><h2>Sending</h2><p>How and when your payments reach the ${CHAIN()} network.</p></header><div class="stack" style="max-width:560px">${(screens["set-sending"]!() as { main: Safe }).main}</div></section>
-    <section class="sect" id="price"><header><h2>USD price</h2><p>Only the price of ${UNIT()} is asked for. Your coins never leave this computer.</p></header><div class="stack" style="max-width:560px">${priceForm()}</div></section>
+    <section class="sect" id="send"><header><h2>Sending</h2><p>How and when your payments reach the ${CHAIN()} network.</p></header><div class="stack" data-st="765d57">${(screens["set-sending"]!() as { main: Safe }).main}</div></section>
+    <section class="sect" id="price"><header><h2>USD price</h2><p>Only the price of ${UNIT()} is asked for. Your coins never leave this computer.</p></header><div class="stack" data-st="765d57">${priceForm()}</div></section>
     <section class="sect" id="priv"><header><h2>Privacy</h2><p>Each switch says who would learn something.</p></header>${privacyList()}</section>
     <section class="sect" id="pj"><header><h2>Payment links</h2><p>Two servers carry payment link messages. Each one sees only what is listed under it.</p></header>
       ${payjoinForm()}
       <div class="row"><button class="btn btn-secondary" type="button" data-act="pj-test" ${busy("pjt") ? html`aria-disabled="true"` : ""}>${busy("pjt") ? "Testing, up to 40 s…" : "Test"}</button><button class="btn btn-primary" type="button" data-act="pj-save">Save</button></div></section>
     <section class="sect" id="sec"><header><h2>Security</h2><p>Lock closes the wallet on time. An open Payjoin finishes with only the keys of its own coins.</p></header>
-      <div class="field"><span class="label" id="alf">Lock after no use for</span><div style="max-width:420px">${lockSeg("alf")}</div><p class="help">Payment links and Payjoin payments keep going after Lock.</p></div>
-      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "wallet"}</button></div></section>
+      <div class="field"><span class="label" id="alf">Lock after no use for</span><div data-st="0fd874">${lockSeg("alf")}</div><p class="help">Payment links and Payjoin payments keep going after Lock.</p></div>
+      <div class="row" data-st="62da06"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "wallet"}</button></div></section>
     <section class="sect" id="bk"><header><h2>Backup and finding coins</h2><p>Your recovery words restore everything except the labels you typed.</p></header>
-      <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>
+      <div class="row" data-st="62da06"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>
       <p class="cap">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p></section>
     <section class="sect" id="sites"><header><h2>Connected sites</h2><p>Websites you approved. Each has its own account on each chain.</p></header>
-      <div class="stack" style="max-width:560px">${sitesIntro()}${sitesList()}${findSiteForm()}</div></section>
+      <div class="stack" data-st="765d57">${sitesIntro()}${sitesList()}${findSiteForm()}</div></section>
   </div></div>`;
 }

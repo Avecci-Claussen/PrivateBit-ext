@@ -130,7 +130,7 @@ r = await call("getPublicKey");
 const pub = r.v;
 ok("getPublicKey is a 33 byte key", r.ok && /^0[23][0-9a-f]{64}$/.test(pub));
 r = await call("getInscriptions", 0, 10);
-ok("getInscriptions answers empty (no indexer lookups)", r.ok && r.v.total === 0);
+ok("getInscriptions is refused clearly, never a fake empty list", !r.ok && /does not read inscriptions/.test(r.msg ?? ""));
 
 // Balance only of the site account.
 r = await call("getBalance");

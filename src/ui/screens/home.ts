@@ -81,7 +81,7 @@ export function balanceSec(): Safe {
   void h;
   const blockLine = html`<span>${syncLine()}</span>`;
   return html`<section class="bal" aria-label="Balance">
-  <div class="bal-top"><h2 class="cap row" style="gap:6px">${NETLOGO()}${sc.on ? "Balance so far" : CHAIN()}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
+  <div class="bal-top"><h2 class="cap row" data-st="f0abc1">${NETLOGO()}${sc.on ? "Balance so far" : CHAIN()}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
   <p class="bal-amt ${hide ? "hidden" : ""}">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">${UNIT()}</span></p>
   ${fiat}
   <p class="bal-sub">${hide ? html`<span>Hidden. Use the eye button to show it.</span>` : html`${pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}${blockLine}`}</p></section>`;
@@ -93,7 +93,7 @@ actions["hide-bal"] = () => {
 
 export function actionsRow(): Safe {
   const off = health() === "offline";
-  return html`<div class="actions weighted"><button class="action primary" type="button" data-act="go" data-to="send" ${off ? html`aria-disabled="true" style="opacity:.5"` : ""}>${I("arrow-up-right")}Send</button><button class="action" type="button" data-act="go" data-to="receive">${I("arrow-down-left")}Receive</button><button class="action" type="button" data-act="go" data-to="paylink">${I("link-2")}Payment link</button></div>`;
+  return html`<div class="actions weighted"><button class="action primary" type="button" data-act="go" data-to="send" ${off ? html`aria-disabled="true" data-st="4c4d78"` : ""}>${I("arrow-up-right")}Send</button><button class="action" type="button" data-act="go" data-to="receive">${I("arrow-down-left")}Receive</button><button class="action" type="button" data-act="go" data-to="paylink">${I("link-2")}Payment link</button></div>`;
 }
 
 export function healthBanner(): Safe | string {
@@ -126,21 +126,25 @@ function payjoinCard(): Safe | string {
   if (!p || (p.status !== "waiting" && p.status !== "proposed")) return "";
   const amt = p.amount && p.amount !== "0" ? fbShort(p.amount) : "";
   let title = "Payment link waiting";
-  let what = `Waiting for them to pay${amt ? ` ${amt}` : ""}. You don't confirm anything. Stay unlocked and this wallet adds your coin when they do.`;
+  let what = `Waiting for them to pay${amt ? ` ${amt}` : ""}. You don't confirm anything. This wallet adds your coin when they do, even while locked.`;
   if (p.role === "receive" && p.status === "proposed") {
     title = "They paid";
     what = "Your coin was added. Waiting for them to broadcast. Nothing to press.";
   } else if (p.role === "send") {
     title = "Payjoin payment waiting";
-    what = `Waiting for them to add their coin${amt ? ` to your ${amt} payment` : ""}. Stay unlocked. Nothing else to press.`;
+    what = `Waiting for them to add their coin${amt ? ` to your ${amt} payment` : ""}. Nothing else to press, even while locked.`;
   }
-  return html`<button class="card pad-sm" type="button" data-act="go" data-to="${p.role === "send" ? "pj-waiting" : "paylink"}" style="text-align:left;font:inherit;color:inherit;cursor:pointer;border-color:var(--c-warn-border);background:var(--c-warn-subtle)"><div class="row">${I("hourglass", "s16")}<span class="strong grow">${title}</span><span class="countdown small">${left((p.deadline ?? p.expiresAt) - Date.now())}</span></div>
+  return html`<button class="card pad-sm" type="button" data-act="go" data-to="${p.role === "send" ? "pj-waiting" : "paylink"}" data-st="fab108"><div class="row">${I("hourglass", "s16")}<span class="strong grow">${title}</span><span class="countdown small">${left((p.deadline ?? p.expiresAt) - Date.now())}</span></div>
     <p class="small">${what} Closing this window is fine. Finished and cancelled links stay in Payment link history.</p></button>`;
 }
 
 function heldCards(): Safe | string {
   const list = S.b?.delayed ?? [];
-  return list.length ? html`${list.map((d) => heldCard(d))}` : "";
+  const other = S.b?.delayedElsewhere ?? [];
+  return html`${list.map((d) => heldCard(d))}${other.map(
+    (o) =>
+      html`<div class="card flat pad-sm" role="status"><div class="row">${I("timer", "s16")}<span class="small grow">${o.count === 1 ? "A payment waits" : `${o.count} payments wait`} on ${o.net === "bitcoin" ? "Bitcoin" : "Fractal Bitcoin"} and goes out at ${hm(o.next)}${o.count > 1 ? " or later" : ""}. Switch chains to see or cancel it.</span></div></div>`,
+  )}`;
 }
 
 function oneTimeCard(): Safe | string {
@@ -149,7 +153,7 @@ function oneTimeCard(): Safe | string {
   const n = f.count ?? 1;
   const title = n > 1 ? `${n} payments, ${fbShort(f.total ?? f.value)}, are at your one-time address` : `${fbShort(f.value)} arrived at your one-time address`;
   const sub = n > 1 ? "Move all of them into your receive code. Those payments are tied together because they used the same address." : "Move it into your receive code. Then stop using that address.";
-  return html`<button class="card pad-sm" type="button" data-act="go" data-to="migrate" data-step="sweep" style="text-align:left;font:inherit;color:inherit;cursor:pointer"><div class="row">${I("circle-check", "s16")}<span class="strong grow">${title}</span>${I("chevron-right", "s16")}</div><p class="small muted">${sub}</p></button>`;
+  return html`<button class="card pad-sm" type="button" data-act="go" data-to="migrate" data-step="sweep" data-st="3752a5"><div class="row">${I("circle-check", "s16")}<span class="strong grow">${title}</span>${I("chevron-right", "s16")}</div><p class="small muted">${sub}</p></button>`;
 }
 
 function recent(): Safe {
@@ -167,7 +171,7 @@ screens.home = () => {
   if (sc.on) {
     body = html`${healthBanner()}${siteCard()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}
   <div class="card" role="status" aria-live="polite"><div class="row between"><span class="strong row">${I("refresh-cw", "s16 spin")}Finding your coins…</span><span class="cap num">${sc.pct}%</span></div>
-    <div class="progress" role="progressbar" aria-label="Finding your coins" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div>
+    <div class="progress" role="progressbar" aria-label="Finding your coins" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i data-pct="${sc.pct}"></i></div>
     <p class="small muted">${sc.reading ? (sc.reading.count > 0 ? html`Reading block ${num(sc.reading.height)}, transaction ${num(sc.reading.index + 1)} of ${num(sc.reading.count)}. ` : html`Downloading block ${num(sc.reading.height)}. `) : ""}Checked through block ${num(sc.at)} of ${num(sc.tip)}. Closing this window keeps going. Locking hides the wallet, and finding coins continues until you quit the browser or switch wallets. Only this wallet moves; another wallet continues from its own block the next time you open it. ${S.b!.state.chain.kind === "core" ? "Blocks come from your node." : "Blocks already saved on this computer are reused."}</p></div>
   ${actionsRow()}
   ${h.entries.length ? html`<div class="sec-h"><h2>Recent</h2><button class="link small" type="button" data-act="tab" data-to="activity">See all</button></div>${recent()}` : ""}`;
@@ -195,10 +199,10 @@ export function whoSees(): Safe {
   const since = S.b!.health?.since ? hm(S.b!.health.since) : "";
   const usdOn = S.b!.prefs.usd !== false;
   return html`<section class="panel" aria-labelledby="p-h"><h2 id="p-h">Who can see what</h2><div class="list">
-  <div class="li" style="cursor:default"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding coins</span><span class="d" style="white-space:normal">${own ? "Your node sends the blocks. Matching them to your keys happens here." : `${explorerHost()} sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code.`}</span></span><span class="badge ${own ? "ok" : "warn"}">${own ? "Private" : "Shared"}</span></div>
-  <div class="li" style="cursor:default"><span class="ico ${h !== "ok" ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t">${own ? "Your own node" : "Block data service"}</span><span class="d" style="white-space:normal">${h === "offline" ? `Not reachable${since ? ` since ${since}` : ""}.` : h === "rate-limited" ? "Limiting requests without an API key." : own ? "Only your node sees what you read and broadcast." : "Sees your IP, fee rate requests and payments you broadcast."}</span></span><span class="badge ${h !== "ok" ? "danger" : own ? "ok" : "warn"}">${h === "offline" ? "Offline" : h === "rate-limited" ? "Limited" : own ? "Private" : "Shared"}</span></div>
-  <div class="li" style="cursor:default"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links via relay</span><span class="d" style="white-space:normal">Encrypted blobs only. IP hidden by relay.</span></span><span class="badge ok">Private</span></div>
-  <div class="li" style="cursor:default"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" style="white-space:normal">${usdOn ? "Sees your IP, never your coins." : "No price requests are made."}</span></span><span class="badge ${usdOn ? "warn" : "ok"}">${usdOn ? "Shared" : "Off"}</span></div></div>
+  <div class="li" data-st="2a9295"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding coins</span><span class="d" data-st="f8f979">${own ? "Your node sends the blocks. Matching them to your keys happens here." : `${explorerHost()} sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code.`}</span></span><span class="badge ${own ? "ok" : "warn"}">${own ? "Private" : "Shared"}</span></div>
+  <div class="li" data-st="2a9295"><span class="ico ${h !== "ok" ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t">${own ? "Your own node" : "Block data service"}</span><span class="d" data-st="f8f979">${h === "offline" ? `Not reachable${since ? ` since ${since}` : ""}.` : h === "rate-limited" ? "Limiting requests without an API key." : own ? "Only your node sees what you read and broadcast." : "Sees your IP, fee rate requests and payments you broadcast."}</span></span><span class="badge ${h !== "ok" ? "danger" : own ? "ok" : "warn"}">${h === "offline" ? "Offline" : h === "rate-limited" ? "Limited" : own ? "Private" : "Shared"}</span></div>
+  <div class="li" data-st="2a9295"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links via relay</span><span class="d" data-st="f8f979">Encrypted blobs only. IP hidden by relay.</span></span><span class="badge ok">Private</span></div>
+  <div class="li" data-st="2a9295"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" data-st="f8f979">${usdOn ? "Sees your IP, never your coins." : "No price requests are made."}</span></span><span class="badge ${usdOn ? "warn" : "ok"}">${usdOn ? "Shared" : "Off"}</span></div></div>
   ${own ? "" : html`<button class="btn btn-secondary" type="button" data-act="go" data-to="set-node">Use my own node</button>`}</section>`;
 }
 
@@ -210,11 +214,11 @@ function balPanel(): Safe {
   const p = price();
   const h = health();
   const sc = scanning();
-  return html`<section class="panel" aria-labelledby="b-h"><div class="row between"><h2 id="b-h" class="cap row" style="font:var(--t-caption);gap:6px">${NETLOGO()}${sc.on ? "Balance so far" : CHAIN()}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
+  return html`<section class="panel" aria-labelledby="b-h"><div class="row between"><h2 id="b-h" class="cap row" data-st="92f89d">${NETLOGO()}${sc.on ? "Balance so far" : CHAIN()}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
   <p class="bigbal">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">${UNIT()}</span></p>
   ${hide || p.kind === "off" ? "" : p.kind === "na" ? html`<p class="fiat">USD price unavailable</p>` : p.kind === "stale" ? html`<p class="fiat stale">${usd(conf)} <span class="muted">price from ${hm(p.at!)}, not updated</span></p>` : html`<p class="fiat">${usd(conf)} <span class="muted">at $${p.usd!.toFixed(4)}, ${hm(p.at!)}</span></p>`}
   <div class="bal-sub">${!hide && pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}<span>${syncLine()}</span></div>
-  <hr class="divider"><div class="row between"><span class="small strong">Your receive code</span><span class="ntag">${NETLOGO()}${CHAIN_SHORT()}</span></div><p class="code" style="font-size:calc(12px * var(--fs));line-height:calc(18px * var(--fs))">${codeHi(st.receive ?? "")}</p>
+  <hr class="divider"><div class="row between"><span class="small strong">Your receive code</span><span class="ntag">${NETLOGO()}${CHAIN_SHORT()}</span></div><p class="code" data-st="6166cf">${codeHi(st.receive ?? "")}</p>
   <div class="row"><button class="btn btn-secondary btn-sm" type="button" data-act="copy-code">${I("copy", "s16")}Copy code</button><button class="btn btn-ghost btn-sm" type="button" data-act="go" data-to="receive">${I("qr-code", "s16")}Show QR</button></div></section>`;
 }
 
@@ -227,7 +231,7 @@ export function actTable(rows: HistoryEntry[], label = "Recent activity", select
     const m = entryMeta(e);
     const a = BigInt(e.amount);
     const sel = selectable && S.params.id === e.txid;
-    return html`<tr ${sel ? html`aria-selected="true" class="sel"` : ""}><td class="num" style="white-space:nowrap"><a class="link" href="#" data-act="${selectable ? "pick-act" : "go"}" data-to="activity-detail" data-id="${e.txid}">${(e.approxTime ? "About " : "") + dayLabel(e.time * 1000) + " " + hm(e.time * 1000)}</a></td><td>${m.t.replace(/ (to|from) .*$/, "")}</td><td class="col-hide muted">${e.label || "Not labeled"}</td><td class="amt" style="${a > 0n && !hide ? "color:var(--c-ok)" : ""}">${hide ? "\u2022\u2022\u2022\u2022" : fb(a, { unit: false, sign: true })}</td>${showUsd ? html`<td class="r col-hide muted num">${hide ? "" : usdK(a, p.usd, { approx: false })}</td>` : ""}<td class="col-hide">${m.badge || (e.status === "confirmed" ? html`<span class="badge ok">${I("circle-check")}Confirmed</span>` : "")}</td></tr>`;
+    return html`<tr ${sel ? html`aria-selected="true" class="sel"` : ""}><td class="num" data-st="86abda"><a class="link" href="#" data-act="${selectable ? "pick-act" : "go"}" data-to="activity-detail" data-id="${e.txid}">${(e.approxTime ? "About " : "") + dayLabel(e.time * 1000) + " " + hm(e.time * 1000)}</a></td><td>${m.t.replace(/ (to|from) .*$/, "")}</td><td class="col-hide muted">${e.label || "Not labeled"}</td><td class="amt${a > 0n && !hide ? " pos" : ""}">${hide ? "\u2022\u2022\u2022\u2022" : fb(a, { unit: false, sign: true })}</td>${showUsd ? html`<td class="r col-hide muted num">${hide ? "" : usdK(a, p.usd, { approx: false })}</td>` : ""}<td class="col-hide">${m.badge || (e.status === "confirmed" ? html`<span class="badge ok">${I("circle-check")}Confirmed</span>` : "")}</td></tr>`;
   })}
   </tbody></table></div>`;
 }
@@ -237,7 +241,7 @@ function fullOverview(): Safe {
   const coins = (S.d.coins as unknown[] | undefined) ?? [];
   const off = health() === "offline";
   return html`${healthBanner()}
-  <div class="topbar"><h1>Overview</h1><button class="btn btn-secondary" type="button" data-act="go" data-to="paylink">${I("link-2", "s16")}Payment link</button><button class="btn btn-secondary" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Receive</button><button class="btn btn-primary" type="button" data-act="go" data-to="send" ${off ? html`aria-disabled="true" style="opacity:.5"` : ""}>${I("arrow-up-right", "s16")}Send</button></div>
+  <div class="topbar"><h1>Overview</h1><button class="btn btn-secondary" type="button" data-act="go" data-to="paylink">${I("link-2", "s16")}Payment link</button><button class="btn btn-secondary" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Receive</button><button class="btn btn-primary" type="button" data-act="go" data-to="send" ${off ? html`aria-disabled="true" data-st="4c4d78"` : ""}>${I("arrow-up-right", "s16")}Send</button></div>
   ${oneTimeCard()}${payjoinCard()}${heldCards()}
   <div class="grid2">${balPanel()}${whoSees()}</div>
   <section class="panel" aria-labelledby="a-h"><div class="row between"><h2 id="a-h">Activity</h2>${h.entries.length ? html`<button class="link small" type="button" data-act="tab" data-to="activity">See all</button>` : ""}</div>${h.entries.length ? actTable(h.entries.slice(0, 5)) : html`<p class="small muted">No payments yet. Payments to your receive code show here after PrivateBit finds them in a block.</p>`}</section>

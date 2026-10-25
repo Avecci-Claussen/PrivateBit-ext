@@ -24,7 +24,7 @@ describe("coin freeze and selection", () => {
     const sel = coinSelect([a, b, c], 5_000n, 1, 1, new Set(), [op(c)]);
     expect(sel.inputs.map(op)).toEqual([op(c)]);
     expect(() => coinSelect([a, b, c], 20_000n, 1, 1, new Set(), [op(c)])).toThrow(CoinChoiceError);
-    expect(() => coinSelect([a, b, c], 1_000n, 1, 1, new Set([op(c)]), [op(c)])).toThrow(/frozen or reserved/);
+    expect(() => coinSelect([a, b, c], 1_000n, 1, 1, new Set([op(c)]), [op(c)])).toThrow(/frozen, reserved or protected/);
     expect(() => coinSelect([a, b, c], 1_000n, 1, 1, new Set(), [])).toThrow(CoinChoiceError);
   });
   it("max spends everything unfrozen in one output", () => {
@@ -37,7 +37,8 @@ describe("coin freeze and selection", () => {
     const meta = setCoinMeta({}, op(b), { linked: true, label: "Old wallet address" });
     expect(coinStatus(a, meta, new Set())).toBe("private");
     expect(coinStatus(b, meta, new Set())).toBe("linked");
-    expect(coinStatus(coin("d", 1, { kind: "bip86", index: 0 }), {}, new Set())).toBe("linked");
+    expect(coinStatus(coin("d", 50_000, { kind: "bip86", index: 0 }), {}, new Set())).toBe("linked");
+    expect(coinStatus(coin("d", 546, { kind: "bip86", index: 0 }), {}, new Set())).toBe("protected");
     expect(coinStatus(a, meta, new Set([op(a)]))).toBe("reserved");
     expect(coinStatus(a, setCoinMeta({}, op(a), { frozen: true }), new Set([op(a)]))).toBe("frozen");
     expect(mixesLinkedAndPrivate(["private", "linked"])).toBe(true);

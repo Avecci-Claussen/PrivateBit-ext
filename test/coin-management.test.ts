@@ -227,8 +227,29 @@ function fakeSource(sent: string[], fail?: () => Error | undefined): ChainSource
   };
 }
 
+/** Memory storage that also lists its live key names, to check what is (not) written. */
+function trackedKv() {
+  const inner = memoryKv();
+  const live = new Set<string>();
+  const kv: typeof inner & { live: Set<string> } = {
+    live,
+    get: (keys) => inner.get(keys),
+    async set(items) {
+      for (const k of Object.keys(items)) live.add(k);
+      await inner.set(items);
+    },
+    async remove(keys) {
+      for (const k of keys) live.delete(k);
+      await inner.remove(keys);
+    },
+  };
+  return kv;
+}
+const grants = (kv: { live: Set<string> }, net: "fractal" | "bitcoin") =>
+  [...kv.live].filter((k) => k.endsWith("scan.grant") && k.includes(".btc.") === (net === "bitcoin"));
+
 async function wallet(coins: [string, string][], sent: string[] = [], fail?: () => Error | undefined) {
-  const kv = memoryKv();
+  const kv = trackedKv();
   const w = new PrivateBit(kv);
   w.sourceOverride = fakeSource(sent, fail);
   await w.create({ password: "password1", birthday: 8 });
@@ -351,6 +372,45 @@ describe("delayed sending", () => {
     await w.finishDelayedRecords();
     expect(JSON.stringify(await w.history())).toMatch(/f0f0/);
     expect((await w.delayedView()).length).toBe(0);
+  });
+
+  it("keeps its own time on its chain: switching chains does not send it, it goes out when due", async () => {
+    const { w, kv, sent, r } = await held();
+    await w.setNetwork("bitcoin");
+    expect(sent.length).toBe(0);
+    expect(await w.delayedView()).toEqual([]);
+    const other = await w.delayedElsewhere();
+    expect(other).toEqual([{ net: "fractal", count: 1, next: r.sendAt }]);
+    expect((await w.runDelayed({ now: r.sendAt - 1 })).sent).toEqual([]);
+    expect(sent.length).toBe(0);
+    // After a browser restart and an unlock on the other chain it still goes out on time.
+    expect(grants(kv, "fractal").length).toBe(1);
+    await kv.remove(grants(kv, "fractal"));
+    const again = new PrivateBit(kv);
+    again.sourceOverride = w.sourceOverride;
+    await again.setNetwork("bitcoin");
+    await again.unlock("password1");
+    const out = await again.runDelayed({ now: r.sendAt + 1 });
+    expect(out.sent).toEqual([r.id]);
+    expect(sent.length).toBe(1);
+    await again.setNetwork("fractal");
+    await again.finishDelayedRecords();
+    expect((await again.delayedView()).length).toBe(0);
+    expect([...kv.live].some((k) => k.endsWith("delayed") && !k.includes(".btc."))).toBe(false);
+  });
+
+  it("a chain without held payments gets no scan grant at unlock", async () => {
+    const { w, kv } = await wallet([["a1".repeat(32), "80000"]]);
+    await w.setNetwork("bitcoin");
+    await w.unlock("password1");
+    // Fractal had a grant from create; drop it as a browser restart would, then unlock on Bitcoin.
+    expect(grants(kv, "fractal").length).toBe(1);
+    await kv.remove(grants(kv, "fractal"));
+    await w.lock();
+    await w.unlock("password1");
+    expect(grants(kv, "fractal")).toEqual([]);
+    expect(grants(kv, "bitcoin").length).toBe(1);
+    expect(await w.delayedElsewhere()).toEqual([]);
   });
 
   it("a network hiccup keeps it held and tries again; a rejection is shown as not sent", async () => {

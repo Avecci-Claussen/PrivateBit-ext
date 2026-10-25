@@ -1,6 +1,8 @@
 import { S, screens, actions, loaders, back, go, render, run, fv, busy, err, toast } from "../app.ts";
 import { call, type CoinView, type Fees } from "../api.ts";
-import { html, I, fb, fbShort, sats, parseFb, mid, num, type Safe, UNIT } from "../kit.ts";
+import { html, I, fb, fbShort, sats, parseFb, mid, num, type Safe, UNIT, curNet } from "../kit.ts";
+import { hostPermission } from "./settings.ts";
+import type { ChainConfig } from "../../lib/network.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { usd, hidden } from "../derive.ts";
 import { explorerBlock, pathPreview, txidLine } from "../path.ts";
@@ -21,6 +23,8 @@ function badge(c: CoinView): Safe {
       return c.held ? html`<span class="badge warn">${I("timer")}Waiting to send</span>` : html`<span class="badge">${I("lock-keyhole")}Reserved</span>`;
     case "frozen":
       return html`<span class="badge frozen">${I("snowflake")}Frozen</span>`;
+    case "protected":
+      return html`<span class="badge warn">${I("lock")}Protected</span>`;
     case "linked":
       return html`<span class="badge warn">Linked</span>`;
     default:
@@ -31,6 +35,7 @@ const name = (c: CoinView): string => c.label || (c.kind === "bip86" ? "One-time
 function sub(c: CoinView): string {
   if (c.held) return "In a payment waiting to be sent";
   if (c.status === "reserved") return "For your payment link";
+  if (c.status === "protected") return c.asset === "held" ? "Holds an inscription or rune" : "Protected, may hold an asset";
   if (c.reason) return c.reason;
   if (c.kind === "bip86") return "From your old wallet";
   if (c.status === "linked") return "From a reused address";
@@ -38,6 +43,7 @@ function sub(c: CoinView): string {
 }
 function icon(c: CoinView): [string, string] {
   if (c.status === "frozen") return ["snowflake", ""];
+  if (c.status === "protected") return ["lock", "warn"];
   if (c.status === "linked") return ["arrow-right-left", "warn"];
   return ["arrow-down-left", "in"];
 }
@@ -46,22 +52,22 @@ const amt = (c: CoinView): string => (hidden() ? "\u2022\u2022\u2022\u2022" : Bi
 screens.coins = () => {
   const list = coins();
   const st = S.b!.state;
-  const frozen = list.filter((c) => c.status === "frozen").length;
+  const frozen = list.filter((c) => c.status === "frozen" || c.status === "protected").length;
   const pend = BigInt(st.pending ?? "0");
   return {
     title: "Coins",
     header: hdr(),
     nav: tabs("coins"),
     main: list.length
-      ? html`<div class="sec-h"><h1 style="font:var(--t-title)">Coins</h1><span class="cap num">${list.length} ${list.length === 1 ? "coin" : "coins"}</span></div>
+      ? html`<div class="sec-h"><h1 data-st="9d50d4">Coins</h1><span class="cap num">${list.length} ${list.length === 1 ? "coin" : "coins"}</span></div>
   <p class="small muted">Each coin remembers who knows about it. Spending two coins together tells both sides they belong to you.</p>
   <div class="list">${list.map((c) => {
     const [ic, cls] = icon(c);
-    return html`<a class="li" href="#" data-act="go" data-to="coin-detail" data-op="${c.outpoint}"><span class="ico ${cls}">${I(ic)}</span><span class="body"><span class="t">${name(c)}</span><span class="d">${sub(c)}</span></span><span class="end"><span class="amt">${amt(c)}</span><span class="row" style="gap:4px">${badge(c)}</span></span></a>`;
+    return html`<a class="li" href="#" data-act="go" data-to="coin-detail" data-op="${c.outpoint}"><span class="ico ${cls}">${I(ic)}</span><span class="body"><span class="t">${name(c)}</span><span class="d">${sub(c)}</span></span><span class="end"><span class="amt">${amt(c)}</span><span class="row" data-st="d76768">${badge(c)}</span></span></a>`;
   })}</div>
-  <div class="sumbar"><span class="muted">Spendable${frozen ? ", frozen coin not counted" : ""}</span><b>${hidden() ? "\u2022\u2022\u2022\u2022" : fbShort(st.balance ?? "0")}</b></div>
-  ${pend > 0n ? html`<div class="card flat pad-sm" style="flex-direction:row;align-items:center"><span class="grow small">${fbShort(pend)} incoming, not in a block yet</span>${I("clock", "s16")}</div>` : ""}`
-      : html`<h1 style="font:var(--t-title)">Coins</h1><div class="state"><div class="big neutral">${I("coins")}</div><h1>No coins yet</h1><p>Each payment you receive becomes a coin here. You can label it with who knows about it, or freeze it so it is never spent.</p></div>`,
+  <div class="sumbar"><span class="muted">Spendable${frozen ? ", frozen and protected coins not counted" : ""}</span><b>${hidden() ? "\u2022\u2022\u2022\u2022" : fbShort(st.balance ?? "0")}</b></div>
+  ${pend > 0n ? html`<div class="card flat pad-sm" data-st="5d98e3"><span class="grow small">${fbShort(pend)} incoming, not in a block yet</span>${I("clock", "s16")}</div>` : ""}`
+      : html`<h1 data-st="9d50d4">Coins</h1><div class="state"><div class="big neutral">${I("coins")}</div><h1>No coins yet</h1><p>Each payment you receive becomes a coin here. You can label it with who knows about it, or freeze it so it is never spent.</p></div>`,
     page: fullCoins(),
   };
 };
@@ -98,6 +104,7 @@ screens["coin-detail"] = () => {
       foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="coin-freeze" data-v="0">${I("sun", "s16")}Unfreeze this coin</button>`,
     };
   }
+  if (c.status === "protected") return protectedDetail(c, big, kv);
   const linked = c.status === "linked";
   const reserved = c.status === "reserved";
   return {
@@ -109,6 +116,7 @@ screens["coin-detail"] = () => {
   <label class="li swrow flat" for="fz"><span class="body"><span class="t">Freeze this coin</span><span class="d">Frozen coins are never picked for a payment, not even by Max.</span></span><input class="switch" type="checkbox" role="switch" id="fz" data-act="coin-freeze" data-v="1" ${reserved ? html`disabled` : ""}></label>
   ${c.kind === "bip86" ? "" : html`<label class="li swrow flat" for="lk"><span class="body"><span class="t">Mark as linked</span><span class="d">Turn on if this coin came from an address other people know. Spending it with private coins then shows a warning.</span></span><input class="switch" type="checkbox" role="switch" id="lk" data-act="coin-linked" ${c.linked ? html`checked` : ""}></label>`}
   ${kv}
+  ${c.assetOk ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">Unlocked by you</span>This small Taproot coin may hold an inscription or rune, and PrivateBit can now spend it. <button class="link" type="button" data-act="coin-asset-protect">Protect it again</button></div></div>` : ""}
   ${canSplit(c) ? html`<button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="coin-split" data-op="${c.outpoint}">${I("coins", "s16")}Break into pieces</button>` : ""}
   ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="coin-save" ${busy("coin") ? html`aria-disabled="true"` : ""}>Save label</button>`,
@@ -116,8 +124,107 @@ screens["coin-detail"] = () => {
 };
 
 function canSplit(c: CoinView): boolean {
-  return c.kind !== "bip86" && c.status !== "frozen" && c.status !== "reserved" && !c.pending && BigInt(c.value) >= 100_000n;
+  return c.kind !== "bip86" && c.status !== "frozen" && c.status !== "reserved" && c.status !== "protected" && !c.pending && BigInt(c.value) >= 100_000n;
 }
+
+/* ---------- 1.0.0 asset guard: protected small Taproot coins ---------- */
+const chainCfg = (): ChainConfig => S.b!.state.chain;
+function protectedDetail(c: CoinView, big: Safe, kv: Safe) {
+  const ord = chainCfg().ordUrl;
+  const held = c.asset === "held";
+  const check = S.d.assetCheck as { op: string; verdict: string } | undefined;
+  const unknown = check?.op === c.outpoint && check.verdict === "unknown";
+  return {
+    title: "Coin",
+    header: hdr({ title: "Coin", net: true }),
+    main: html`
+  <div class="hero-amt"><p class="cap">Coin</p><p class="a">${big}</p><span class="badge warn">${I("lock")}Protected, may hold an asset</span></div>
+  ${held
+    ? html`<div class="banner danger" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">Your ord server says this coin holds an inscription or rune</span>Spending it in a payment would send that asset too, or lose it to fees.</div></div>`
+    : html`<div class="banner">${I("lock", "s16")}<div><span class="bt">PrivateBit will not spend this coin by itself</span>PrivateBit does not read inscriptions or runes yet. Small Taproot coins like this one often carry one, so it is left out of payments, fees, Max, payment links and waiting payments.</div></div>`}
+  ${kv}
+  <section class="card" aria-labelledby="ord-h"><h2 id="ord-h" class="strong">Check with an ord server</h2>
+  ${ord
+    ? html`<p class="small muted">Asks ${hostOf(ord)} about this one coin. That server learns this coin is yours.</p>${unknown ? html`<p class="small" role="status">The server could not say for sure. The coin stays protected.</p>` : ""}<div class="row"><button class="btn btn-secondary" type="button" data-act="coin-asset-check" ${busy("asset") ? html`aria-disabled="true"` : ""}>${busy("asset") ? "Checking…" : "Check this coin"}</button><button class="link small" type="button" data-act="coin-ord-clear">Remove server</button></div>`
+    : html`<p class="small muted">Point PrivateBit at your own ord server${curNet() === "bitcoin" ? ", or ordinals.com," : ""} to check this coin. Nothing is asked until you tap Check.</p>
+  <div class="field"><label class="label" for="ordu">ord server address</label><input class="input mono" id="ordu" data-f="ordu" autocomplete="off" placeholder="http://127.0.0.1:80" value="${fv("ordu")}"></div>
+  <div class="row">${curNet() === "bitcoin" ? html`<button class="btn btn-secondary" type="button" data-act="coin-ord-save" data-v="https://ordinals.com">Use ordinals.com</button>` : ""}<button class="btn btn-secondary" type="button" data-act="coin-ord-save">Save address</button></div>`}
+  </section>
+  <section class="card" aria-labelledby="unl-h"><h2 id="unl-h" class="strong">Unlock by hand</h2>
+  <p class="small muted">Only if you know this coin holds no inscription or rune. After unlocking, PrivateBit may use it in any payment.</p>
+  <label class="check"><input type="checkbox" data-f="assetAck" ${S.f.assetAck ? html`checked` : ""}> <span>I understand an inscription or rune in this coin would be spent with it${held ? ", and my ord server says it holds one" : ""}.</span></label>
+  <button class="btn btn-secondary btn-block" type="button" data-act="coin-asset-unlock" ${S.f.assetAck ? "" : html`aria-disabled="true" disabled`}>${I("lock-keyhole", "s16")}Unlock this coin</button></section>
+  ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
+  };
+}
+function hostOf(u: string): string {
+  try {
+    return new URL(u).host;
+  } catch {
+    return u;
+  }
+}
+actions["coin-asset-unlock"] = async () => {
+  const c = cur();
+  if (!c || !S.f.assetAck) return;
+  const ok = await run("form", async () => {
+    S.d.coins = await call({ type: "SET_COIN_META", outpoint: c.outpoint, patch: { assetOk: true } });
+    S.b && (S.b = await call({ type: "BUNDLE" }));
+    return true;
+  });
+  S.f.assetAck = false;
+  if (ok) toast("Coin unlocked. PrivateBit may spend it now.");
+};
+actions["coin-asset-protect"] = async () => {
+  const c = cur();
+  if (!c) return;
+  await run("form", async () => {
+    S.d.coins = await call({ type: "SET_COIN_META", outpoint: c.outpoint, patch: { assetOk: false } });
+    S.b && (S.b = await call({ type: "BUNDLE" }));
+  });
+  toast("Coin protected again.");
+};
+actions["coin-ord-save"] = async (el) => {
+  const url = ((el.dataset.v as string | undefined) ?? fv("ordu")).trim().replace(/\/+$/, "");
+  if (!/^https?:\/\/[^\s/]+/i.test(url)) {
+    S.err.form = "Enter the server address, starting with http:// or https://.";
+    render();
+    return;
+  }
+  if (!(await hostPermission(url))) {
+    S.err.form = "Access to that address was not allowed.";
+    render();
+    return;
+  }
+  await run("form", async () => {
+    await call({ type: "SAVE_CHAIN", chain: { ...chainCfg(), ordUrl: url } });
+    S.b && (S.b = await call({ type: "BUNDLE" }));
+  });
+};
+actions["coin-ord-clear"] = async () => {
+  await run("form", async () => {
+    await call({ type: "SAVE_CHAIN", chain: { ...chainCfg(), ordUrl: undefined } });
+    S.b && (S.b = await call({ type: "BUNDLE" }));
+  });
+};
+actions["coin-asset-check"] = async () => {
+  const c = cur();
+  if (!c) return;
+  S.busy = "asset";
+  delete S.err.form;
+  render();
+  try {
+    const r = await call<{ verdict: string; coins: CoinView[] }>({ type: "ASSET_CHECK", outpoint: c.outpoint });
+    S.d.coins = r.coins;
+    S.d.assetCheck = { op: c.outpoint, verdict: r.verdict };
+    S.b = await call({ type: "BUNDLE" });
+    toast(r.verdict === "none" ? "No inscription or rune found. The coin is unlocked." : r.verdict === "held" ? "This coin holds an inscription or rune. It stays protected." : "Not sure. The coin stays protected.");
+  } catch (e) {
+    S.err.form = String((e as Error).message);
+  }
+  S.busy = null;
+  render();
+};
 
 /* ---------- break into pieces (user-set amounts, optional shuffle) ---------- */
 type SplitPlan = { pieces: string[]; userAmounts: string[]; fee: string; amount: string; vbytes: number; note: string; rate: number };
@@ -431,8 +538,8 @@ export function coinTable(select: boolean): Safe {
   const sel = Array.isArray(S.f.coinsSel) ? (S.f.coinsSel as string[]) : [];
   return html`<div class="tscroll" tabindex="0" role="region" aria-label="Coins table"><table class="t"><caption class="sr-only">Coins</caption><thead><tr>${select ? html`<th scope="col"><span class="sr-only">Select</span></th>` : ""}<th scope="col">Who knows</th><th scope="col" class="col-hide">Outpoint</th>${select ? "" : html`<th scope="col" class="col-hide">Block</th>`}<th scope="col" class="r">Amount (FB)</th><th scope="col" class="col-hide">Status</th>${select ? html`<th scope="col">Freeze</th>` : ""}</tr></thead><tbody>
   ${list.map((c) => {
-    const off = c.status === "frozen" || c.status === "reserved";
-    return html`<tr>${select ? html`<td><label class="cell-hit"><input type="checkbox" data-act="coin-pick" data-op="${c.outpoint}" aria-label="Select ${name(c)}" ${sel.includes(c.outpoint) ? html`checked` : ""} ${off ? html`disabled` : ""} style="width:24px;height:24px;accent-color:var(--c-accent)"></label></td>` : ""}<td><a class="link" href="#" data-act="go" data-to="coin-detail" data-op="${c.outpoint}">${name(c)}</a><div class="cap">${sub(c)}</div><div class="m-only">${badge(c)}</div></td><td class="col-hide mono nw">${mid(c.txid, 8, 6)}:${c.vout}</td>${select ? "" : html`<td class="col-hide num">${c.pending ? "Not yet" : num(c.height)}</td>`}<td class="amt">${hidden() ? "\u2022\u2022\u2022\u2022" : fb(c.value, { unit: false })}</td><td class="col-hide">${badge(c)}</td>${select ? html`<td><label class="cell-hit"><input class="switch" type="checkbox" role="switch" data-act="coin-freeze" data-op="${c.outpoint}" aria-label="Freeze ${name(c)}" ${c.frozen ? html`checked` : ""} ${c.status === "reserved" ? html`disabled` : ""}></label></td>` : ""}</tr>`;
+    const off = c.status === "frozen" || c.status === "reserved" || c.status === "protected";
+    return html`<tr>${select ? html`<td><label class="cell-hit"><input type="checkbox" data-act="coin-pick" data-op="${c.outpoint}" aria-label="Select ${name(c)}" ${sel.includes(c.outpoint) ? html`checked` : ""} ${off ? html`disabled` : ""} data-st="d696c2"></label></td>` : ""}<td><a class="link" href="#" data-act="go" data-to="coin-detail" data-op="${c.outpoint}">${name(c)}</a><div class="cap">${sub(c)}</div><div class="m-only">${badge(c)}</div></td><td class="col-hide mono nw">${mid(c.txid, 8, 6)}:${c.vout}</td>${select ? "" : html`<td class="col-hide num">${c.pending ? "Not yet" : num(c.height)}</td>`}<td class="amt">${hidden() ? "\u2022\u2022\u2022\u2022" : fb(c.value, { unit: false })}</td><td class="col-hide">${badge(c)}</td>${select ? html`<td><label class="cell-hit"><input class="switch" type="checkbox" role="switch" data-act="coin-freeze" data-op="${c.outpoint}" aria-label="Freeze ${name(c)}" ${c.frozen ? html`checked` : ""} ${c.status === "reserved" ? html`disabled` : ""}></label></td>` : ""}</tr>`;
   })}
   </tbody></table></div>`;
 }
@@ -442,15 +549,16 @@ function fullCoins(): Safe {
   const st = S.b!.state;
   const sel = Array.isArray(S.f.coinsSel) ? (S.f.coinsSel as string[]) : [];
   const selTotal = list.filter((c) => sel.includes(c.outpoint)).reduce((a, c) => a + BigInt(c.value), 0n);
-  const frozen = list.some((c) => c.status === "frozen");
-  return html`<div class="topbar"><h1>Coins</h1><span class="cap tb-note">Spendable ${fbShort(st.balance ?? "0")}${frozen ? ", frozen coins not counted" : ""}</span><button class="btn btn-primary" type="button" data-act="send-selected" ${sel.length ? "" : html`aria-disabled="true" disabled`}>${I("arrow-up-right", "s16")}Send selected</button></div>
-  <p class="muted" style="max-width:72ch">Each coin remembers who knows about it. Spending two coins together tells both sides they belong to you. Freeze coins you never want spent, such as ones holding an inscription.</p>
+  const frozen = list.some((c) => c.status === "frozen" || c.status === "protected");
+  return html`<div class="topbar"><h1>Coins</h1><span class="cap tb-note">Spendable ${fbShort(st.balance ?? "0")}${frozen ? ", frozen and protected coins not counted" : ""}</span><button class="btn btn-primary" type="button" data-act="send-selected" ${sel.length ? "" : html`aria-disabled="true" disabled`}>${I("arrow-up-right", "s16")}Send selected</button></div>
+  <p class="muted" data-st="49f077">Each coin remembers who knows about it. Spending two coins together tells both sides they belong to you. Freeze coins you never want spent. Small Taproot coins that may hold an inscription or rune are protected for you.</p>
   <section class="panel" aria-labelledby="c-h"><div class="row between"><h2 id="c-h">${list.length} ${list.length === 1 ? "coin" : "coins"}</h2><span class="cap">${sel.length} selected${sel.length ? `, ${fbShort(selTotal)}` : ""}</span></div>${list.length ? coinTable(true) : html`<p class="small muted">No coins yet. Each payment you receive becomes a coin here.</p>`}</section>
   <section class="panel" aria-labelledby="l-h"><h2 id="l-h">What the labels mean</h2><div class="kv">
     <div class="r"><span class="k"><span class="badge ok">Private</span></span><span class="v">Arrived at a Silent Payment output. Only the sender knows.</span></div>
     <div class="r"><span class="k"><span class="badge warn">Linked</span></span><span class="v">Came from a reused address. Anyone watching it knows.</span></div>
     <div class="r"><span class="k"><span class="badge">${I("lock-keyhole")}Reserved</span></span><span class="v">Set aside for an open payment link.</span></div>
-    <div class="r"><span class="k"><span class="badge frozen">${I("snowflake")}Frozen</span></span><span class="v">Never spent by PrivateBit until you unfreeze it.</span></div></div></section>`;
+    <div class="r"><span class="k"><span class="badge frozen">${I("snowflake")}Frozen</span></span><span class="v">Never spent by PrivateBit until you unfreeze it.</span></div>
+    <div class="r"><span class="k"><span class="badge warn">${I("lock")}Protected</span></span><span class="v">A small Taproot coin that may hold an inscription or rune. Not spent until you check or unlock it.</span></div></div></section>`;
 }
 actions["send-selected"] = () => {
   S.f.coinMode = "choose";

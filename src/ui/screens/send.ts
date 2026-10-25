@@ -49,7 +49,7 @@ const TARGET: Record<string, string> = { slow: "Can wait", normal: "Next few blo
 
 const coinMode = (): "auto" | "choose" => (fv("coinMode") as "auto" | "choose") || "auto";
 const chosen = (): string[] => (Array.isArray(S.f.coinsSel) ? (S.f.coinsSel as string[]) : []);
-const spendable = (): CoinView[] => coins().filter((c) => c.status !== "frozen" && c.status !== "reserved");
+const spendable = (): CoinView[] => coins().filter((c) => c.status !== "frozen" && c.status !== "reserved" && c.status !== "protected");
 function available(): bigint {
   const list = coinMode() === "choose" ? coins().filter((c) => chosen().includes(c.outpoint)) : spendable().filter((c) => c.kind !== "bip86");
   return list.reduce((a, c) => a + BigInt(c.value), 0n);
@@ -71,16 +71,16 @@ function destField(d: Dest, errMsg?: string): Safe {
   const v = fv("to");
   const tag =
     d.kind === "sp"
-      ? html`<div class="row" style="flex-wrap:wrap">${ntag(`${CHAIN_SHORT()} receive code`)}<span class="badge ok">${I("shield-check")}Private</span></div>`
+      ? html`<div class="row" data-st="62da06">${ntag(`${CHAIN_SHORT()} receive code`)}<span class="badge ok">${I("shield-check")}Private</span></div>`
       : d.kind === "paylink"
-        ? html`<div class="row" style="flex-wrap:wrap">${ntag("PrivateBit payment link")}<span class="badge ok">${I("route")}Payjoin</span></div>`
+        ? html`<div class="row" data-st="62da06">${ntag("PrivateBit payment link")}<span class="badge ok">${I("route")}Payjoin</span></div>`
         : d.kind === "notpb"
-          ? html`<div class="row" style="flex-wrap:wrap"><span class="badge">Payment request</span><span class="badge warn">${I("triangle-alert")}No Payjoin</span></div>`
+          ? html`<div class="row" data-st="62da06"><span class="badge">Payment request</span><span class="badge warn">${I("triangle-alert")}No Payjoin</span></div>`
           : d.kind === "address"
-            ? html`<div class="row" style="flex-wrap:wrap"><span class="badge">Regular address (${d.type})</span><span class="badge warn">${I("triangle-alert")}Less private</span></div>`
+            ? html`<div class="row" data-st="62da06"><span class="badge">Regular address (${d.type})</span><span class="badge warn">${I("triangle-alert")}Less private</span></div>`
             : "";
   const e = errMsg ?? (d.kind === "error" ? d.msg : undefined);
-  return html`<div class="field"><label class="label" for="to">To</label><div class="input-wrap" style="align-items:flex-start"><textarea class="textarea" id="to" data-f="to" data-live rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="sp1q\u2026, payment link or bc1\u2026" ${e ? html`aria-invalid="true" aria-describedby="to-e"` : ""} style="padding-right:44px">${v}</textarea><button class="icon-btn" type="button" data-act="paste" aria-label="Paste" style="top:4px">${I("clipboard-paste")}</button></div>${e ? html`<p class="err" id="to-e" role="alert">${I("circle-alert", "s16")}<span>${e}</span></p>` : ""}${tag}</div>`;
+  return html`<div class="field"><label class="label" for="to">To</label><div class="input-wrap" data-st="0486f7"><textarea class="textarea" id="to" data-f="to" data-live rows="4" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="sp1q\u2026, payment link or bc1\u2026" ${e ? html`aria-invalid="true" aria-describedby="to-e"` : ""} data-st="569753">${v}</textarea><button class="icon-btn" type="button" data-act="paste" aria-label="Paste" data-st="288ddb">${I("clipboard-paste")}</button></div>${e ? html`<p class="err" id="to-e" role="alert">${I("circle-alert", "s16")}<span>${e}</span></p>` : ""}${tag}</div>`;
 }
 actions.paste = async () => {
   try {
@@ -111,7 +111,7 @@ function amountField(chk: { sats: bigint | null; err?: string }): Safe {
   const max = S.f.max === true;
   const v = max && chk.sats !== null ? fb(chk.sats, { unit: false, trim: true }) : fv("amt");
   return html`<div class="field"><div class="row between"><label class="label" for="amt">Amount</label><span class="cap">Available ${fbShort(avail)}</span></div>
-  <div class="input-wrap"><input class="input mono" id="amt" data-f="amt" data-live inputmode="decimal" autocomplete="off" placeholder="0.00" value="${v}" ${max ? html`readonly` : ""} ${chk.err ? html`aria-invalid="true" aria-describedby="amt-e"` : html`aria-describedby="amt-h"`} style="padding-right:96px"><span class="unit" style="right:56px">${UNIT()}</span><button class="btn btn-ghost btn-sm" type="button" data-act="max" aria-pressed="${String(max)}" style="position:absolute;right:4px;height:32px">Max</button></div>
+  <div class="input-wrap"><input class="input mono" id="amt" data-f="amt" data-live inputmode="decimal" autocomplete="off" placeholder="0.00" value="${v}" ${max ? html`readonly` : ""} ${chk.err ? html`aria-invalid="true" aria-describedby="amt-e"` : html`aria-describedby="amt-h"`} data-st="c90d7d"><span class="unit" data-st="01125a">${UNIT()}</span><button class="btn btn-ghost btn-sm" type="button" data-act="max" aria-pressed="${String(max)}" data-st="06a095">Max</button></div>
   ${chk.err ? html`<p class="err" id="amt-e" role="alert">${I("circle-alert", "s16")}<span>${chk.err}</span></p>` : chk.sats !== null && chk.sats > 0n ? html`<p class="help" id="amt-h">${usd(chk.sats) ? `${usd(chk.sats)}, ` : ""}${sats(chk.sats)}${max ? ". Everything spendable, minus the fee" : ""}</p>` : html`<p class="help" id="amt-h">In ${UNIT()}. Use Max to send everything spendable.</p>`}</div>`;
 }
 actions.max = async () => {
@@ -168,7 +168,7 @@ screens.send = () => {
   let main: Safe;
   if (d.kind === "none") {
     main = html`${sendPath(d)}${destField(d)}
-  <div class="card flat pad-sm"><p class="small strong">What you can paste</p><ul class="small muted" style="margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px">
+  <div class="card flat pad-sm"><p class="small strong">What you can paste</p><ul class="small muted" data-st="1e59ca">
     <li><span class="mono">sp1\u2026</span> receive code: private for both of you</li>
     <li>PrivateBit payment link: private, uses Payjoin</li>
     <li><span class="mono">bc1\u2026</span> address: works, but less private</li></ul></div>`;
@@ -233,6 +233,8 @@ function badge(c: CoinView): Safe {
       return html`<span class="badge">${I("lock-keyhole")}Reserved</span>`;
     case "frozen":
       return html`<span class="badge frozen">${I("snowflake")}Frozen</span>`;
+    case "protected":
+      return html`<span class="badge warn">${I("lock")}Protected</span>`;
     case "linked":
       return html`<span class="badge warn">Linked</span>`;
     default:
@@ -283,13 +285,13 @@ screens["send-coins"] = () => {
   ${sendPath()}
   <div class="seg" role="radiogroup" aria-label="Coin choice"><button type="button" role="radio" data-act="coin-mode" data-v="auto" aria-checked="${String(mode === "auto")}">Automatic</button><button type="button" role="radio" data-act="coin-mode" data-v="choose" aria-checked="${String(mode === "choose")}">Choose coins</button></div>
   ${mode === "auto"
-    ? html`<p class="small muted">PrivateBit uses your largest coins first and never touches frozen coins, coins set aside for a payment link, or a one-time address.</p>`
+    ? html`<p class="small muted">PrivateBit uses your largest coins first and never touches frozen or protected coins, coins set aside for a payment link, or a one-time address.</p>`
     : list.length === 0
       ? html`<div class="state"><div class="big neutral">${I("coins")}</div><h1>No coins yet</h1><p>Coins show here after PrivateBit finds a payment to your receive code in a block.</p></div>`
-      : html`<fieldset style="border:0;padding:0;margin:0"><legend class="sr-only">Coins to spend</legend>
+      : html`<fieldset data-st="e8f267"><legend class="sr-only">Coins to spend</legend>
   <div class="list cpick">${list.map((c) => {
-    const off = c.status === "reserved" || c.status === "frozen";
-    return html`<label class="${off ? "off" : ""}"><input type="checkbox" data-act="coin-pick" data-op="${c.outpoint}" ${sel.includes(c.outpoint) ? html`checked` : ""} ${off ? html`disabled` : ""}><span class="body"><span class="t">${coinName(c)}</span><span class="d">${off ? (c.status === "frozen" ? "Frozen. Unfreeze it in Coins to spend it." : c.held ? "In a payment waiting to be sent." : "For your payment link.") : c.reason || (c.pending ? "Not in a block yet" : `Block ${c.height.toLocaleString("en-US")}`)}</span></span><span class="end"><span class="amt">${BigInt(c.value) < 100_000n ? sats(c.value) : fbShort(c.value)}</span>${badge(c)}</span></label>`;
+    const off = c.status === "reserved" || c.status === "frozen" || c.status === "protected";
+    return html`<label class="${off ? "off" : ""}"><input type="checkbox" data-act="coin-pick" data-op="${c.outpoint}" ${sel.includes(c.outpoint) ? html`checked` : ""} ${off ? html`disabled` : ""}><span class="body"><span class="t">${coinName(c)}</span><span class="d">${off ? (c.status === "frozen" ? "Frozen. Unfreeze it in Coins to spend it." : c.status === "protected" ? "Protected, may hold an asset. Check or unlock it in Coins." : c.held ? "In a payment waiting to be sent." : "For your payment link.") : c.reason || (c.pending ? "Not in a block yet" : `Block ${c.height.toLocaleString("en-US")}`)}</span></span><span class="end"><span class="amt">${BigInt(c.value) < 100_000n ? sats(c.value) : fbShort(c.value)}</span>${badge(c)}</span></label>`;
   })}</div></fieldset>
   ${mix ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">This links ${priv.length === 1 ? `${coinName(priv[0]!) === "Not labeled" ? "a private coin" : coinName(priv[0]!)}` : "your private coins"} to ${linked.length === 1 && linked[0]!.label ? linked[0]!.label.toLowerCase().startsWith("old wallet") ? "your old wallet address" : linked[0]!.label : "a linked coin"}</span>Anyone watching the linked coin's old address will see both coins are yours.</div></div>` : ""}
   <div class="sumbar"><span class="muted">${sel.length} ${sel.length === 1 ? "coin" : "coins"} selected</span><b>${fbShort(total)}</b></div>`}`,
@@ -435,8 +437,8 @@ screens.review = () => {
   const named = groups.map((g) => (g.label ? `"${g.label}"` : "no label"));
   const mergeBox = merges
     ? html`<div class="banner warn" role="alert" id="merge-warn">${I("triangle-alert", "s16")}<div><span class="bt">This payment spends coins with different labels together</span>Anyone looking at the transaction can see these coins have one owner: ${named.join(", ")}. If the labels mean different people know about them, they may learn about each other.
-      <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" type="button" data-act="merge-back">${I("coins", "s16")}Change coins</button></div>
-      <label class="check" style="margin-top:8px"><input type="checkbox" data-f="ackMerge" ${S.f.ackMerge ? html`checked` : ""}> <span>Continue and spend them together</span></label></div></div>`
+      <div class="row" data-st="47cabb"><button class="btn btn-secondary btn-sm" type="button" data-act="merge-back">${I("coins", "s16")}Change coins</button></div>
+      <label class="check" data-st="8a77e5"><input type="checkbox" data-f="ackMerge" ${S.f.ackMerge ? html`checked` : ""}> <span>Continue and spend them together</span></label></div></div>`
     : "";
   const delay = S.b?.prefs.sendDelay ?? "off";
   const delayTxt: Record<string, string> = { "1m": "1 minute", "10m": "10 minutes", "1h": "1 hour" };
@@ -461,7 +463,7 @@ screens.review = () => {
     <div class="r total"><span class="k">Total leaving</span><span class="v">${fb(amt + fee)}</span></div></div></div>
   ${pj
     ? html`<div class="banner">${I("info", "s16")}<div><span class="bt">What happens next</span>Your signed payment goes to the other person, encrypted. When they add their coin, PrivateBit checks it and broadcasts. If they never answer, nothing is broadcast.</div></div>`
-    : html`<details class="card pad-sm" ${S.f.det ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle-k" data-k="det">Transaction details</summary><div class="stack" style="margin-top:12px">${details}<button class="btn btn-ghost btn-sm" type="button" data-act="copy-psbt" style="align-self:flex-start">${I("copy", "s16")}Copy PSBT</button></div></details>`}
+    : html`<details class="card pad-sm" ${S.f.det ? html`open` : ""}><summary class="small strong" data-st="3b6a3a" data-act="toggle-k" data-k="det">Transaction details</summary><div class="stack" data-st="56f435">${details}<button class="btn btn-ghost btn-sm" type="button" data-act="copy-psbt" data-st="c9adc4">${I("copy", "s16")}Copy PSBT</button></div></details>`}
   ${mergeBox}${delayBox}
   ${typeof S.f.siteFund === "string" && to.kind === "address" ? html`<div class="banner warn" role="note" id="site-fund-note">${I("globe", "s16")}<div><span class="bt">Moving coins to the site account for ${S.f.siteFund}</span>This is a normal payment. On chain it links the coins you spend here to that site's account, so the site can see they came from one wallet. Your receive code and other coins stay out of it.</div></div>` : ""}
   ${legacy ? html`<label class="check"><input type="checkbox" data-f="ack" ${S.f.ack ? html`checked` : ""}> <span>I understand this payment can be linked to this address.</span></label>` : ""}
@@ -668,7 +670,7 @@ screens["pj-waiting"] = () => {
     <li class="step now" aria-current="step"><span class="n">2</span><div><p class="st">Waiting for them to add their coin…</p><p class="sd">They don't press a button. Their wallet adds the coin while it stays unlocked. Nothing has come back yet${s?.checkedAt ? html` (last check ${when(s.checkedAt)})` : ""}.</p></div></li>
     <li class="step todo"><span class="n">3</span><div><p class="st">PrivateBit checks and broadcasts</p><p class="sd">Your inputs and the amount cannot be changed by them.</p></div></li></ol>
   ${s?.error ? html`<div class="banner danger">${I("circle-alert", "s16")}<div><span class="bt">The mailbox check failed</span>${s.error} Trying again. You can cancel.</div></div>` : ""}
-  <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">You can close this window. Do not lock.</span>Locking deletes the keys for this payment and it will stop. Cancel if you do not want to wait.</div></div>`,
+  <div class="banner">${I("info", "s16")}<div><span class="bt">You can close this window or lock</span>This payment keeps going with keys for its own coins only. Quitting the browser stops it. Cancel if you do not want to wait.</div></div>`,
     foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="cancel-send" data-id="${s?.id ?? ""}" ${busy("cancel-send") ? html`aria-disabled="true"` : ""}>Cancel payment</button><button class="btn btn-ghost btn-block" type="button" data-act="pj-check" ${busy("pj-check") ? html`aria-disabled="true"` : ""}>Check now</button>`,
   };
 };
@@ -739,24 +741,24 @@ function fullSend(): Safe {
   const cv = fv("feeCustom");
   const chk = cv ? checkCustomFee(Number(cv), minRate(), f?.fast ?? 1) : null;
   const lbl = fv("lbl");
-  return html`<div class="topbar"><h1>Send</h1><span class="cap row" style="gap:6px">${NETLOGO()}On ${CHAIN()}</span></div>
+  return html`<div class="topbar"><h1>Send</h1><span class="cap row" data-st="f0abc1">${NETLOGO()}On ${CHAIN()}</span></div>
   ${health() === "offline" ? html`<div class="banner danger">${I("unplug", "s16")}<div>Sending is paused until the block data service answers again.</div></div>` : ""}
   <div class="grid2 g-main">
-    <div class="stack" style="gap:var(--s-6)">
+    <div class="stack" data-st="2b9851">
       <section class="panel" aria-labelledby="to-h"><h2 id="to-h">Recipient</h2>${destField(d)}${destNote(d)}
-        ${d.kind === "none" || d.kind === "error" || fixedAmt ? "" : html`<div class="grid2" style="gap:var(--s-4)">${amountField(amt)}${d.kind === "sp" || d.kind === "address" ? html`<div class="field"><label class="label" for="lbl">Who will know <span class="optl">(optional)</span></label><input class="input" id="lbl" data-f="lbl" maxlength="64" autocomplete="off" value="${lbl}" aria-describedby="lbl-h"><p class="help" id="lbl-h">Stays on this computer.</p></div>` : ""}</div>`}</section>
-      ${d.kind === "paylink" ? "" : html`<section class="panel" aria-labelledby="pf-h"><div class="row between"><h2 id="pf-h">Pay from</h2><div class="seg" role="radiogroup" aria-label="Coin choice" style="width:260px"><button type="button" role="radio" data-act="coin-mode" data-v="auto" aria-checked="${String(coinMode() === "auto")}">Automatic</button><button type="button" role="radio" data-act="coin-mode" data-v="choose" aria-checked="${String(coinMode() === "choose")}">Choose coins</button></div></div>
+        ${d.kind === "none" || d.kind === "error" || fixedAmt ? "" : html`<div class="grid2" data-st="eedf85">${amountField(amt)}${d.kind === "sp" || d.kind === "address" ? html`<div class="field"><label class="label" for="lbl">Who will know <span class="optl">(optional)</span></label><input class="input" id="lbl" data-f="lbl" maxlength="64" autocomplete="off" value="${lbl}" aria-describedby="lbl-h"><p class="help" id="lbl-h">Stays on this computer.</p></div>` : ""}</div>`}</section>
+      ${d.kind === "paylink" ? "" : html`<section class="panel" aria-labelledby="pf-h"><div class="row between"><h2 id="pf-h">Pay from</h2><div class="seg" role="radiogroup" aria-label="Coin choice" data-st="a20ea0"><button type="button" role="radio" data-act="coin-mode" data-v="auto" aria-checked="${String(coinMode() === "auto")}">Automatic</button><button type="button" role="radio" data-act="coin-mode" data-v="choose" aria-checked="${String(coinMode() === "choose")}">Choose coins</button></div></div>
         ${coinMode() === "choose" ? (coins().length ? coinTable(true) : html`<p class="small muted">No coins yet. Coins show here after PrivateBit finds a payment to your receive code in a block.</p>`) : html`<p class="small muted">PrivateBit uses your largest coins first. Frozen and reserved coins are never picked.</p>`}
         ${mix ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">This links your private coins to a linked coin</span>Spending a Linked coin together with a Private one shows anyone watching the old address that both are yours. <button class="link" type="button" data-act="only-private">Use only private coins</button></div></div>` : coinMode() === "choose" && sel.length ? html`<p class="small muted">Frozen and reserved coins are never picked. ${sel.length} ${sel.length === 1 ? "coin" : "coins"} selected, ${fbShort(sel.reduce((a, c) => a + BigInt(c.value), 0n))}.</p>` : ""}</section>`}
       <section class="panel" aria-labelledby="fee-h"><h2 id="fee-h">Network fee</h2>
         ${!f ? html`<div class="banner warn" role="status">${I("unplug", "s16")}<div>${S.d.feesErr === "rate-limited" ? "The block data service is limiting requests without an API key." : "Fee rates unavailable right now."} Choose Custom, or <button class="link" type="button" data-act="fees-retry">try again</button>.</div></div>` : ""}
         <div class="fees fees4" role="radiogroup" aria-label="Fee speed">${opts.map(([k, n, r, t]) => html`<button class="fee" type="button" role="radio" data-act="fee-mode" data-v="${k}" aria-checked="${String(k === m)}" ${k !== "custom" && !f ? html`aria-disabled="true" disabled` : ""}><span class="fn">${n}</span><span class="fr">${r}</span><span class="ft">${t}</span></button>`)}</div>
-        ${m === "custom" ? html`<div class="field" style="max-width:320px"><label class="label" for="cf">Custom <span class="optl">(sat/vB)</span></label><div class="input-wrap"><input class="input mono" id="cf" data-f="feeCustom" data-live inputmode="decimal" placeholder="${String(minRate())}" value="${cv}" ${chk && !chk.ok ? html`aria-invalid="true" aria-describedby="cf-e"` : ""}><span class="unit">sat/vB</span></div>${chk && !chk.ok ? html`<p class="err" id="cf-e" role="alert">${I("circle-alert", "s16")}<span>${chk.reason === "too-low" ? `Too low. Below ${minRate()} sat/vB most nodes will not relay it, so it may never confirm.` : chk.reason === "too-high" ? "That is far above every current rate. Check the number." : "Enter a number."}</span></p>` : ""}</div>` : ""}
+        ${m === "custom" ? html`<div class="field" data-st="3521b3"><label class="label" for="cf">Custom <span class="optl">(sat/vB)</span></label><div class="input-wrap"><input class="input mono" id="cf" data-f="feeCustom" data-live inputmode="decimal" placeholder="${String(minRate())}" value="${cv}" ${chk && !chk.ok ? html`aria-invalid="true" aria-describedby="cf-e"` : ""}><span class="unit">sat/vB</span></div>${chk && !chk.ok ? html`<p class="err" id="cf-e" role="alert">${I("circle-alert", "s16")}<span>${chk.reason === "too-low" ? `Too low. Below ${minRate()} sat/vB most nodes will not relay it, so it may never confirm.` : chk.reason === "too-high" ? "That is far above every current rate. Check the number." : "Enter a number."}</span></p>` : ""}</div>` : ""}
         <p class="small muted">${f ? `Rates from the ${f.source === "node" ? "your node" : "block data service"} at ${hm(f.updatedAt ?? f.fetchedAt)}. ` : ""}The fee does not change your privacy.</p></section>
     </div>
-    <aside class="panel" aria-labelledby="sum-h" style="position:sticky;top:var(--s-6)"><h2 id="sum-h">Summary</h2>
+    <aside class="panel" aria-labelledby="sum-h" data-st="175507"><h2 id="sum-h">Summary</h2>
       ${sendPath(d)}
-      <div class="hero-amt" style="align-items:flex-start;text-align:left"><p class="a">${amt.sats !== null && !amt.err ? fbShort(amt.sats, { unit: false }) : "0"}<span class="unit"> ${UNIT()}</span></p>${amt.sats && usd(amt.sats) ? html`<p class="fiat">${usd(amt.sats)}${lbl ? ` to ${lbl}` : ""}</p>` : ""}</div>
+      <div class="hero-amt" data-st="3ce9d3"><p class="a">${amt.sats !== null && !amt.err ? fbShort(amt.sats, { unit: false }) : "0"}<span class="unit"> ${UNIT()}</span></p>${amt.sats && usd(amt.sats) ? html`<p class="fiat">${usd(amt.sats)}${lbl ? ` to ${lbl}` : ""}</p>` : ""}</div>
       <div class="kv">
         <div class="r"><span class="k">Privacy</span><span class="v">${d.kind === "sp" ? html`<span class="badge ok">${I("shield-check")}Private</span><span class="cap">New address only ${lbl || "they"} can find</span>` : d.kind === "paylink" ? html`<span class="badge ok">${I("route")}Payjoin</span>` : d.kind === "address" || d.kind === "notpb" ? html`<span class="badge warn">${I("triangle-alert")}Less private</span>` : html`<span class="muted">Paste a destination</span>`}</span></div>
         <div class="r"><span class="k">Pay from</span><span class="v">${coinMode() === "auto" ? "Automatic, largest first" : `${sel.length} ${sel.length === 1 ? "coin" : "coins"}`}</span></div>
@@ -788,14 +790,14 @@ export function waitText(ms: number): string {
 /** Card for a payment waiting to go out. Used on the held screen and on the wallet overview. */
 export function heldCard(d: NonNullable<NonNullable<typeof S.b>["delayed"]>[number]): Safe {
   if (d.status === "failed") {
-    return html`<div class="card pad-sm" role="status" data-held="${d.id}"><div class="row between" style="gap:12px;flex-wrap:wrap"><div class="stack" style="gap:4px;min-width:0"><span class="badge danger">${I("circle-x")}Not sent</span><span class="strong">${fbShort(d.amount)}${d.label ? ` to ${d.label}` : ""}</span><span class="small muted" style="overflow-wrap:anywhere">The network refused it: ${d.error ?? "unknown reason"}. Your coins were not spent.</span></div>
+    return html`<div class="card pad-sm" role="status" data-held="${d.id}"><div class="row between" data-st="6ba842"><div class="stack" data-st="4e8132"><span class="badge danger">${I("circle-x")}Not sent</span><span class="strong">${fbShort(d.amount)}${d.label ? ` to ${d.label}` : ""}</span><span class="small muted" data-st="115422">The network refused it: ${d.error ?? "unknown reason"}. Your coins were not spent.</span></div>
     <button class="btn btn-secondary btn-sm" type="button" data-act="held-dismiss" data-id="${d.id}">Dismiss</button></div></div>`;
   }
   const left = d.sendAt - Date.now();
-  return html`<div class="card pad-sm" role="status" data-held="${d.id}"><div class="stack" style="gap:8px"><div class="row" style="gap:8px;flex-wrap:wrap"><span class="badge warn">${I("timer")}Waiting to send</span><span class="small muted">Goes out ${waitText(left)}</span></div>
+  return html`<div class="card pad-sm" role="status" data-held="${d.id}"><div class="stack" data-st="33fcd4"><div class="row" data-st="4725bb"><span class="badge warn">${I("timer")}Waiting to send</span><span class="small muted">Goes out ${waitText(left)}</span></div>
     <span class="strong">${fbShort(d.amount)}${d.label ? ` to ${d.label}` : ""}</span>
     <span class="small muted">Signed and kept on this computer, encrypted. Nothing has reached the network, so cancelling is safe.</span>
-    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" type="button" data-act="held-now" data-id="${d.id}" ${busy("held") ? raw('aria-disabled="true"') : ""}>Send now</button><button class="btn btn-secondary btn-sm" type="button" data-act="held-cancel" data-id="${d.id}" ${busy("held") ? raw('aria-disabled="true"') : ""}>Cancel</button></div></div></div>`;
+    <div class="row" data-st="4725bb"><button class="btn btn-primary btn-sm" type="button" data-act="held-now" data-id="${d.id}" ${busy("held") ? raw('aria-disabled="true"') : ""}>Send now</button><button class="btn btn-secondary btn-sm" type="button" data-act="held-cancel" data-id="${d.id}" ${busy("held") ? raw('aria-disabled="true"') : ""}>Cancel</button></div></div></div>`;
 }
 
 screens.held = () => {

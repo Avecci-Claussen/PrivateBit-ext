@@ -19,6 +19,8 @@ export type Bundle = {
   activity: ActivityState | null;
   waiting: boolean;
   delayed?: DelayedView[];
+  /** Held payments on a chain that is not on screen: they keep their own time. */
+  delayedElsewhere?: { net: "fractal" | "bitcoin"; count: number; next: number }[];
 };
 export type Fees = FeeRates & { fetchedAt: number };
 export type { WalletState, CoinView, SessionView, HistoryEntry, PlanPayload, ChainConfig, OneTimeRecord, Prefs, DelayedView };

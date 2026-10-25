@@ -255,8 +255,9 @@ export function installDapp(deps: DappDeps) {
       case "getBalance":
         return wallet.siteBalance((await wallet.siteKey(origin)).key.index);
       case "getInscriptions":
-        // Inscription lookups need an indexer that would learn this address. Not offered.
-        return { total: 0, list: [] };
+        // 1.0.0 does not read inscriptions (planned for 1.0.1). Saying "none" could make a site
+        // treat an inscribed coin as plain, so this is a clear refusal instead of an empty list.
+        throw new DappError(ERR.unsupported, "PrivateBit 1.0.0 does not read inscriptions or runes");
       case "pushTx":
         if (!pushRate.take(origin)) throw new DappError(ERR.busy, "too many transactions, slow down");
         return wallet.siteBroadcast(origin, req.rawtx);

@@ -59,7 +59,7 @@ screens.migrate = () => {
     <li class="step now"><span class="n">3</span><div><p class="st">Waiting for your coins…</p><p class="sd">Checked up to block ${num(S.b!.state.lastHeight ?? 0)}. Fractal blocks come every 30 seconds.</p></div></li>
     <li class="step todo"><span class="n">4</span><div><p class="st">Stop using the old address</p></div></li></ol>
   <div class="card flat pad-sm" role="status"><div class="row">${I("refresh-cw", "s16 spin")}<span class="small">Looking at new blocks as they arrive…</span></div></div>
-  <button class="link small" type="button" data-act="go" data-to="migrate" data-step="refused" style="align-self:flex-start">My old wallet did not accept the code</button>`,
+  <button class="link small" type="button" data-act="go" data-to="migrate" data-step="refused" data-st="c9adc4">My old wallet did not accept the code</button>`,
       foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="home">Back to wallet</button>`,
     };
   }
@@ -69,9 +69,9 @@ screens.migrate = () => {
       title: "Move coins here",
       header: H(),
       main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big warn">${I("ban")}</div><h1>Your old wallet did not accept the code</h1><p>Some wallets cannot send to <span class="mono">sp1</span> receive codes yet. Nothing was sent and your coins are still at the old address.</p></div>
+  <div class="state" data-st="aa619b"><div class="big warn">${I("ban")}</div><h1>Your old wallet did not accept the code</h1><p>Some wallets cannot send to <span class="mono">sp1</span> receive codes yet. Nothing was sent and your coins are still at the old address.</p></div>
   <div class="opt-list">
-    <button class="rowlink" type="button" data-act="onetime-issue"><span class="body"><span class="t row" style="gap:6px">Use a one-time address <span class="badge acc">Recommended</span></span><span class="d">A fresh address made from your recovery words, for this move only. Less private for this one transfer.</span></span><span class="v">${busy("ot") ? I("loader-circle", "s16 spin") : I("chevron-right", "s16")}</span></button>
+    <button class="rowlink" type="button" data-act="onetime-issue"><span class="body"><span class="t row" data-st="f0abc1">Use a one-time address <span class="badge acc">Recommended</span></span><span class="d">A fresh address made from your recovery words, for this move only. Less private for this one transfer.</span></span><span class="v">${busy("ot") ? I("loader-circle", "s16 spin") : I("chevron-right", "s16")}</span></button>
     <button class="rowlink" type="button" data-act="toggle-m" data-k="mWhole"><span class="body"><span class="t">Check the code was pasted whole</span><span class="d">${code.length} characters, starts with ${code.slice(0, 5)}, ends with ${code.slice(-8)}.</span></span><span class="v">${I("chevron-right", "s16")}</span></button>
   </div>
   ${whole ? html`<div class="codebox"><p class="code">${codeHi(code)}</p></div>` : ""}
@@ -90,7 +90,7 @@ screens.migrate = () => {
   <div class="banner warn" role="note">${I("triangle-alert", "s16")}<div><span class="bt">One payment, then move it</span>Your old wallet and anyone reading the chain can see this address. It is not your receive code. When the coins arrive, move them into the receive code. That does not hide where they came from, so they stay labeled Linked.</div></div>
   ${o ? html`<div class="qr">${qrSvg(o.address, "QR code of your one-time address")}</div>` : ""}
   <div class="codebox"><div class="row between">${ntag(`${CHAIN_SHORT()} one-time address`)}<span class="cap">This move only</span></div><p class="code" aria-label="One-time address">${o ? codeHi(o.address) : ""}</p></div>
-  <ul class="small" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">
+  <ul class="small" data-st="2019ed">
     <li>Send the whole amount in one payment. A second payment to this same address ties the two together. Both can still be moved.</li>
     <li>Made from your recovery words, so your backup already covers it.</li>
     <li>After it is empty, make a new address if the old wallet still has coins. Do not send to an address you already emptied.</li></ul>
@@ -112,7 +112,7 @@ screens.migrate = () => {
       title: "Move coins here",
       header: H(),
       main: html`
-  <div class="state" style="padding-top:var(--s-2)"><div class="big">${I("circle-check")}</div><h1>${n > 1 ? `${n} payments arrived` : `${fbShort(f.value)} arrived`}</h1><p>${n > 1 ? "These payments are at the same one-time address, so they are tied together on chain. " : "This payment is at your one-time address. "}Move ${n > 1 ? "all of them" : "it"} into your receive code. ${n > 1 ? "They stay" : "It stays"} labeled Linked.</p></div>
+  <div class="state" data-st="aa619b"><div class="big">${I("circle-check")}</div><h1>${n > 1 ? `${n} payments arrived` : `${fbShort(f.value)} arrived`}</h1><p>${n > 1 ? "These payments are at the same one-time address, so they are tied together on chain. " : "This payment is at your one-time address. "}Move ${n > 1 ? "all of them" : "it"} into your receive code. ${n > 1 ? "They stay" : "It stays"} labeled Linked.</p></div>
   ${n > 1 ? html`<div class="banner warn" role="note">${I("triangle-alert", "s16")}<div><span class="bt">This address was used more than once</span>Send the next amount to a new one-time address, after these coins have moved.</div></div>` : ""}
   ${pathPreview({ title: "One-time address", sub: mid(f.address, 8, 6) }, { title: "Your receive code", sub: `${code.slice(0, 8)} \u2026 ${code.slice(-8)}` })}
   <div class="card"><div class="kv">
@@ -148,7 +148,7 @@ screens.migrate = () => {
     title: "Move coins here",
     header: H(),
     main: html`
-  <div class="stack"><h2 style="font:var(--t-title)">Move coins from another wallet or a reused address</h2><p class="muted">Old addresses are public: anyone who has paid you there can see their balance and history. Moving the coins once and never using the old address again stops new links.</p></div>
+  <div class="stack"><h2 data-st="9d50d4">Move coins from another wallet or a reused address</h2><p class="muted">Old addresses are public: anyone who has paid you there can see their balance and history. Moving the coins once and never using the old address again stops new links.</p></div>
   <div class="card pad-sm"><p class="strong">Where the coins should finish</p><p class="small">Under your receive code, the one that starts with <span class="mono">sp1</span>. If your old wallet can pay that code, send there once. If it cannot, PrivateBit gives you a one-time address. You send to that address once, then PrivateBit moves those coins into the receive code. That empties the one-time address. It is not used again.</p></div>
   ${pathPreview({ title: "Your old wallet", sub: "Reused address" }, { title: "Your receive code", sub: `${code.slice(0, 8)} \u2026 ${code.slice(-8)}` })}
   <ol class="steps">

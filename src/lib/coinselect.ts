@@ -106,7 +106,7 @@ export function coinSelect(
     const want = new Set(opts.include);
     if (want.size === 0) throw new CoinChoiceError("no coins chosen");
     for (const op of want) {
-      if (skip.has(op)) throw new CoinChoiceError("a chosen coin is frozen or reserved");
+      if (skip.has(op)) throw new CoinChoiceError("a chosen coin is frozen, reserved or protected (it may hold an inscription or rune; unlock it in Coins first)");
     }
     const chosen = utxos.filter((u) => !u.spent && want.has(opOf(u)));
     if (chosen.length !== want.size) throw new CoinChoiceError("a chosen coin is not in this wallet or already spent");

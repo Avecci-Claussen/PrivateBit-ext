@@ -21,7 +21,7 @@ export function txidLine(txid: string): Safe {
 export function explorerBlock(askOpen: boolean, askFirst: boolean, net: "fractal" | "bitcoin" = curNet()): Safe {
   const host = explorerHost(net);
   if (askOpen) {
-    return html`<div class="banner warn" role="alert">${I("globe", "s16")}<div><span class="bt">Open ${host}?</span>It learns your IP and which transaction you looked at. <span class="row" style="gap:8px;margin-top:8px"><button class="btn btn-primary btn-sm" type="button" data-act="explorer-open">Open</button><button class="btn btn-ghost btn-sm" type="button" data-act="explorer-cancel">Cancel</button></span></div></div>`;
+    return html`<div class="banner warn" role="alert">${I("globe", "s16")}<div><span class="bt">Open ${host}?</span>It learns your IP and which transaction you looked at. <span class="row" data-st="62ee93"><button class="btn btn-primary btn-sm" type="button" data-act="explorer-open">Open</button><button class="btn btn-ghost btn-sm" type="button" data-act="explorer-cancel">Cancel</button></span></div></div>`;
   }
   return html`<button class="btn btn-secondary btn-block" type="button" data-act="explorer">${I("external-link", "s16")}View on ${host}</button>
   <p class="cap">Opening an explorer tells it your IP and which transaction you looked at.${askFirst ? " PrivateBit asks first." : ""}</p>`;

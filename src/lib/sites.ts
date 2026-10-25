@@ -14,6 +14,7 @@
  * Everything here is pure and unit tested: derivation inputs, PSBT review, signing, messages.
  */
 import * as btc from "@scure/btc-signer";
+import { tapLeafHash } from "@scure/btc-signer/payment";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
 import { concatBytes, fromHex, hex } from "./bytes.ts";
@@ -146,6 +147,8 @@ export type ReviewInput = {
   owner: Owner;
   sign: boolean;
   sighash: number;
+  /** Script path spend: the leaf (hex), its version and which of this site's keys it names. */
+  script?: { leaf: string; version: number; key: "internal" | "output" };
 };
 export type ReviewOutput = { index: number; value: string; address?: string; memo?: string; owner: Owner };
 export type PsbtReview = {
@@ -246,6 +249,52 @@ export function memoOf(script: Uint8Array): string | undefined {
 
 export type OwnerOf = (scriptHex: string, outpoint: string) => Owner;
 
+function tapBranch(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const [x, y] = hex(a) < hex(b) ? [a, b] : [b, a];
+  return schnorr.utils.taggedHash("TapBranch", x, y);
+}
+
+/**
+ * A script path leaf in this input that names one of this site's keys, after checking that the
+ * leaf really is committed in the coin being spent (control block and merkle path rebuild the
+ * output key). Returns undefined when there is none, or a reason when the input lies about it.
+ */
+export function siteLeafOf(
+  inp: ReturnType<btc.Transaction["getInput"]>,
+  key: Pick<SiteKey, "publicKey" | "output">,
+): { leaf: Uint8Array; version: number; leafHash: Uint8Array; key: "internal" | "output" } | { bad: string } | undefined {
+  const prev = inp.witnessUtxo;
+  if (!inp.tapLeafScript?.length || !prev) return undefined;
+  const internalX = key.publicKey.length === 66 ? key.publicKey.slice(2) : key.publicKey;
+  for (const [cb, scriptVer] of inp.tapLeafScript) {
+    const leaf = scriptVer.subarray(0, -1);
+    const version = scriptVer[scriptVer.length - 1]!;
+    let pushes: string[];
+    try {
+      pushes = btc.Script.decode(leaf).filter((x): x is Uint8Array => x instanceof Uint8Array).map((x) => hex(x));
+    } catch {
+      continue;
+    }
+    const which = pushes.includes(internalX) ? "internal" : pushes.includes(key.output) ? "output" : undefined;
+    if (!which) continue;
+    if ((cb.version & 0xfe) !== version) return { bad: "the script's leaf version does not match its control block" };
+    const leafHash = tapLeafHash(leaf, version);
+    let root = leafHash;
+    for (const step of cb.merklePath) root = tapBranch(root, step);
+    let outKey: Uint8Array;
+    try {
+      outKey = btc.utils.taprootTweakPubkey(cb.internalKey, root)[0];
+    } catch {
+      return { bad: "the script's control block is not valid" };
+    }
+    if (prev.script.length !== 34 || prev.script[0] !== 0x51 || prev.script[1] !== 0x20 || hex(prev.script.subarray(2)) !== hex(outKey)) {
+      return { bad: "the script is not part of the coin it claims to spend" };
+    }
+    return { leaf, version, leafHash, key: which };
+  }
+  return undefined;
+}
+
 /**
  * What a PSBT does, from this site's point of view. Never throws on content the user should
  * see: problems become warnings, or refuse when PrivateBit will not sign.
@@ -264,7 +313,6 @@ export function reviewPsbt(tx: btc.Transaction, key: Pick<SiteKey, "scriptPubKey
       const pk = t.publicKey?.toLowerCase();
       const keyOk = t.address ? t.address === key.address : pk ? pk === key.publicKey || pk === key.publicKey.slice(2) || pk === key.output : true;
       if (!keyOk) refuse ??= `input ${t.index} asks for a key that is not this site's account`;
-      if (t.disableTweakSigner) refuse ??= "script path signing (disableTweakSigner) is not supported";
       wanted.set(t.index, t);
     }
   }
@@ -284,12 +332,18 @@ export function reviewPsbt(tx: btc.Transaction, key: Pick<SiteKey, "scriptPubKey
     const sighash = t?.sighashTypes?.[0] ?? inp.sighashType ?? 0;
     if (prev) inSum += prev.amount;
     else allKnown = false;
-    inputs.push({ index: i, txid, vout, value: prev ? prev.amount.toString() : null, address: prev ? addressOf(prev.script) : undefined, owner, sign, sighash });
+    // Script path: only when the site names the input, and only for a leaf committed in that coin.
+    const leaf = t && owner !== "site" ? siteLeafOf(inp, key) : undefined;
+    if (leaf && "bad" in leaf) refuse ??= `Input ${i}: ${leaf.bad}.`;
+    const script = leaf && !("bad" in leaf) ? { leaf: hex(leaf.leaf), version: leaf.version, key: leaf.key } : undefined;
+    if (t?.disableTweakSigner && !script && owner === "site") refuse ??= `Input ${i} asks for a signature with the untweaked key outside a script, which no Taproot coin accepts.`;
+    inputs.push({ index: i, txid, vout, value: prev ? prev.amount.toString() : null, address: prev ? addressOf(prev.script) : undefined, owner, sign, sighash, ...(script ? { script } : {}) });
     if (owner === "private") refuse ??= "This includes coins from your private balance. PrivateBit never signs those for a website.";
     if (owner === "other-site") refuse ??= "This includes coins from another website's account.";
     if (sign) {
       if (!prev) refuse ??= `input ${i} has no amount or script, so it cannot be checked`;
-      else if (owner !== "site") refuse ??= `input ${i} is not paid to this site's account`;
+      else if (owner !== "site" && !(script && owner === "unknown")) refuse ??= `input ${i} is not paid to this site's account`;
+      if (script) warnings.push(`Input ${i} is a script spend that names this site's key. Your signature lets that script move ${prev ? prev.amount.toString() : "its"} sats to the outputs shown.`);
       if (!SIGHASH_OK.has(sighash)) refuse ??= `Input ${i} asks for signature type ${sighashName(sighash)}. It would let the site change or remove outputs after you sign, so PrivateBit does not sign it.`;
       else if (sighash === 0x81) warnings.push(`Input ${i} uses signature type ALL|ANYONECANPAY. Others can add their own inputs after you sign. The outputs stay exactly as shown.`);
       if (prev) spent += prev.amount;
@@ -322,7 +376,7 @@ export function reviewPsbt(tx: btc.Transaction, key: Pick<SiteKey, "scriptPubKey
 }
 
 /** Sign the reviewed inputs with the site key (key path). Returns hex. Throws if the review refused. */
-export function signReviewedPsbt(tx: btc.Transaction, review: PsbtReview, key: Pick<SiteKey, "secret">, autoFinalized = true): string {
+export function signReviewedPsbt(tx: btc.Transaction, review: PsbtReview, key: Pick<SiteKey, "secret"> & Partial<Pick<SiteKey, "internalSecret">>, autoFinalized = true): string {
   if (review.refuse) throw new Error(review.refuse);
   const prevScripts: Uint8Array[] = [];
   const amounts: bigint[] = [];
@@ -332,10 +386,29 @@ export function signReviewedPsbt(tx: btc.Transaction, review: PsbtReview, key: P
     amounts.push(w?.amount ?? 0n);
   }
   for (const i of review.toSign) {
-    const sighash = review.inputs[i]!.sighash;
+    const r = review.inputs[i]!;
+    const sighash = r.sighash;
+    const withType = (sig: Uint8Array) => (sighash === 0 ? sig : concatBytes(sig, new Uint8Array([sighash])));
+    if (r.script) {
+      // Script path (BIP342): sign the reviewed leaf with the key it names.
+      const leaf = fromHex(r.script.leaf);
+      const secret = r.script.key === "internal" ? key.internalSecret : key.secret;
+      if (!secret) throw new Error("no key for this script");
+      const pre = tx.preimageWitnessV1(i, prevScripts, sighash, amounts, -1, leaf, r.script.version);
+      const sig = schnorr.sign(pre, secret);
+      tx.updateInput(i, { tapScriptSig: [[{ pubKey: schnorr.getPublicKey(secret), leafHash: tapLeafHash(leaf, r.script.version) }, withType(sig)]] }, true);
+      if (autoFinalized) {
+        try {
+          tx.finalizeIdx(i);
+        } catch {
+          throw new Error(`PrivateBit signed input ${i}, but its script needs more than this signature to finish. Ask the site to send it with autoFinalized set to false.`);
+        }
+      }
+      continue;
+    }
     const pre = tx.preimageWitnessV1(i, prevScripts, sighash, amounts);
     const sig = schnorr.sign(pre, key.secret);
-    tx.updateInput(i, { tapKeySig: sighash === 0 ? sig : concatBytes(sig, new Uint8Array([sighash])) }, true);
+    tx.updateInput(i, { tapKeySig: withType(sig) }, true);
     if (autoFinalized) tx.finalizeIdx(i);
   }
   return hex(tx.toPSBT());

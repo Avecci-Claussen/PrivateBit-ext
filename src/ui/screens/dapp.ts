@@ -11,7 +11,7 @@ import { messageRisks, visibleMessage } from "../../lib/message-check.ts";
 
 type Owner = "site" | "private" | "other-site" | "unknown";
 type Review = {
-  inputs: { index: number; txid: string; vout: number; value: string | null; address?: string; owner: Owner; sign: boolean; sighash: number }[];
+  inputs: { index: number; txid: string; vout: number; value: string | null; address?: string; owner: Owner; sign: boolean; sighash: number; script?: { leaf: string; version: number; key: string } }[];
   outputs: { index: number; value: string; address?: string; memo?: string; owner: Owner }[];
   toSign: number[];
   spent: string;
@@ -71,7 +71,7 @@ function siteHeader(v: PendingView, title: string): Safe {
 }
 
 function originCard(v: PendingView): Safe {
-  return html`<div class="card flat pad-sm site-origin"><div class="row">${I("globe", "s16")}<span class="body grow"><span class="strong mono" style="display:block;word-break:break-all">${v.host}</span><span class="small muted">${v.origin.startsWith("https:") ? "Secure connection" : "Not a secure connection (http)"}</span></span></div></div>`;
+  return html`<div class="card flat pad-sm site-origin"><div class="row">${I("globe", "s16")}<span class="body grow"><span class="strong mono" data-st="0ca0d0">${v.host}</span><span class="small muted">${v.origin.startsWith("https:") ? "Secure connection" : "Not a secure connection (http)"}</span></span></div></div>`;
 }
 
 function accountRow(v: PendingView): Safe {
@@ -95,7 +95,7 @@ function reviewBlock(r: Review, n: number, of: number): Safe {
   ${r.refuse ? html`<div class="banner danger" role="alert">${I("ban", "s16")}<div><span class="bt">PrivateBit will not sign this</span>${r.refuse}</div></div>` : ""}
   <div class="hero-amt"><p class="cap">Leaves this site's account</p><p class="a">${fb(net > 0n ? net : 0n, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(net > 0n ? net : 0n)}${fee !== null ? ", network fee included" : ""}</p></div>
   <div class="card"><div class="kv">
-    <div class="r"><span class="k">You sign</span><span class="v"><span>${mine.length} ${mine.length === 1 ? "input" : "inputs"}, ${fb(spent)}</span><span class="cap">From this site's account only</span></span></div>
+    <div class="r"><span class="k">You sign</span><span class="v"><span>${mine.length} ${mine.length === 1 ? "input" : "inputs"}, ${fb(spent)}</span><span class="cap">${mine.some((x) => x.script) ? "From this site's account and scripts that name its key" : "From this site's account only"}</span></span></div>
     ${notMine.length ? html`<div class="r"><span class="k">Not yours</span><span class="v"><span>${notMine.length} ${notMine.length === 1 ? "input" : "inputs"}</span><span class="cap">Added by the site or someone else. You do not sign ${notMine.length === 1 ? "it" : "them"}.</span></span></div>` : ""}
     ${back > 0n ? html`<div class="r"><span class="k">Back to the site account</span><span class="v mono">${fb(back)}</span></div>` : ""}
     <div class="r"><span class="k">Network fee</span><span class="v">${fee === null ? html`<span class="muted">Unknown. Some inputs have no amount.</span>` : html`<span class="mono">${sats(fee)}</span>`}</span></div>
@@ -103,8 +103,8 @@ function reviewBlock(r: Review, n: number, of: number): Safe {
   <p class="io-h">Goes to</p>
   <div class="io">${out.length ? out.map((o) => html`<div class="io-row"><span class="badge ${o.memo !== undefined ? "" : "warn"}">${o.memo !== undefined ? "Note" : "Leaves"}</span><span class="code">${o.memo !== undefined ? o.memo : mid(o.address ?? "Unknown script", 10, 6)}</span><span class="amt">${fb(o.value)}</span></div>`) : html`<div class="io-row"><span class="code">Nothing leaves</span></div>`}</div>
   ${r.warnings.length ? html`<div class="banner warn" role="note">${I("triangle-alert", "s16")}<div><span class="bt">Check before signing</span>${r.warnings.join(" ")}</div></div>` : ""}
-  <details class="card pad-sm"><summary class="small strong" style="cursor:pointer">All inputs and outputs</summary><div class="stack" style="margin-top:12px">
-    <p class="io-h">Inputs</p><div class="io">${r.inputs.map((x) => html`<div class="io-row"><span class="badge ${x.sign ? "ok" : ""}">${x.sign ? "You sign" : "Not yours"}</span><span class="code">${mid(`${x.txid}:${x.vout}`, 10, 4)}</span><span class="amt">${x.value === null ? "?" : fb(x.value)}</span></div>`)}</div>
+  <details class="card pad-sm"><summary class="small strong" data-st="3b6a3a">All inputs and outputs</summary><div class="stack" data-st="56f435">
+    <p class="io-h">Inputs</p><div class="io">${r.inputs.map((x) => html`<div class="io-row"><span class="badge ${x.sign ? (x.script ? "warn" : "ok") : ""}">${x.sign ? (x.script ? "You sign a script" : "You sign") : "Not yours"}</span><span class="code">${mid(`${x.txid}:${x.vout}`, 10, 4)}</span><span class="amt">${x.value === null ? "?" : fb(x.value)}</span></div>`)}</div>
     <p class="io-h">Outputs</p><div class="io">${r.outputs.map((o) => html`<div class="io-row"><span class="badge ${o.owner === "site" ? "ok" : ""}">${o.owner === "site" ? "Site account" : o.memo !== undefined ? "Note" : "Leaves"}</span><span class="code">${o.memo ?? mid(o.address ?? "Unknown script", 10, 6)}</span><span class="amt">${fb(o.value)}</span></div>`)}</div>
   </div></details>
 </section>`;
@@ -137,10 +137,10 @@ screens.dapp = () => {
       title: "Connect",
       header: siteHeader(v, "Connect to this site?"),
       main: html`${originCard(v)}
-  <div class="card"><p class="small strong" style="margin:0 0 8px">The site will see</p>
+  <div class="card"><p class="small strong" data-st="df6718">The site will see</p>
     <ul class="checks"><li>${I("check", "s16")}<span>Its own ${CHAIN_SHORT()} account address and balance. PrivateBit makes a separate account for each site.</span></li>
     <li>${I("check", "s16")}<span>Which chain you are on.</span></li></ul>
-    <p class="small strong" style="margin:12px 0 8px">The site will not see</p>
+    <p class="small strong" data-st="dcdaf5">The site will not see</p>
     <ul class="checks no"><li>${I("eye-off", "s16")}<span>Your receive code, your private coins or your balance.</span></li>
     <li>${I("eye-off", "s16")}<span>Other sites' accounts or this wallet's name.</span></li></ul></div>
   <p class="small muted">Every payment or signature still opens a review here. You can disconnect in Settings, Connected sites.</p>${errBox}`,
@@ -182,7 +182,7 @@ screens.dapp = () => {
   ${!s.error && highFee(BigInt(s.amount), BigInt(s.fee), s.feeRate) ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">The fee is unusually high</span>The site asked for ${s.feeRate} sat/vB. That is ${sats(s.fee)}, a large share of this payment. Reject if you did not expect it.</div></div>` : ""}
   <div class="hero-amt"><p class="cap">You send</p><p class="a">${fb(s.amount, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(s.amount)}</p></div>
   <div class="card"><div class="kv">
-    <div class="r"><span class="k">To</span><span class="v"><span class="mono" style="word-break:break-all">${codeHi(s.to, 8, 8)}</span></span></div>
+    <div class="r"><span class="k">To</span><span class="v"><span class="mono" data-st="752397">${codeHi(s.to, 8, 8)}</span></span></div>
     ${accountRow(v)}
     <div class="r"><span class="k">Network fee</span><span class="v"><span class="mono">${sats(s.fee)}</span><span class="cap">${s.feeRate} sat/vB</span></span></div>
     ${BigInt(s.change) > 0n ? html`<div class="r"><span class="k">Back to the site account</span><span class="v mono">${fb(s.change)}</span></div>` : ""}
@@ -318,7 +318,7 @@ screens["site-detail"] = () => {
   </div></div>
   <div class="codebox"><div class="row between">${ntag(`${CHAIN_SHORT()} site account`)}<button class="link small" type="button" data-act="site-copy">Copy</button></div><p class="code" aria-label="Site account address">${codeHi(s.address)}</p></div>
   ${mv ? html`<div class="banner warn" role="note">${I("triangle-alert", "s16")}<div><span class="bt">Move ${fbShort(mv.amount)} back to private</span>Network fee ${sats(mv.fee)} at ${mv.rate} sat/vB. The coins land under your receive code, labeled Linked, because the chain shows they came from this site's account.
-    <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" type="button" data-act="site-move-go" ${busy("smove") ? html`aria-disabled="true"` : ""}>${busy("smove") ? html`${I("loader-circle", "s16 spin")}Moving…` : "Move now"}</button><button class="btn btn-ghost btn-sm" type="button" data-act="site-move-cancel">Cancel</button></div></div></div>` : ""}
+    <div class="row" data-st="47cabb"><button class="btn btn-primary btn-sm" type="button" data-act="site-move-go" ${busy("smove") ? html`aria-disabled="true"` : ""}>${busy("smove") ? html`${I("loader-circle", "s16 spin")}Moving…` : "Move now"}</button><button class="btn btn-ghost btn-sm" type="button" data-act="site-move-cancel">Cancel</button></div></div></div>` : ""}
   ${err("smove") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("smove")}</span></p>` : ""}
   <div class="opt-list">
     <button class="rowlink" type="button" data-act="site-fund"><span class="body"><span class="t">Add funds</span><span class="d">Pay this site's account from your private coins. Shows on chain as a payment from you to this address.</span></span><span class="v">${I("chevron-right", "s16")}</span></button>

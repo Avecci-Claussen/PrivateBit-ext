@@ -340,6 +340,7 @@ type Msg =
   | { type: "PREFS_SET"; prefs: Partial<Prefs> }
   | { type: "COINS" }
   | { type: "SET_COIN_META"; outpoint: string; patch: Partial<CoinMeta> }
+  | { type: "ASSET_CHECK"; outpoint: string }
   | { type: "HISTORY" }
   | { type: "SET_LABEL"; txid: string; label?: string }
   | { type: "ONETIME_ISSUE" }
@@ -409,6 +410,7 @@ async function bundle() {
     activity: (got[ACTIVITY_KEY] as ActivityState | undefined) ?? null,
     waiting: await wallet.waitingPayjoin(),
     delayed: await wallet.delayedView().catch(() => []),
+    delayedElsewhere: await wallet.delayedElsewhere().catch(() => []),
   };
 }
 
@@ -673,9 +675,15 @@ async function handle(msg: Msg): Promise<unknown> {
     }
     case "COINS":
       return wallet.coins();
-    case "SET_COIN_META":
-      await wallet.setCoinMeta(msg.outpoint, msg.patch);
+    case "SET_COIN_META": {
+      // What an ord server said is set only by ASSET_CHECK, never by the page.
+      const { asset: _asset, ...patch } = msg.patch;
+      void _asset;
+      await wallet.setCoinMeta(msg.outpoint, patch);
       return wallet.coins();
+    }
+    case "ASSET_CHECK":
+      return { verdict: await wallet.checkCoinAsset(msg.outpoint), coins: await wallet.coins() };
     case "HISTORY":
       return wallet.history();
     case "SET_LABEL":

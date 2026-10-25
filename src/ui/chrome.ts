@@ -101,7 +101,7 @@ const SECTION: Record<string, string> = {
 function sideNav(): Safe {
   const cur = SECTION[S.route] ?? (S.route.startsWith("set") || S.route === "remove" ? "settings" : "");
   return html`<nav aria-label="Main"><p class="grp">Wallet</p>${NAV.map(([k, i, l]) => html`<a href="#" data-act="tab" data-to="${k}" ${k === cur ? raw('aria-current="page"') : ""}>${I(i)}${l}</a>`)}
-  <p class="grp" style="margin-top:16px">Wallet settings</p><a href="#" data-act="tab" data-to="settings" ${cur === "settings" ? raw('aria-current="page"') : ""}>${I("settings")}Settings</a></nav>`;
+  <p class="grp" data-st="1b0f49">Wallet settings</p><a href="#" data-act="tab" data-to="settings" ${cur === "settings" ? raw('aria-current="page"') : ""}>${I("settings")}Settings</a></nav>`;
 }
 
 export function fullHtml(v: View): string {
@@ -116,7 +116,7 @@ export function fullHtml(v: View): string {
   <div class="foot-s">${pstat()}<button class="btn btn-secondary btn-sm" type="button" data-act="lock">${I("lock", "s16")}Lock</button></div></aside>`;
   const mbar = html`<div class="mobilebar">${MARK(24, false)}${walletChip()}${netChip(true)}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="sheet" data-sheet="menu" aria-label="Open menu" aria-haspopup="dialog">${I("menu")}</button></div>`;
   const ov = overlayFor(v);
-  const app = `<div class="app">${side.s}<div style="min-width:0">${mbar.s}<main class="content${v.page ? "" : " flow"}" id="main">${inner}</main></div></div>`;
+  const app = `<div class="app">${side.s}<div data-st="3922d3">${mbar.s}<main class="content${v.page ? "" : " flow"}" id="main">${inner}</main></div></div>`;
   return `${ov ? `<div inert>${app}</div><div class="fp-overlay">${ov}</div>` : app}${toastHtml() ? `<div class="fp-toast">${toastHtml()}</div>` : ""}`;
 }
 
@@ -129,7 +129,7 @@ function sheet(id: string, title: string, body: Safe): Safe {
 
 function netOption(id: "fractal" | "bitcoin", name: string, d: string): Safe {
   const on = curNet() === id;
-  return html`<button class="li" type="button" role="radio" aria-checked="${String(on)}" data-act="net-set" data-v="${id}"><span class="ico">${NETLOGO(id === "bitcoin" ? "btc" : "fractal")}</span><span class="body"><span class="t">${name}</span><span class="d" style="white-space:normal">${d}</span></span>${on ? I("check") : ""}</button>`;
+  return html`<button class="li" type="button" role="radio" aria-checked="${String(on)}" data-act="net-set" data-v="${id}"><span class="ico">${NETLOGO(id === "bitcoin" ? "btc" : "fractal")}</span><span class="body"><span class="t">${name}</span><span class="d" data-st="f8f979">${d}</span></span>${on ? I("check") : ""}</button>`;
 }
 
 export const sheets: Record<string, () => Safe> = {
@@ -167,11 +167,11 @@ export const sheets: Record<string, () => Safe> = {
       "ps-h",
       "Who can see what",
       html`<div class="list">
-    <div class="li" style="cursor:default"><span class="ico ${own ? "in" : "warn"}">${I("scan-line")}</span><span class="body"><span class="t">Finding your coins</span><span class="d" style="white-space:normal">${own ? "Your node sends the blocks. Matching them to your keys happens here." : `${explorerHost()} sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code.`}</span></span>${own ? I("circle-check", "s16") : html`<span class="badge warn">Shared</span>`}</div>
-    <div class="li" style="cursor:default"><span class="ico ${down ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t" style="white-space:normal">${own ? "Blocks and fees: your own node" : "Blocks and fees: block data service"}</span><span class="d" style="white-space:normal">${own ? "Only your node sees which blocks you read and what you broadcast." : "Sees your IP, that you read every block and ask for fee rates, and the payments you send."}</span></span>${down ? html`<span class="badge danger">${h!.state === "rate-limited" ? "Limited" : "Offline"}</span>` : own ? I("circle-check", "s16") : html`<span class="badge warn">Shared</span>`}</div>
-    <div class="li" style="cursor:default"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links: ${mailboxHost()}</span><span class="d" style="white-space:normal">Stores an encrypted blob it cannot read, reached through a relay that hides your IP.</span></span>${I("circle-check", "s16")}</div>
-    <div class="li" style="cursor:default"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" style="white-space:normal">${usdOn ? `Sees your IP and that someone asked for the ${UNIT()} price. Never your coins or codes.` : "No price requests are made."}</span></span>${usdOn ? html`<span class="badge warn">Shared</span>` : I("circle-check", "s16")}</div>
-    <div class="li" style="cursor:default"><span class="ico in">${I("history")}</span><span class="body"><span class="t">Activity history</span><span class="d" style="white-space:normal">Encrypted on this computer. Never synced to your Google account.</span></span>${I("circle-check", "s16")}</div>
+    <div class="li" data-st="2a9295"><span class="ico ${own ? "in" : "warn"}">${I("scan-line")}</span><span class="body"><span class="t">Finding your coins</span><span class="d" data-st="f8f979">${own ? "Your node sends the blocks. Matching them to your keys happens here." : `${explorerHost()} sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code.`}</span></span>${own ? I("circle-check", "s16") : html`<span class="badge warn">Shared</span>`}</div>
+    <div class="li" data-st="2a9295"><span class="ico ${down ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t" data-st="f8f979">${own ? "Blocks and fees: your own node" : "Blocks and fees: block data service"}</span><span class="d" data-st="f8f979">${own ? "Only your node sees which blocks you read and what you broadcast." : "Sees your IP, that you read every block and ask for fee rates, and the payments you send."}</span></span>${down ? html`<span class="badge danger">${h!.state === "rate-limited" ? "Limited" : "Offline"}</span>` : own ? I("circle-check", "s16") : html`<span class="badge warn">Shared</span>`}</div>
+    <div class="li" data-st="2a9295"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links: ${mailboxHost()}</span><span class="d" data-st="f8f979">Stores an encrypted blob it cannot read, reached through a relay that hides your IP.</span></span>${I("circle-check", "s16")}</div>
+    <div class="li" data-st="2a9295"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" data-st="f8f979">${usdOn ? `Sees your IP and that someone asked for the ${UNIT()} price. Never your coins or codes.` : "No price requests are made."}</span></span>${usdOn ? html`<span class="badge warn">Shared</span>` : I("circle-check", "s16")}</div>
+    <div class="li" data-st="2a9295"><span class="ico in">${I("history")}</span><span class="body"><span class="t">Activity history</span><span class="d" data-st="f8f979">Encrypted on this computer. Never synced to your Google account.</span></span>${I("circle-check", "s16")}</div>
   </div>
   ${own ? "" : html`<button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="set-node">Use my own node</button>`}`,
     );

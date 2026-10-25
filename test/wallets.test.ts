@@ -32,7 +32,7 @@ describe("several wallets", () => {
     const firstWords = await w.create({ password: "one", birthday: 100 });
     expect(firstWords.split(" ")).toHaveLength(24);
     const scan = await w.loadScan();
-    scan.utxos.push(coinFor((await w.requireAccount()).account, "aa".repeat(32), "42"));
+    scan.utxos.push(coinFor((await w.requireAccount()).account, "aa".repeat(32), "42000"));
     await w.saveScan(scan);
 
     const older = createMnemonic(128);
@@ -60,7 +60,7 @@ describe("several wallets", () => {
     await expect(w.unlock("two")).rejects.toThrow(/wrong password/);
     await w.unlock("one");
     const back = await w.state();
-    expect(back.balance).toBe("42");
+    expect(back.balance).toBe("42000");
     expect(back.mnemonicWords).toBe(24);
     expect(back.hasPassphrase).toBe(false);
     expect(back.birthday).toBe(100);
@@ -76,7 +76,7 @@ describe("several wallets", () => {
     await expect(w.unlock("two")).rejects.toThrow(/wrong password/);
     await w.unlock("one");
     const left = await w.state();
-    expect(left.balance).toBe("42");
+    expect(left.balance).toBe("42000");
     expect(left.wallets).toHaveLength(1);
     expect(left.wallets?.[0]?.name).toBe("Wallet");
   });
@@ -85,7 +85,7 @@ describe("several wallets", () => {
     const w = new PrivateBit(memoryKv());
     await w.create({ password: "one", birthday: 100 });
     const first = (await w.requireAccount()).account;
-    const theirs = coinFor(first, "aa".repeat(32), "42");
+    const theirs = coinFor(first, "aa".repeat(32), "42000");
     const scan = await w.loadScan();
     scan.utxos.push(theirs);
     await w.saveScan(scan);
@@ -97,18 +97,18 @@ describe("several wallets", () => {
       name: "Second",
       kind: "create",
     });
-    const mine = coinFor((await w.requireAccount()).account, "bb".repeat(32), "7");
+    const mine = coinFor((await w.requireAccount()).account, "bb".repeat(32), "70000");
     const mixed = await w.loadScan();
     // Separate namespaces: nothing of the first wallet is visible here.
     expect(mixed.utxos).toEqual([]);
     mixed.lastHeight = 500_100;
     mixed.utxos.push(mine);
     await w.saveScan(mixed);
-    expect((await w.state()).balance).toBe("7");
+    expect((await w.state()).balance).toBe("70000");
 
     await w.lock();
     await w.unlock("two");
-    expect((await w.state()).balance).toBe("7");
+    expect((await w.state()).balance).toBe("70000");
     expect((await w.loadScan()).lastHeight).toBe(500_100);
     expect((await w.history()).entries.map((e) => e.txid)).toEqual([mine.txid]);
 
@@ -116,7 +116,7 @@ describe("several wallets", () => {
     await w.openWallet(older.id);
     await w.unlock("one");
     const back = await w.state();
-    expect(back.balance).toBe("42");
+    expect(back.balance).toBe("42000");
     expect((await w.history()).entries.map((e) => e.txid)).toEqual([theirs.txid]);
   });
 

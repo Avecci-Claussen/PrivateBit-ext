@@ -43,18 +43,18 @@ screens.activity = () => {
   const list = h.entries.filter((e) => filter === "all" || (filter === "received" && (e.kind === "received" || e.kind === "moved-in")) || (filter === "sent" && (e.kind === "sent" || e.kind === "self" || e.kind === "split")) || (filter === "payjoin" && e.kind.startsWith("payjoin")));
   let main: Safe;
   if (h.rebuilding) {
-    main = html`<h1 style="font:var(--t-title)">Activity</h1>
-  <div class="card" role="status"><div class="row between"><span class="row strong" style="gap:6px">${I("refresh-cw", "s16 spin")}Rebuilding your activity</span><span class="small num">${sc.pct}%</span></div>
-    <div class="progress" role="progressbar" aria-label="Rebuilding activity" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div>
+    main = html`<h1 data-st="9d50d4">Activity</h1>
+  <div class="card" role="status"><div class="row between"><span class="row strong" data-st="f0abc1">${I("refresh-cw", "s16 spin")}Rebuilding your activity</span><span class="small num">${sc.pct}%</span></div>
+    <div class="progress" role="progressbar" aria-label="Rebuilding activity" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i data-pct="${sc.pct}"></i></div>
     <p class="small muted">History was not on this computer, such as after restoring from recovery words. Blocks are being downloaded again. Checked through block ${num(sc.at)}.</p></div>
   ${h.entries.length ? html`<p class="day">Found so far</p><div class="list">${h.entries.map((e) => actRow(e))}</div>` : ""}
   <p class="small muted">Labels you typed and notes are not on the chain, so they cannot be rebuilt. Amounts, dates and fees can.</p>`;
   } else if (!h.entries.length) {
-    main = html`<h1 style="font:var(--t-title)">Activity</h1>
+    main = html`<h1 data-st="9d50d4">Activity</h1>
   <div class="state"><div class="big neutral">${I("history")}</div><h1>No activity yet</h1><p>Payments to your receive code show here after PrivateBit finds them in a block. History is kept encrypted on this computer and is never synced.</p></div>
   <button class="btn btn-primary btn-block" type="button" data-act="go" data-to="receive">Show my receive code</button>`;
   } else {
-    main = html`<div class="sec-h"><h1 style="font:var(--t-title)">Activity</h1><span class="cap row" style="gap:4px">${I("lock", "s16")}Only on this computer</span></div>${grouped(h.entries)}`;
+    main = html`<div class="sec-h"><h1 data-st="9d50d4">Activity</h1><span class="cap row" data-st="d76768">${I("lock", "s16")}Only on this computer</span></div>${grouped(h.entries)}`;
   }
   return { title: "Activity", header: hdr(), main, nav: tabs("activity"), page: fullActivity(list, filter) };
 };
@@ -119,7 +119,7 @@ function detailBody(e: HistoryEntry, panel = false): Safe {
   const onchainRow = (k: string) =>
     e.onchain ? html`<div class="r sub"><span class="k">${k}</span><span class="v"><span class="mono small" title="${e.onchain}">${mid(e.onchain, 10, 8)}</span><button class="link small" type="button" data-act="copy-onchain">Copy</button></span></div>` : "";
   const toKind = e.to ? (e.to.startsWith("sp1") ? ntag(`${en === "bitcoin" ? "Bitcoin" : "Fractal"} receive code`) : e.to.includes("pj=") || e.to.includes("pj%3D") ? ntag("Payment link") : html`<span class="badge">Regular address</span>`) : "";
-  return html`<div class="hero-amt" ${panel ? html`style="align-items:flex-start;text-align:left"` : ""}>${panel ? html`<p class="cap">${cap}</p>` : html`<p class="cap">${cap}</p>`}<p class="a">${fbShort(a, { unit: false, sign: true })}<span class="unit"> ${en === "bitcoin" ? "BTC" : "FB"}</span></p>${usd(a) && en === curNet() ? html`<p class="fiat">${usd(a)} at today's price</p>` : ""}${panel ? "" : statusB}</div>
+  return html`<div class="hero-amt" ${panel ? html`data-st="3ce9d3"` : ""}>${panel ? html`<p class="cap">${cap}</p>` : html`<p class="cap">${cap}</p>`}<p class="a">${fbShort(a, { unit: false, sign: true })}<span class="unit"> ${en === "bitcoin" ? "BTC" : "FB"}</span></p>${usd(a) && en === curNet() ? html`<p class="fiat">${usd(a)} at today's price</p>` : ""}${panel ? "" : statusB}</div>
   ${pathPreview(from, to)}
   <div class="card"><div class="kv">
     ${sent ? html`<div class="r"><span class="k">Paid to</span><span class="v">${e.to ? html`<span class="mono" title="${e.to}">${mid(e.to, 12, 8)}</span>${toKind}` : html`<span class="muted">Not saved on this computer</span>`}</span></div>${onchainRow("On-chain address")}` : ""}
@@ -132,7 +132,7 @@ function detailBody(e: HistoryEntry, panel = false): Safe {
     <div class="r"><span class="k">Network</span><span class="v">${ntag(netName)}</span></div>
     <div class="r"><span class="k">Date</span><span class="v">${e.approxTime ? "About " : ""}${longDate(e.time * 1000)}</span></div>
     <div class="r"><span class="k">Block</span><span class="v mono">${e.height ? num(e.height) : "Not yet"}</span></div>
-    <div class="r"><span class="k">Label</span><span class="v">${editing ? html`<span class="row" style="gap:6px" data-enter="act-label-save"><input class="input" id="al" data-f="actLbl" maxlength="64" value="${fv("actLbl")}" aria-label="Label" style="height:36px"><button class="btn btn-secondary btn-sm" type="button" data-act="act-label-save">Save</button></span>` : html`${e.label || html`<span class="muted">Not labeled</span>`} <button class="link small" type="button" data-act="act-label-edit">Edit</button>`}</span></div>
+    <div class="r"><span class="k">Label</span><span class="v">${editing ? html`<span class="row" data-st="f0abc1" data-enter="act-label-save"><input class="input" id="al" data-f="actLbl" maxlength="64" value="${fv("actLbl")}" aria-label="Label" data-st="903dd6"><button class="btn btn-secondary btn-sm" type="button" data-act="act-label-save">Save</button></span>` : html`${e.label || html`<span class="muted">Not labeled</span>`} <button class="link small" type="button" data-act="act-label-edit">Edit</button>`}</span></div>
     ${txidLine(e.txid)}</div></div>
   ${explorerBlock(S.f.explorerAsk === true, ask, en)}
   ${m ? "" : ""}`;
@@ -202,8 +202,8 @@ function fullActivity(list: HistoryEntry[], filter: string): Safe {
   const e = cur() ?? list[0];
   const sc = scanning();
   const seg = (k: string, l: string) => html`<button type="button" role="radio" data-act="act-filter" data-v="${k}" aria-checked="${String(filter === k)}">${l}</button>`;
-  return html`<div class="topbar"><h1>Activity</h1><span class="cap row" style="gap:4px">${I("lock", "s16")}Encrypted, only on this computer</span><div class="seg" role="radiogroup" aria-label="Filter" style="width:360px">${seg("all", "All")}${seg("received", "Received")}${seg("sent", "Sent")}${seg("payjoin", "Payjoin")}</div></div>
-  ${h.rebuilding ? html`<div class="card" role="status"><div class="row between"><span class="row strong" style="gap:6px">${I("refresh-cw", "s16 spin")}Rebuilding your activity</span><span class="small num">${sc.pct}%</span></div><div class="progress" role="progressbar" aria-label="Rebuilding activity" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div><p class="small muted">Blocks are being downloaded again. Checked through block ${num(sc.at)}. Labels you typed cannot be rebuilt.</p></div>` : ""}
+  return html`<div class="topbar"><h1>Activity</h1><span class="cap row" data-st="d76768">${I("lock", "s16")}Encrypted, only on this computer</span><div class="seg" role="radiogroup" aria-label="Filter" data-st="83d1d8">${seg("all", "All")}${seg("received", "Received")}${seg("sent", "Sent")}${seg("payjoin", "Payjoin")}</div></div>
+  ${h.rebuilding ? html`<div class="card" role="status"><div class="row between"><span class="row strong" data-st="f0abc1">${I("refresh-cw", "s16 spin")}Rebuilding your activity</span><span class="small num">${sc.pct}%</span></div><div class="progress" role="progressbar" aria-label="Rebuilding activity" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i data-pct="${sc.pct}"></i></div><p class="small muted">Blocks are being downloaded again. Checked through block ${num(sc.at)}. Labels you typed cannot be rebuilt.</p></div>` : ""}
   <div class="grid2 g-main">
     <section class="panel" aria-labelledby="a-h"><h2 id="a-h" class="sr-only">All activity</h2>${list.length ? actTable(list, "All activity", true) : html`<p class="small muted">Nothing in this filter.</p>`}${p.kind === "ok" || p.kind === "stale" ? html`<p class="cap">USD uses today's price from the price service, not the price on the day.</p>` : ""}</section>
     ${e ? html`<aside class="panel" aria-labelledby="d-h"><div class="row between"><h2 id="d-h">${entryMeta(e).t}</h2>${e.status === "confirmed" ? html`<span class="badge ok">${I("circle-check")}Confirmed</span>` : html`<span class="badge">${I("clock")}Waiting</span>`}</div>${detailBody(e, true)}</aside>` : ""}

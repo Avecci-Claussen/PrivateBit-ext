@@ -136,6 +136,11 @@ export type ChainConfig = {
    */
   directMailboxKeys?: boolean;
   /**
+   * The user's ord server (or ordinals.com on Bitcoin) for checking whether a protected small
+   * coin holds an inscription or rune. Asked only when the user taps Check; it learns that outpoint.
+   */
+  ordUrl?: string;
+  /**
    * Public mode only: "node" sends payments through the user's own node at sendNodeUrl, so the
    * public service never sees them. A node in "core" mode always sends through itself.
    */
@@ -178,7 +183,8 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
   const rawDir = cfg?.payjoinDirectory?.trim() || DEFAULT_PAYJOIN_DIRECTORY;
   const payjoinDirectory = /ntfy\.sh/i.test(rawDir) ? DEFAULT_PAYJOIN_DIRECTORY : rawDir;
   const ohttpRelay = cfg?.ohttpRelay?.trim() || DEFAULT_OHTTP_RELAY;
-  const direct = cfg?.directMailboxKeys === true ? { directMailboxKeys: true as const } : {};
+  const ordUrl = typeof cfg?.ordUrl === "string" && /^https?:\/\/[^\s]+$/i.test(cfg.ordUrl.trim()) ? cfg.ordUrl.trim().replace(/\/+$/, "") : undefined;
+  const direct = { ...(cfg?.directMailboxKeys === true ? { directMailboxKeys: true as const } : {}), ...(ordUrl ? { ordUrl } : {}) };
   if (cfg?.kind === "core") {
     return {
       kind: "core",

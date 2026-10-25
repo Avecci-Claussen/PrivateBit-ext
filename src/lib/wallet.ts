@@ -13,6 +13,7 @@ import {
   DEFAULT_BIRTHDAY,
   DEFAULT_CHAIN,
   DEFAULT_OHTTP_RELAY,
+  NETWORK_IDS,
   DEFAULT_PAYJOIN_DIRECTORY,
   FRACTAL,
   isRedactedSecret,
@@ -138,6 +139,8 @@ import {
   carryCoinMeta,
   coinStatus,
   frozenOutpoints,
+  protectedOutpoints,
+  ordOutputVerdict,
   outpointOf,
   setCoinMeta,
   type CoinMeta,
@@ -227,6 +230,9 @@ export type CoinView = {
   reason?: string;
   linked?: boolean;
   frozen?: boolean;
+  /** 1.0.0 asset guard: unlocked by hand, and what the ord server said (if asked). */
+  assetOk?: boolean;
+  asset?: "none" | "held";
   kind: "sp" | "bip86";
   pending: boolean;
   /** In a signed payment that waits to be sent (delayed sending). */
@@ -842,6 +848,7 @@ export class WalletCore {
     const account = this.accountOf(session);
     const meta = await this.loadCoinMeta();
     const frozen = frozenOutpoints(meta);
+    for (const op of protectedOutpoints(scan.utxos, meta)) frozen.add(op);
     const unspent = scan.utxos.filter((u) => !u.spent);
     const notFrozen = unspent.filter((u) => !frozen.has(outpointOf(u)));
     const sum = (list: typeof unspent): bigint => list.reduce((a, u) => a + BigInt(u.value), 0n);
@@ -1572,7 +1579,7 @@ export class WalletCore {
   }
 
   /** Outpoints that automatic selection must never use: reserved, frozen, one-time coins. */
-  async blockedOutpoints(): Promise<{ reserved: Set<string>; frozen: Set<string> }> {
+  async blockedOutpoints(): Promise<{ reserved: Set<string>; frozen: Set<string>; guarded: Set<string> }> {
     const receive = await this.loadPayjoinSessions();
     const reserved = new Set(
       receive
@@ -1588,7 +1595,13 @@ export class WalletCore {
       if (d.status !== "waiting") continue;
       for (const inp of d.signableInputs) reserved.add(`${inp.txid}:${inp.vout}`);
     }
-    return { reserved, frozen: frozenOutpoints(await this.loadCoinMeta()) };
+    const meta = await this.loadCoinMeta();
+    const frozen = frozenOutpoints(meta);
+    // 1.0.0 asset guard: coins that may hold an inscription or rune are never picked by the wallet.
+    const scan = await this.loadScan().catch(() => undefined);
+    const guarded = scan ? protectedOutpoints(scan.utxos, meta) : new Set<string>();
+    for (const op of guarded) frozen.add(op);
+    return { reserved, frozen, guarded };
   }
 
   async planSend(destination: string, amount: bigint, opts: PlanOptions = {}): Promise<BuiltPlan> {
@@ -1803,7 +1816,9 @@ export class WalletCore {
   }
 
   private async saveDelayed(list: DelayedSend[]): Promise<void> {
-    await this.saveSealed(DELAYED_KEY, list);
+    // An empty list leaves no record, so an idle chain gets no scan grant at unlock.
+    if (!list.length) await this.kv.remove([DELAYED_KEY]);
+    else await this.saveSealed(DELAYED_KEY, list);
   }
 
   /** Held payments for the UI, without the signed transaction. */
@@ -2184,6 +2199,23 @@ export class WalletCore {
     await this.saveCoinMeta(setCoinMeta(await this.loadCoinMeta(), outpoint, patch));
   }
 
+  /**
+   * Ask the user's ord server about one coin (GET /output/<outpoint>, JSON). Only on request: the
+   * server learns this outpoint. A clear answer from a full index is kept in the coin's notes.
+   */
+  async checkCoinAsset(outpoint: string): Promise<"none" | "held" | "unknown"> {
+    const { scan } = await this.requireAccount();
+    if (!scan.utxos.some((u) => outpointOf(u) === outpoint && !u.spent)) throw new Error("no such coin");
+    const base = this.chainCfg.ordUrl;
+    if (!base) throw new Error("set an ord server first");
+    if (!/^[0-9a-f]{64}:\d{1,6}$/.test(outpoint)) throw new Error("bad outpoint");
+    const res = await fetch(`${base}/output/${outpoint}`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(15_000), credentials: "omit", referrerPolicy: "no-referrer" });
+    if (!res.ok) throw new Error(`the ord server answered ${res.status}`);
+    const verdict = ordOutputVerdict(await res.json().catch(() => undefined));
+    if (verdict) await this.saveCoinMeta(setCoinMeta(await this.loadCoinMeta(), outpoint, { asset: verdict }));
+    return verdict ?? "unknown";
+  }
+
   async coins(): Promise<CoinView[]> {
     const { scan } = await this.requireAccount();
     const meta = await this.loadCoinMeta();
@@ -2206,6 +2238,8 @@ export class WalletCore {
           reason: m.reason,
           linked: m.linked || u.kind === "bip86" || undefined,
           frozen: m.frozen,
+          assetOk: m.assetOk,
+          asset: m.asset,
           kind: u.kind === "bip86" ? "bip86" : "sp",
           pending: u.height === 0,
           held: held.has(op) || undefined,
@@ -2262,7 +2296,7 @@ export class WalletCore {
     if (!coins.length) throw new Error("nothing at this one-time address");
     const { reserved, frozen } = await this.blockedOutpoints();
     const include = coins.map((c) => outpointOf(c));
-    if (include.some((op) => frozen.has(op) || reserved.has(op))) throw new Error("this coin is frozen or reserved");
+    if (include.some((op) => frozen.has(op) || reserved.has(op))) throw new Error("this coin is frozen, reserved or protected (it may hold an inscription or rune; unlock it in Coins first)");
     return buildSend({
       account,
       utxos: scan.utxos,
@@ -2306,7 +2340,7 @@ export class WalletCore {
     const coin = scan.utxos.find((u) => outpointOf(u) === outpoint && !u.spent);
     if (!coin) throw new Error("this coin is not in this wallet or already spent");
     const { reserved, frozen } = await this.blockedOutpoints();
-    if (frozen.has(outpoint) || reserved.has(outpoint)) throw new Error("this coin is frozen or reserved");
+    if (frozen.has(outpoint) || reserved.has(outpoint)) throw new Error("this coin is frozen, reserved or protected (it may hold an inscription or rune; unlock it in Coins first)");
     return coin;
   }
 
@@ -2400,6 +2434,14 @@ export class WalletCore {
     return all.utxos.filter((u) => u.kind === "site" && u.index === index && !u.spent);
   }
 
+  /** Site coins the wallet may spend by itself: not ones that may hold an inscription or rune. */
+  private async siteSpendable(index: number): Promise<LabeledUtxo[]> {
+    const meta = await this.loadCoinMeta();
+    const coins = await this.siteCoins(index);
+    const guarded = protectedOutpoints(coins, meta);
+    return coins.filter((u) => !guarded.has(outpointOf(u)));
+  }
+
   async siteBalance(index: number): Promise<{ confirmed: number; unconfirmed: number; total: number }> {
     const coins = await this.siteCoins(index);
     const sum = (l: LabeledUtxo[]) => Number(l.reduce((a, u) => a + BigInt(u.value), 0n));
@@ -2472,7 +2514,7 @@ export class WalletCore {
   async sitePlanSend(origin: string, to: string, sats: number, feeRate: number, memos: string[]): Promise<SiteSendPlan> {
     const { key } = await this.siteKey(origin);
     if (/^sp1/i.test(to.trim())) throw new Error("a website account cannot pay a private code; use Move back to private in Settings");
-    return buildSiteSend({ coins: await this.siteCoins(key.index), key, to: to.trim(), amount: BigInt(sats), feeRate, memos });
+    return buildSiteSend({ coins: await this.siteSpendable(key.index), key, to: to.trim(), amount: BigInt(sats), feeRate, memos });
   }
 
   /** Broadcast a transaction a website account made, and note its own outputs and spends. */
@@ -2510,8 +2552,8 @@ export class WalletCore {
     const { account } = await this.requireAccount();
     const site = await this.siteRecord(origin);
     if (!site) throw new Error("unknown site");
-    const coins = await this.siteCoins(site.index);
-    if (!coins.length) throw new Error("nothing in this site's account");
+    const coins = await this.siteSpendable(site.index);
+    if (!coins.length) throw new Error((await this.siteCoins(site.index)).length ? "the coins in this site's account are small Taproot coins that may hold an inscription or rune; move them with the site" : "nothing in this site's account");
     return buildSend({
       account,
       utxos: coins,
@@ -2797,7 +2839,9 @@ export class WalletCore {
         .filter((s) => receiveOpen(s) && s.reserved)
         .map((s) => `${s.reserved!.txid}:${s.reserved!.vout}`),
     );
-    const frozenOut = frozenOutpoints(await this.loadCoinMeta());
+    const metaNow = await this.loadCoinMeta();
+    const frozenOut = frozenOutpoints(metaNow);
+    for (const op of protectedOutpoints(scan.utxos, metaNow)) frozenOut.add(op);
     const spendable = scan.utxos
       .filter(
         (u) =>
@@ -3328,8 +3372,7 @@ export class PrivateBit {
     setSharedChainNetwork(net);
     const old = this.current;
     if (old) {
-      // A held payment is only sent by the open chain's worker loop: send it now rather than leave it waiting unseen.
-      await old.sendAllDelayedNow().catch(() => undefined);
+      // A held payment keeps its own time on its chain (runDelayed services every chain).
       await old.settle().catch(() => undefined);
       old.close();
       this.current = undefined;
@@ -3503,6 +3546,7 @@ export class PrivateBit {
     }
     const prev = await this.core();
     const carried = prev.chainCfg;
+    await this.closeOtherChainsForSwitch(prev);
     await prev.closeForSwitch();
     const id = newWalletId();
     const core = this.coreFor(id);
@@ -3524,6 +3568,7 @@ export class PrivateBit {
     const index = await this.index();
     if (!index || !index.wallets.some((w) => w.id === id)) throw new Error("no such wallet");
     const prev = await this.core();
+    await this.closeOtherChainsForSwitch(prev);
     await prev.closeForSwitch();
     await this.activate(id);
     await this.core();
@@ -3541,6 +3586,89 @@ export class PrivateBit {
     const core = await this.core();
     await core.unlock(password);
     await this.remember(core);
+    await this.prepareOtherChains(core).catch(() => undefined);
+  }
+
+  /** Wallet switch: the other chains' held payments go out now too and their scan grants go (the UI says so first). */
+  private async closeOtherChainsForSwitch(prev: WalletCore): Promise<void> {
+    for (const other of await this.otherChainCores(prev).catch(() => [] as WalletCore[])) {
+      try {
+        await other.sendAllDelayedNow().catch(() => undefined);
+        await other.kv.remove([SCAN_GRANT_KEY]);
+      } finally {
+        other.close();
+      }
+    }
+  }
+
+  /** The open wallet on a chain that is not on screen (closed by the caller). */
+  private async otherChainCores(core: WalletCore): Promise<WalletCore[]> {
+    const out: WalletCore[] = [];
+    for (const net of NETWORK_IDS) {
+      if (net === core.net) continue;
+      const other = new WalletCore(netKv(scopedKv(this.root, core.walletId), net), this.defaultChain, this.hooks, core.walletId, net);
+      await other.loadChain();
+      out.push(other);
+    }
+    return out;
+  }
+
+  /**
+   * A chain with held payments gets its own scan grant at unlock, so they go out on time even
+   * while another chain is on screen. Chains without held payments get nothing.
+   */
+  private async prepareOtherChains(core: WalletCore): Promise<void> {
+    for (const other of await this.otherChainCores(core)) {
+      try {
+        const raw = (await other.kv.get([DELAYED_KEY]))[DELAYED_KEY];
+        if (raw !== undefined) await other.ensureGrant();
+      } finally {
+        other.close();
+      }
+    }
+  }
+
+  /**
+   * Broadcast held payments that are due on every chain of the open wallet, not only the one on
+   * screen. Send now (only) acts on the chain on screen. Returns when the next one is due.
+   */
+  async runDelayed(opts: { now?: number; only?: string } = {}): Promise<{ sent: string[]; failed: string[]; next?: number }> {
+    const core = await this.core();
+    const r = await core.runDelayed(opts);
+    if (opts.only) return r;
+    const sent = [...r.sent];
+    const failed = [...r.failed];
+    let next = r.next;
+    for (const other of await this.otherChainCores(core)) {
+      try {
+        const o = await other.runDelayed(opts);
+        sent.push(...o.sent);
+        failed.push(...o.failed);
+        if (o.next !== undefined && (next === undefined || o.next < next)) next = o.next;
+      } catch {
+        // That chain's list cannot be opened now (no grant yet): it is tried again after unlock.
+      } finally {
+        other.close();
+      }
+    }
+    return { sent, failed, ...(next !== undefined ? { next } : {}) };
+  }
+
+  /** Held payments waiting on chains that are not on screen, for the overview. */
+  async delayedElsewhere(): Promise<{ net: NetworkId; count: number; next: number }[]> {
+    const core = await this.core();
+    const out: { net: NetworkId; count: number; next: number }[] = [];
+    for (const other of await this.otherChainCores(core)) {
+      try {
+        const waiting = (await other.delayedView()).filter((d) => d.status === "waiting");
+        if (waiting.length) out.push({ net: other.net, count: waiting.length, next: Math.min(...waiting.map((d) => d.sendAt)) });
+      } catch {
+        /* not readable now */
+      } finally {
+        other.close();
+      }
+    }
+    return out;
   }
 
   async setBirthday(birthday: number): Promise<void> {
@@ -3636,6 +3764,7 @@ export class PrivateBit {
   loadCoinMeta = this.d("loadCoinMeta");
   saveCoinMeta = this.d("saveCoinMeta");
   setCoinMeta = this.d("setCoinMeta");
+  checkCoinAsset = this.d("checkCoinAsset");
   coins = this.d("coins");
   loadOneTime = this.d("loadOneTime");
   saveOneTime = this.d("saveOneTime");
@@ -3689,7 +3818,6 @@ export class PrivateBit {
   delayedView = this.d("delayedView");
   cancelDelayed = this.d("cancelDelayed");
   dismissDelayed = this.d("dismissDelayed");
-  runDelayed = this.d("runDelayed");
   finishDelayedRecords = this.d("finishDelayedRecords");
   loadDelayed = this.d("loadDelayed");
 

@@ -2,6 +2,7 @@ import "../styles/tokens.css";
 import "../styles/components.css";
 import "../styles/fullpage.css";
 import "../styles/app.css";
+import "../styles/inline.css";
 import { S, actions, screens, mount, go, back, render, refresh, setRenderer, run, toast, type Mode } from "./app.ts";
 import { call } from "./api.ts";
 import { popupHtml, fullHtml } from "./chrome.ts";

@@ -31,7 +31,7 @@ screens.wallets = () => {
   const list = S.b?.state.wallets ?? [];
   const open = list.find((w) => w.active);
   const main = html`
-  <div class="stack"><h2 style="font:var(--t-title)">Wallets on this computer</h2><p class="muted">One wallet is open at a time. Each has its own words, password and history. Switching locks the open one. A wallet keeps finding its coins after you lock, until you switch or quit the browser.</p></div>
+  <div class="stack"><h2 data-st="9d50d4">Wallets on this computer</h2><p class="muted">One wallet is open at a time. Each has its own words, password and history. Switching locks the open one. A wallet keeps finding its coins after you lock, until you switch or quit the browser.</p></div>
   ${list.length ? html`<ul class="wrows" aria-label="Wallets">${list.map((w) => row(w, list.length === 1))}</ul>` : html`<p class="small muted">No wallet on this computer yet.</p>`}
   ${S.b?.state.payjoin && list.length > 1 ? html`<div class="banner warn">${I("hourglass", "s16")}<div><span class="bt">A payment is open in ${open?.name ?? "this wallet"}</span>Switching or removing it ends that payment. You are asked first.</div></div>` : ""}`;
   return {
