@@ -29,6 +29,8 @@ type Pending = {
   /** The exact payment shown in the review. Approve broadcasts this one, never a new plan. */
   sendTx?: string;
   sendView?: PendingView["send"];
+  /** The chain the payment was planned on. */
+  sendNet?: NetworkId;
 };
 
 export type PendingView = {
@@ -301,6 +303,7 @@ export function installDapp(deps: DappDeps) {
         try {
           const plan = await wallet.sitePlanSend(p.origin, r.to, r.sats, feeRate, r.memos);
           p.sendTx = plan.txHex;
+          p.sendNet = net;
           p.sendView = { to: r.to, amount: plan.amount, fee: plan.fee, change: plan.change, memos: r.memos, feeRate };
         } catch (e) {
           p.sendTx = undefined;
@@ -344,6 +347,7 @@ export function installDapp(deps: DappDeps) {
         case "sendBitcoin": {
           // Audit F-03: send exactly what the review showed (same coins, fee and outputs).
           if (!p.sendTx) throw new Error("Nothing was sent. Review the payment first.");
+          if (p.sendNet !== wallet.net) throw new Error("Nothing was sent. The chain changed after the review.");
           value = await wallet.siteBroadcast(p.origin, p.sendTx);
           break;
         }

@@ -324,6 +324,16 @@ type Msg =
   | { type: "RENAME_WALLET"; id: string; name: string };
 
 type Onboard = { mnemonic: string; words: 24; createdAt: number };
+/** Audit L4: new recovery words wait in memory for at most this long, then the setup starts again. */
+const ONBOARD_TTL_MS = 30 * 60_000;
+async function pendingOnboard(): Promise<Onboard | undefined> {
+  const ob = (await kv.get([ONBOARD_KEY]))[ONBOARD_KEY] as Onboard | undefined;
+  if (ob && !(Date.now() - ob.createdAt < ONBOARD_TTL_MS)) {
+    await kv.remove([ONBOARD_KEY]);
+    return undefined;
+  }
+  return ob;
+}
 
 async function bundle() {
   const got = await kv.get([HEALTH_KEY, LOCKINFO_KEY, PRICE_KEY, PREFS_KEY, ACTIVITY_KEY]);
@@ -461,12 +471,12 @@ async function handle(msg: Msg): Promise<unknown> {
       return ob;
     }
     case "ONBOARD_GET":
-      return (await kv.get([ONBOARD_KEY]))[ONBOARD_KEY] ?? null;
+      return (await pendingOnboard()) ?? null;
     case "ONBOARD_CLEAR":
       await kv.remove([ONBOARD_KEY]);
       return null;
     case "CREATE_CHECKED": {
-      const ob = (await kv.get([ONBOARD_KEY]))[ONBOARD_KEY] as Onboard | undefined;
+      const ob = await pendingOnboard();
       if (!ob) throw new Error("Start again: the recovery words were cleared.");
       const birthday = await birthdayForNewWallet();
       if (msg.add) {
@@ -529,7 +539,7 @@ async function handle(msg: Msg): Promise<unknown> {
       return bundle();
     case "LOCK":
       await wallet.lock();
-      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.remove([ACTIVITY_KEY, FEES_KEY, ONBOARD_KEY]);
       await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       kickCatchup(0);
       return null;
