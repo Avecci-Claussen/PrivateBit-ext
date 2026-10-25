@@ -230,3 +230,19 @@ describe("M6: auto lock never waits for a Payjoin", () => {
     expect(autoLockDecision({ last: 0 }, 15 * 60_000 - 1, 15).lock).toBe(false);
   });
 });
+
+describe("I2: unlock waits after wrong passwords, across restarts", () => {
+  it("backs off exponentially and keeps the count on disk", async () => {
+    const { unlockWaitMs } = await import("../src/lib/wallet.ts");
+    expect([1, 2, 3, 4, 5, 20].map(unlockWaitMs)).toEqual([0, 0, 30_000, 60_000, 120_000, 3_600_000]);
+    const kv = memoryKv();
+    const w = new PrivateBit(kv);
+    await w.create({ password: "right-password-1", birthday: 10 });
+    await w.lock();
+    for (let i = 0; i < 3; i++) await expect(w.unlock("nope")).rejects.toThrow(/wrong password/);
+    await expect(w.unlock("right-password-1")).rejects.toThrow(/Too many wrong passwords/);
+    // A fresh instance on the same storage (a restart) still waits.
+    const again = new PrivateBit(kv);
+    await expect(again.unlock("right-password-1")).rejects.toThrow(/Too many wrong passwords/);
+  }, 60000);
+});

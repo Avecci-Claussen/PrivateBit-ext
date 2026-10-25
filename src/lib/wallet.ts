@@ -324,6 +324,21 @@ const PJ_HPKE = "privatebit.pj.hpke";
 const SEND_HPKE_PREFIX = "send:";
 /** Sealed (session key slot "pj") scoped keys for Payjoins that keep going after Lock. */
 const PJ_GRANT = "privatebit.pj.grant";
+/** Wrong password count and wait, kept on disk so a restart does not reset it (security audit v1, I2). */
+const UNLOCK_GUARD = "privatebit.unlock.guard";
+const FREE_TRIES = 3;
+const FIRST_WAIT_MS = 30_000;
+const MAX_WAIT_MS = 60 * 60_000;
+export function unlockWaitMs(fails: number): number {
+  if (fails < FREE_TRIES) return 0;
+  return Math.min(MAX_WAIT_MS, FIRST_WAIT_MS * 2 ** (fails - FREE_TRIES));
+}
+function waitText(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  if (s < 90) return `${s} seconds`;
+  const m = Math.ceil(s / 60);
+  return m === 1 ? "1 minute" : `${m} minutes`;
+}
 const PJ_GRANT_AAD = "privatebit/pj-grant/v1";
 const PJ_HPKE_AAD = "privatebit/pj-hpke/v1";
 /**
@@ -999,7 +1014,7 @@ export class WalletCore {
     this.sideWorkAt = 0;
     const blob = await loadVaultBlob(this.kv);
     if (!blob) throw new Error("no vault");
-    const unlocked = unlockVault(blob, password);
+    const unlocked = await this.passwordGate(() => unlockVault(blob, password));
     // Audit L9: re-save an older vault with the current scrypt cost. Same words, same password.
     if (vaultNeedsStrongerKdf(blob)) await persistVault(this.kv, lockVault(unlocked, password)).catch(() => undefined);
     await saveSession(this.kv, unlocked);
@@ -1032,7 +1047,28 @@ export class WalletCore {
   async checkPassword(password: string): Promise<UnlockedVault> {
     const blob = await loadVaultBlob(this.kv);
     if (!blob) throw new Error("no vault");
-    return unlockVault(blob, password);
+    return this.passwordGate(() => unlockVault(blob, password));
+  }
+
+  /**
+   * Every password check goes through here. After 3 wrong passwords each try waits, doubling
+   * from 30 seconds up to an hour. Kept in local storage, so restarting does not reset it.
+   */
+  private async passwordGate<T>(f: () => T): Promise<T> {
+    const g = ((await this.kv.get([UNLOCK_GUARD]))[UNLOCK_GUARD] as { fails: number; until: number } | undefined) ?? { fails: 0, until: 0 };
+    const now = Date.now();
+    if (g.until > now) throw new Error(`Too many wrong passwords. Try again in ${waitText(g.until - now)}.`);
+    try {
+      const r = f();
+      if (g.fails) await this.kv.remove([UNLOCK_GUARD]);
+      return r;
+    } catch (e) {
+      if (/wrong password/i.test(String((e as Error).message))) {
+        const fails = g.fails + 1;
+        await this.kv.set({ [UNLOCK_GUARD]: { fails, until: now + unlockWaitMs(fails) } });
+      }
+      throw e;
+    }
   }
 
   /** This wallet's fingerprint, from the session or the scan grant. Unknown when neither is there. */

@@ -34,6 +34,7 @@ export const WALLET_SCOPED = [
   "privatebit.pj.send",
   "privatebit.pj.hpke",
   "privatebit.pj.grant",
+  "privatebit.unlock.guard",
   "privatebit.session",
   // Connected websites (origins and their account index), sealed with the data key. Both chains.
   "privatebit.sites",
