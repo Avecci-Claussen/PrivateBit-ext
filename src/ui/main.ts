@@ -14,6 +14,7 @@ import "./screens/activity.ts";
 import { pollMigration } from "./screens/migrate.ts";
 import "./screens/settings.ts";
 import "./screens/wallets.ts";
+import "./screens/dapp.ts";
 import { loadHistory } from "./screens/home.ts";
 import { loadSessions } from "./screens/receive.ts";
 import { scanning } from "./derive.ts";
@@ -124,6 +125,11 @@ async function tick(): Promise<void> {
 
 export async function start(mode: Mode): Promise<void> {
   document.documentElement.dataset.mode = mode;
+  const dm = /^#dapp=([0-9a-f]{24})$/.exec(location.hash);
+  if (mode === "popup" && dm) {
+    S.dappId = dm[1]!;
+    document.documentElement.dataset.dapp = "1";
+  }
   await hydrateTheme();
   setRenderer(mode === "full" ? fullHtml : popupHtml);
   mount(document.getElementById("app")!, mode);

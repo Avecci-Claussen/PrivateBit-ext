@@ -458,6 +458,7 @@ screens.review = () => {
     ? html`<div class="banner">${I("info", "s16")}<div><span class="bt">What happens next</span>Your signed payment goes to the other person, encrypted. When they add their coin, PrivateBit checks it and broadcasts. If they never answer, nothing is broadcast.</div></div>`
     : html`<details class="card pad-sm" ${S.f.det ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle-k" data-k="det">Transaction details</summary><div class="stack" style="margin-top:12px">${details}<button class="btn btn-ghost btn-sm" type="button" data-act="copy-psbt" style="align-self:flex-start">${I("copy", "s16")}Copy PSBT</button></div></details>`}
   ${mergeBox}${delayBox}
+  ${typeof S.f.siteFund === "string" && to.kind === "address" ? html`<div class="banner warn" role="note" id="site-fund-note">${I("globe", "s16")}<div><span class="bt">Moving coins to the site account for ${S.f.siteFund}</span>This is a normal payment. On chain it links the coins you spend here to that site's account, so the site can see they came from one wallet. Your receive code and other coins stay out of it.</div></div>` : ""}
   ${legacy ? html`<label class="check"><input type="checkbox" data-f="ack" ${S.f.ack ? html`checked` : ""}> <span>I understand this payment can be linked to this address.</span></label>` : ""}
   ${changed?.length ? html`<label class="check"><input type="checkbox" data-f="ackChange" ${S.f.ackChange ? html`checked` : ""}> <span>I checked the new amounts and coins.</span></label>` : ""}
   ${p.preview.warnings.length ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div>${p.preview.warnings.join(" ")}</div></div>` : ""}`;
@@ -556,7 +557,7 @@ actions.broadcast = async () => {
   }
 };
 function clearForm(): void {
-  for (const k of ["to", "amt", "lbl", "max", "coinMode", "coinsSel", "feeCustom", "feeMode", "ack", "ackChange", "ackMerge", "det"]) delete S.f[k];
+  for (const k of ["to", "amt", "lbl", "siteFund", "max", "coinMode", "coinsSel", "feeCustom", "feeMode", "ack", "ackChange", "ackMerge", "det"]) delete S.f[k];
   S.d.plan = undefined;
   S.d.planChanged = undefined;
   S.d.max = undefined;

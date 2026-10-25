@@ -1,6 +1,7 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
 import { call, type ChainConfig, type Prefs } from "../api.ts";
 import { html, I, curNet, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
+import { sitesIntro, sitesList } from "./dapp.ts";
 import { hdr, tabs, mailboxHost } from "../chrome.ts";
 import { netInfo, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
 const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
@@ -109,6 +110,7 @@ screens.settings = () => {
   ${row("file-key", "Backup", "Recovery words", "set-backup")}
   ${row("scan-line", "Finding coins", `Look back from block ${num(S.b!.state.birthday ?? defBirthday())}`, "set-scan")}
   ${row("arrow-right-left", "Move coins from another wallet", "One payment, then move it into your receive code", "migrate")}
+  ${row("globe", "Connected sites", "Websites you approved, each with its own account", "set-sites")}
 </div>
   ${S.mode === "popup" ? html`<button class="btn btn-secondary btn-block" type="button" data-act="open-full">${I("external-link", "s16")}Open full page</button>` : ""}
   <p class="cap" style="text-align:center">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p>`,
@@ -767,7 +769,7 @@ function fullSettings(): Safe {
   }
   const pr = prefs();
   return html`<div class="topbar"><h1>Settings</h1><span class="cap">Changes save when you select Save in each section</span></div>
-  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#send">Sending</a><a href="#price">USD price</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
+  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#send">Sending</a><a href="#price">USD price</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a><a href="#sites">Connected sites</a></nav>
   <div class="stack" style="gap:var(--s-8)">
     <section class="sect" id="wallets"><header><h2>Wallets</h2><p>Open now: <strong>${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"}</strong>. Several wallets can sit on this computer, one open at a time, each with its own password. Rename, add, import or remove them in one place.</p></header>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("wallet", "s16")}Manage wallets</button></div></section>
@@ -789,5 +791,7 @@ function fullSettings(): Safe {
     <section class="sect" id="bk"><header><h2>Backup and finding coins</h2><p>Your recovery words restore everything except the labels you typed.</p></header>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>
       <p class="cap">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p></section>
+    <section class="sect" id="sites"><header><h2>Connected sites</h2><p>Websites you approved. Each has its own account on each chain.</p></header>
+      <div class="stack" style="max-width:560px">${sitesIntro()}${sitesList()}</div></section>
   </div></div>`;
 }

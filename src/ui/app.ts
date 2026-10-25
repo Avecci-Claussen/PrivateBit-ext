@@ -32,7 +32,12 @@ export const S = {
   f: {} as Record<string, string | boolean | string[] | undefined>,
   d: {} as Record<string, unknown>,
   loaded: {} as Record<string, number>,
+  /** Set when this window was opened by a website request (popup.html#dapp=<id>). */
+  dappId: "",
 };
+
+/** Where to land after unlock: the website request this window is for, or the wallet. */
+export const landing = (): string => (S.dappId ? "dapp" : "home");
 
 export type ScreenFn = () => View;
 export const screens: Record<string, ScreenFn> = {};

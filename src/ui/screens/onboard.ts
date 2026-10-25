@@ -1,4 +1,4 @@
-import { S, screens, actions, loaders, go, back, render, run, refresh, refreshUntilReady, fv, busy, err, toast } from "../app.ts";
+import { S, screens, actions, loaders, go, back, render, run, refresh, refreshUntilReady, fv, busy, err, toast, landing } from "../app.ts";
 import { call, type Bundle } from "../api.ts";
 import { html, I, curNet, MARK, NETLOGO, codeHi, num, type Safe } from "../kit.ts";
 import { hdr } from "../chrome.ts";
@@ -439,7 +439,7 @@ actions.unlock = async () => {
     S.b = await call({ type: "UNLOCK", password: pw });
     S.f = {};
     S.busy = null;
-    go("home", {}, { reset: true });
+    go(landing(), {}, { reset: true });
   } catch (e) {
     S.busy = null;
     const caps = (window as unknown as { __caps?: boolean }).__caps;
@@ -462,7 +462,7 @@ export async function boot(): Promise<void> {
     const ob = await call<{ mnemonic: string } | null>({ type: "ONBOARD_GET" }).catch(() => null);
     go(ob ? "seed" : "welcome", {}, { reset: true });
   } else if (!st.unlocked) go("unlock", {}, { reset: true });
-  else go("home", {}, { reset: true });
+  else go(landing(), {}, { reset: true });
 }
 
 screens.boot = () => ({ title: "Loading", solo: true, main: html`<div class="state"><div class="big neutral">${I("loader-circle", "spin")}</div></div>` });
