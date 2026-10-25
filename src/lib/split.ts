@@ -7,7 +7,7 @@ import { DUST, estimateVbytes, feeFor } from "./coinselect.ts";
  * by the user, before anything is signed.
  */
 export const SPLIT_MIN = 2;
-export const SPLIT_MAX = 4;
+export const SPLIT_MAX = 6;
 
 export function splitBudget(
   value: bigint,
@@ -15,7 +15,7 @@ export function splitBudget(
   feeRate: number,
 ): { fee: bigint; spendable: bigint; vbytes: number } {
   if (!Number.isInteger(pieces) || pieces < SPLIT_MIN || pieces > SPLIT_MAX) {
-    throw new Error("Break into 2, 3 or 4 coins");
+    throw new Error(`Split into ${SPLIT_MIN} to ${SPLIT_MAX} coins`);
   }
   const vbytes = estimateVbytes(1, pieces);
   const fee = feeFor(1, pieces, feeRate);
@@ -31,7 +31,7 @@ export type SplitCheck =
 /** The user-chosen amounts must spend exactly the coin minus fee, stay above dust, and never match. */
 export function checkSplit(amounts: bigint[], spendable: bigint): SplitCheck {
   if (amounts.length < SPLIT_MIN || amounts.length > SPLIT_MAX) {
-    return { ok: false, reason: "Break into 2, 3 or 4 coins" };
+    return { ok: false, reason: `Split into ${SPLIT_MIN} to ${SPLIT_MAX} coins` };
   }
   if (amounts.some((a) => a < DUST)) {
     return { ok: false, reason: "Each piece must be at least 330 sats so it can be spent later" };

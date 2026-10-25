@@ -54,10 +54,11 @@ async function wallet(coins: [string, string][]) {
 }
 
 describe("Confirm sends the reviewed plan", () => {
-  it("the plan id covers inputs and outputs, not signatures: planning twice gives the same id", async () => {
+  it("the plan id covers inputs and outputs, not signatures: planning twice with the review's seed gives the same id", async () => {
     const { w, dest } = await wallet([["a1".repeat(32), "50000"]]);
     const p1 = await w.plan(dest, 10_000n, { feeRate: 2 });
-    const p2 = await w.plan(dest, 10_000n, { feeRate: 2 });
+    expect(p1.seed).toMatch(/^[0-9a-f]{64}$/);
+    const p2 = await w.plan(dest, 10_000n, { feeRate: 2, seed: p1.seed });
     expect(p1.planId).toMatch(/^[0-9a-f]{64}$/);
     expect(p2.planId).toBe(p1.planId);
     expect(planDigest(p1.psbtBase64, { chain: "fractal:8228", wallet: "x" })).not.toBe(planDigest(p1.psbtBase64, { chain: "fractal:8228", wallet: "y" }));
@@ -67,7 +68,7 @@ describe("Confirm sends the reviewed plan", () => {
   it("unchanged: confirm gets the same transaction that was reviewed", async () => {
     const { w, dest } = await wallet([["a1".repeat(32), "50000"]]);
     const p = await w.plan(dest, 10_000n, { feeRate: 2 });
-    const c = await w.confirmPlan(p.planId!, dest, 10_000n, { feeRate: 2 });
+    const c = await w.confirmPlan(p.planId!, dest, 10_000n, { feeRate: 2, seed: p.seed });
     expect(c.ok).toBe(true);
     if (c.ok) {
       expect(c.built.fee.toString()).toBe(p.fee);
@@ -107,6 +108,27 @@ describe("Confirm sends the reviewed plan", () => {
     const c = await w.confirmPlan(p.planId!, dest, 10_000n, { feeRate: 5 });
     expect(c.ok).toBe(false);
     if (!c.ok) expect(planChanges(p, c.plan).join(" ")).toMatch(/network fee is now/);
+  });
+
+  it("the random output order and fee nudge come from the review's seed, so Confirm rebuilds them exactly", async () => {
+    const { w, dest } = await wallet([["a1".repeat(32), "50000"]]);
+    for (let i = 0; i < 6; i++) {
+      const p = await w.plan(dest, 10_000n, { feeRate: 2, randomizeFee: true, minFeeRate: 1 });
+      expect(p.feeRate).toBeGreaterThanOrEqual(1.9);
+      expect(p.feeRate).toBeLessThanOrEqual(2.1);
+      const c = await w.confirmPlan(p.planId!, dest, 10_000n, { feeRate: 2, randomizeFee: true, minFeeRate: 1, seed: p.seed });
+      expect(c.ok).toBe(true);
+    }
+  });
+
+  it("the merge warning trigger: inputs are grouped by label", async () => {
+    const { w, dest } = await wallet([["a1".repeat(32), "30000"], ["b2".repeat(32), "30000"]]);
+    await w.setCoinMeta(`${"a1".repeat(32)}:0`, { label: "Alice" });
+    const p = await w.plan(dest, 50_000n, { feeRate: 2 });
+    expect(p.inputs.length).toBe(2);
+    expect(p.inputLabels?.map((g) => g.label).sort()).toEqual(["Alice", null].sort());
+    const one = await w.plan(dest, 10_000n, { feeRate: 2 });
+    expect(one.inputLabels?.length).toBe(1);
   });
 
   it("a forged or missing plan id is refused before anything is built", async () => {

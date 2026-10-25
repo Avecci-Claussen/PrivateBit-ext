@@ -12,6 +12,7 @@ import { concatBytes, fromHex, hex } from "./bytes.ts";
 import { sha256 } from "@noble/hashes/sha256";
 import { coinSelect, estimateVbytes, maxSendable } from "./coinselect.ts";
 import { checkSplit, splitBudget } from "./split.ts";
+import { deRoundChange, FEE_JITTER, newPlanSeed, shuffleOutputs } from "./plan-random.ts";
 import type { Account } from "./keys.ts";
 import { CHANGE_LABEL, FRACTAL } from "./network.ts";
 import { parseBip21, type PaymentRequest } from "./bip21.ts";
@@ -73,6 +74,12 @@ export type BuiltSend = {
   silentOutputs: string[];
   ourOutputs: OwnedOutput[];
   signableInputs: SignableInput[];
+  /** Plan seed used for output order and the rounding fix (plan-random.ts). */
+  seed?: string;
+  /** No change output: `extra` sats above the plain fee went to the network instead. */
+  changeless?: { extra: bigint };
+  /** Paying an older address type: change is still Taproot (see buildSend). */
+  changeTypeDiffers?: boolean;
 };
 
 export type PlanPayload = {
@@ -90,6 +97,15 @@ export type PlanPayload = {
   vbytes: number;
   ourOutputs: OwnedOutput[];
   hasPayjoin: boolean;
+  /** Plan seed. The review sends it back with Confirm so the same plan is rebuilt. */
+  seed?: string;
+  /** Fee rate actually used, after "Randomize fee slightly". */
+  feeRate?: number;
+  /** No change output; this many sats above the plain fee go to the network. */
+  changeless?: { extra: string };
+  changeTypeDiffers?: boolean;
+  /** Coins being spent, grouped by their "who knows" label (null = not labelled). */
+  inputLabels?: { label: string | null; outpoints: string[] }[];
   preview: {
     warnings: string[];
     outputs: { index: number; value: string; note: string }[];
@@ -142,6 +158,9 @@ export function planPayload(built: BuiltSend): PlanPayload {
     vbytes: built.vbytes,
     ourOutputs: built.ourOutputs,
     hasPayjoin: destinationNeedsPayjoin(built.request),
+    ...(built.seed ? { seed: built.seed } : {}),
+    ...(built.changeless ? { changeless: { extra: built.changeless.extra.toString() } } : {}),
+    ...(built.changeTypeDiffers ? { changeTypeDiffers: true } : {}),
     preview: {
       warnings: p.warnings,
       outputs: p.outputs.map((o) => ({ index: o.index, value: o.value, note: o.note })),
@@ -209,6 +228,16 @@ function destScript(address: string): Uint8Array {
   throw new Error(`unsupported destination ${decoded.type}`);
 }
 
+/** Address type of a plain destination, for the change-type rule. */
+export function destinationType(address: string): "tr" | "wpkh" | "wsh" | "other" {
+  try {
+    const t = btc.Address(NETWORK).decode(address).type;
+    return t === "tr" || t === "wpkh" || t === "wsh" ? t : "other";
+  } catch {
+    return "other";
+  }
+}
+
 export async function buildSend(args: {
   account: Account;
   utxos: LabeledUtxo[];
@@ -221,6 +250,10 @@ export async function buildSend(args: {
   include?: string[];
   /** Send everything spendable (or everything chosen) in one output, no change. */
   max?: boolean;
+  /** Leftover under this goes to the fee instead of a change output (default: dust only). */
+  leftover?: bigint;
+  /** Plan seed (plan-random.ts): output order and the rounding fix. Same seed, same plan. */
+  seed?: string;
 }): Promise<BuiltSend> {
   const request = parseBip21(args.destination);
   if (args.max && request.amount !== undefined) throw new Error("Max is not allowed when the link sets the amount");
@@ -228,9 +261,24 @@ export async function buildSend(args: {
     ? maxSendable(args.utxos, args.feeRate, args.skipOutpoints, args.include).amount
     : request.amount ?? args.amount;
   if (payAmount <= 0n) throw new Error("amount required");
+  const seed = args.seed ?? newPlanSeed();
 
   const extraOut = args.max ? 0 : 1; // change
-  const selected = coinSelect(args.utxos, payAmount, args.feeRate, extraOut, args.skipOutpoints, args.include);
+  const selected = coinSelect(args.utxos, payAmount, args.feeRate, extraOut, {
+    skip: args.skipOutpoints,
+    include: args.include,
+    leftover: args.leftover,
+  });
+  let change = selected.change;
+  let fee = selected.fee;
+  if (change > 0n) {
+    // Change ending in 000 looks typed by a person. Nudge it with a few sats of fee, within
+    // the fee band the user allows; the payment amount itself never changes.
+    const band = BigInt(Math.floor(estimateVbytes(selected.inputs.length, 2) * args.feeRate * FEE_JITTER));
+    const extra = deRoundChange(change, band, seed);
+    change -= extra;
+    fee += extra;
+  }
 
   const tx = new btc.Transaction({ allowUnknownOutputs: true });
   const prevScripts: Uint8Array[] = [];
@@ -259,82 +307,71 @@ export async function buildSend(args: {
     request.silent &&
     (request.address === args.account.receive || request.address === changeAddr);
 
-  const keepOurs = (o: {
-    xonly: Uint8Array;
-    tweak: Uint8Array;
-    k: number;
-  }, vout: number, value: bigint, label: number | null): void => {
-    ourOutputs.push({
-      vout,
-      value: value.toString(),
-      scriptPubKey: hex(taprootScriptPubKey(o.xonly)),
-      tweak: hex(o.tweak),
-      label,
-      k: o.k,
-    });
-  };
-
-  if (request.silent) {
+  type Planned = { script: Uint8Array; amount: bigint; silent?: Uint8Array; ours?: { tweak: Uint8Array; k: number; label: number | null } };
+  const planned: Planned[] = [];
+  const ourVins = () => {
     const vins = [];
     for (const u of selected.inputs) {
       // Our own coin: its script is already known. Not looked up, so the txid is not sent anywhere.
-      const prev = { scriptPubKey: fromHex(u.scriptPubKey) };
       const d = inputSecret(args.account, u);
       vins.push({
         txid: u.txid,
         vout: u.vout,
         scriptSig: "",
         txinwitness: "",
-        prevout: { scriptPubKey: { hex: hex(prev.scriptPubKey) } },
+        prevout: { scriptPubKey: { hex: u.scriptPubKey } },
         private_key: hex(evenPriv(d)),
       });
     }
-    const eligible = extractEligibleVins(vins);
+    return extractEligibleVins(vins);
+  };
+
+  if (request.silent) {
+    const eligible = ourVins();
     if (!eligible || eligible.length === 0) {
       throw new Error("no eligible inputs for Silent Payment shared secret");
     }
     const recips = [
       { address: request.address, count: 1 },
-      ...(selected.change > 0n ? [{ address: changeAddr, count: 1 }] : []),
+      ...(change > 0n ? [{ address: changeAddr, count: 1 }] : []),
     ];
     const outs = createSilentOutputs(eligible, recips);
-    const values = selected.change > 0n ? [payAmount, selected.change] : [payAmount];
+    const values = change > 0n ? [payAmount, change] : [payAmount];
     outs.forEach((o, i) => {
       const amount = values[i] ?? payAmount;
-      tx.addOutput({ script: taprootScriptPubKey(o.xonly), amount });
-      silentOutputs.push(hex(o.xonly));
-      const isChange = selected.change > 0n && i === outs.length - 1;
-      if (isChange) keepOurs(o, i, amount, CHANGE_LABEL);
-      else if (paySelf) keepOurs(o, i, amount, request.address === changeAddr ? CHANGE_LABEL : null);
+      const isChange = change > 0n && i === outs.length - 1;
+      const label = isChange ? CHANGE_LABEL : paySelf ? (request.address === changeAddr ? CHANGE_LABEL : null) : undefined;
+      planned.push({ script: taprootScriptPubKey(o.xonly), amount, silent: o.xonly, ...(label !== undefined ? { ours: { tweak: o.tweak, k: o.k, label } } : {}) });
     });
   } else {
-    tx.addOutput({ script: destScript(request.address), amount: payAmount });
-    if (selected.change > 0n) {
-      const vins = [];
-      for (const u of selected.inputs) {
-        // Our own coin: its script is already known. Not looked up, so the txid is not sent anywhere.
-        const prev = { scriptPubKey: fromHex(u.scriptPubKey) };
-        const d = inputSecret(args.account, u);
-        vins.push({
-          txid: u.txid,
-          vout: u.vout,
-          scriptSig: "",
-          txinwitness: "",
-          prevout: { scriptPubKey: { hex: hex(prev.scriptPubKey) } },
-          private_key: hex(evenPriv(d)),
-        });
-      }
-      const eligible = extractEligibleVins(vins);
-      if (eligible && eligible.length) {
-        const o = createSilentOutputs(eligible, [{ address: changeAddr, count: 1 }])[0];
-        tx.addOutput({ script: taprootScriptPubKey(o.xonly), amount: selected.change });
-        silentOutputs.push(hex(o.xonly));
-        keepOurs(o, 1, selected.change, CHANGE_LABEL);
-      } else {
-        throw new Error("cannot create Silent Payment change without eligible inputs");
-      }
+    planned.push({ script: destScript(request.address), amount: payAmount });
+    if (change > 0n) {
+      // Change is a Taproot output (a Silent Payment to our own change code). For a Taproot
+      // payment that matches the payment's type. For an older address type (P2WPKH, P2WSH) a
+      // matching change type would need a separate key path and a second signing scheme that
+      // this wallet does not have, so change stays Taproot and the review says so.
+      const eligible = ourVins();
+      if (!eligible || eligible.length === 0) throw new Error("cannot create Silent Payment change without eligible inputs");
+      const o = createSilentOutputs(eligible, [{ address: changeAddr, count: 1 }])[0]!;
+      planned.push({ script: taprootScriptPubKey(o.xonly), amount: change, silent: o.xonly, ours: { tweak: o.tweak, k: o.k, label: CHANGE_LABEL } });
     }
   }
+
+  // Random position for every output (no fixed "payment first, change last" pattern).
+  shuffleOutputs(planned, seed).forEach((p, vout) => {
+    tx.addOutput({ script: p.script, amount: p.amount });
+    if (p.silent) silentOutputs.push(hex(p.silent));
+    if (p.ours) {
+      ourOutputs.push({
+        vout,
+        value: p.amount.toString(),
+        scriptPubKey: hex(p.script),
+        tweak: hex(p.ours.tweak),
+        label: p.ours.label,
+        k: p.ours.k,
+      });
+    }
+  });
 
   for (let i = 0; i < selected.inputs.length; i++) {
     const u = selected.inputs[i];
@@ -346,6 +383,7 @@ export async function buildSend(args: {
 
   const psbt = tx.toPSBT();
   const raw = tx.extract();
+  const destType = request.silent ? "sp" : destinationType(request.address);
   return {
     psbtBase64: btoa(String.fromCharCode(...psbt)),
     txHex: hex(raw),
@@ -357,12 +395,15 @@ export async function buildSend(args: {
           ? "Silent Payment. This send's inputs are yours alone. Payjoin only runs when both people use a PrivateBit payment link."
           : "Transparent destination; change is Silent Payment label m=0",
     request,
-    change: selected.change,
-    fee: selected.fee,
+    change,
+    fee,
     amount: payAmount,
     vbytes: estimateVbytes(selected.inputs.length, tx.outputsLength),
     silentOutputs,
     ourOutputs,
+    seed,
+    ...(selected.changeless && selected.changeless.extra > 0n ? { changeless: { extra: selected.changeless.extra } } : selected.changeless ? { changeless: { extra: 0n } } : {}),
+    ...(change > 0n && destType !== "sp" && destType !== "tr" ? { changeTypeDiffers: true } : {}),
     signableInputs: selected.inputs.map((u) => ({
       txid: u.txid,
       vout: u.vout,
@@ -460,6 +501,26 @@ export async function buildSplit(args: {
       },
     ],
   };
+}
+
+/**
+ * Spending coins that different people know about in one payment tells each of them that the
+ * coins belong to the same person. Groups the inputs by label; more than one group means warn.
+ */
+export function groupInputLabels(inputs: string[], labelOf: (outpoint: string) => string | undefined): { label: string | null; outpoints: string[] }[] {
+  const groups = new Map<string, { label: string | null; outpoints: string[] }>();
+  for (const op of inputs) {
+    const l = labelOf(op)?.trim() || null;
+    const key = l === null ? "\u0000none" : l.toLowerCase();
+    const g = groups.get(key) ?? { label: l, outpoints: [] };
+    g.outpoints.push(op);
+    groups.set(key, g);
+  }
+  return [...groups.values()];
+}
+
+export function mergesLabels(groups: { label: string | null }[] | undefined): boolean {
+  return (groups?.length ?? 0) > 1;
 }
 
 /** Payjoin only on a PrivateBit payment link (mailbox + RK). A plain pj= URL is not enough. */
