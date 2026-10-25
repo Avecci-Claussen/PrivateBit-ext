@@ -28,8 +28,9 @@ function mapKv(): Kv & { m: Map<string, unknown> } {
 }
 
 describe("audit L9: vault KDF", () => {
-  it("new vaults use 2^16 and older ones are flagged for upgrade", () => {
-    expect(SCRYPT_N).toBe(1 << 16);
+  it("new desktop vaults use 2^17 and older ones are flagged for upgrade", () => {
+    expect(SCRYPT_N).toBe(1 << 17);
+    expect(vaultNeedsStrongerKdf({ ...legacyBlob(WORDS, "pw", 1 << 16) })).toBe(true);
     const old = legacyBlob(WORDS, "pw");
     expect(vaultNeedsStrongerKdf(old)).toBe(true);
     expect(unlockVault(old, "pw").mnemonic).toBe(WORDS);

@@ -6,11 +6,13 @@ import { fromHex, hex, randomBytes } from "./bytes.ts";
 
 export const VAULT_VERSION = 1;
 /**
- * scrypt cost for new and re-saved vaults: 2^16 (64 MiB, about 0.2 s on a desktop). 2^17 would
- * need 128 MiB, which is too close to the memory a phone WebView may get. Older vaults (2^15) are
- * re-saved with this cost after the next successful unlock.
+ * scrypt cost for new and re-saved vaults (audit L9, independent audit M1). Desktop: 2^17
+ * (128 MiB, about 0.4 s). The Android app: 2^16 (64 MiB), because 128 MiB is too close to what a
+ * phone WebView may get, and its storage already sits under a hardware Keystore key. Older
+ * vaults are re-saved with this cost after the next successful unlock.
  */
-export const SCRYPT_N = 1 << 16;
+const onPhone = typeof (globalThis as { Capacitor?: unknown }).Capacitor !== "undefined";
+export const SCRYPT_N = onPhone ? 1 << 16 : 1 << 17;
 const MIN_N = 1 << 14;
 const MAX_N = 1 << 18;
 const SCRYPT_R = 8;

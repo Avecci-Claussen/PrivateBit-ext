@@ -44,14 +44,14 @@ describe("audit: emergency fixes", () => {
     await w.create({ password: "password1", birthday: 100 });
     // An older build kept the vault under the old password as the "previous" copy.
     await w.kv.set({ "privatebit.vault.bak": kv.dump()[scopedName(w.activeId!, "privatebit.vault")] });
-    await w.changePassword("password1", "password2");
+    await w.changePassword("password1", "password2-longer");
     const d = kv.dump();
     expect(() => unlockVault(d[scopedName(w.activeId!, "privatebit.vault")] as VaultBlob, "password1")).toThrow(/wrong password/);
     expect(d[scopedName(w.activeId!, "privatebit.vault.bak")]).toBeUndefined();
     expect((await w.state()).hasBackup).toBe(false);
     await w.lock();
     await expect(w.unlock("password1")).rejects.toThrow(/wrong password/);
-    await w.unlock("password2");
+    await w.unlock("password2-longer");
   });
 
   it("a birthday edit does not create a previous wallet banner", async () => {

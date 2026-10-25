@@ -573,13 +573,13 @@ screens["set-password"] = () => ({
   header: hdr({ title: "Change password" }),
   main: html`<div class="stack" data-enter="pw-change">
   <div class="field"><label class="label" for="cpw">Current password</label><input class="input" id="cpw" data-f="cpw" type="password" autocomplete="current-password" value="${fv("cpw")}"></div>
-  <div class="field"><label class="label" for="npw">New password</label><input class="input" id="npw" data-f="npw" type="password" autocomplete="new-password" value="${fv("npw")}" aria-describedby="npw-h"><p class="help" id="npw-h">At least 8 characters. Longer is stronger than complex.</p></div>
+  <div class="field"><label class="label" for="npw">New password</label><input class="input" id="npw" data-f="npw" type="password" autocomplete="new-password" value="${fv("npw")}" aria-describedby="npw-h"><p class="help" id="npw-h">At least 12 characters. Longer is stronger than complex.</p></div>
   <div class="field"><label class="label" for="npw2">Repeat new password</label><input class="input" id="npw2" data-f="npw2" type="password" autocomplete="new-password" value="${fv("npw2")}"></div></div>
   ${errP("cpw")}`,
   foot: html`<button class="btn btn-primary btn-block" type="button" data-act="pw-change" ${busy("cpw") ? html`aria-disabled="true"` : ""}>${busy("cpw") ? html`${I("loader-circle", "s16 spin")}Re-encrypting…` : "Change password"}</button>`,
 });
 actions["pw-change"] = async () => {
-  if ([...fv("npw")].length < 8) S.err.cpw = "Use at least 8 characters.";
+  if ([...fv("npw")].length < 12) S.err.cpw = "Use at least 12 characters.";
   else if (fv("npw") !== fv("npw2")) S.err.cpw = "The new passwords do not match.";
   if (S.err.cpw) return render();
   const ok = await run(

@@ -945,7 +945,8 @@ export class WalletCore {
    * different wallet that used the same password is moved to the new password too.
    */
   async changePassword(current: string, next: string): Promise<void> {
-    if (next.length < 8) throw new Error("password too short");
+    // Audit M1 (independent): new passwords are at least 12 characters. Existing ones still unlock.
+    if ([...next].length < 12) throw new Error("password too short");
     const unlocked = await this.checkPassword(current);
     await persistVault(this.kv, lockVault(unlocked, next));
     const bak = await loadVaultBackup(this.kv);

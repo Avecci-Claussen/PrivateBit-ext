@@ -25,10 +25,10 @@ actions.peek = (el) => {
 
 function strength(pw: string): { bars: number; text: string } {
   const n = [...pw].length;
-  if (!n) return { bars: 0, text: "At least 8 characters. Longer is stronger than complex." };
-  if (n < 8) return { bars: 1, text: `Too short. ${n} of at least 8 characters.` };
-  if (n < 12) return { bars: 2, text: `OK. ${n} characters. Longer is stronger than complex.` };
-  if (n < 16) return { bars: 3, text: `Good. ${n} characters. Longer is stronger than complex.` };
+  if (!n) return { bars: 0, text: "At least 12 characters. A few random words are easy to remember and hard to guess." };
+  if (n < 12) return { bars: 1, text: `Too short. ${n} of at least 12 characters.` };
+  if (n < 16) return { bars: 2, text: `OK. ${n} characters. Longer is stronger than complex.` };
+  if (n < 20) return { bars: 3, text: `Good. ${n} characters. Longer is stronger than complex.` };
   return { bars: 4, text: `Strong. ${n} characters.` };
 }
 
@@ -94,7 +94,7 @@ actions.toggle = (el) => {
 function checkPasswords(): boolean {
   S.err = {};
   const pw = fv("pw");
-  if ([...pw].length < 8) S.err.pw = "Use at least 8 characters.";
+  if ([...pw].length < 12) S.err.pw = "Use at least 12 characters.";
   else if (pw !== fv("pw2")) S.err.pw2 = "The passwords do not match.";
   render();
   return !S.err.pw && !S.err.pw2;
