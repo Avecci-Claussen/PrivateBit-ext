@@ -10,3 +10,4 @@ dist-e2e/
 dist-private/
 PrivateBit-PRIVATE*
 scratch/
+release/
