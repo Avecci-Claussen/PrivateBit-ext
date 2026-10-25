@@ -22,6 +22,7 @@ import {
   mailboxUrls,
   ohttpGatewayTransport,
   ohttpRelayTransport,
+  newMailboxId,
   pollProposal,
   postOriginal,
   postProposal,
@@ -412,4 +413,44 @@ export async function fetchDirectoryOhttp(directory: string): Promise<OhttpKeyCo
   });
   if (!res.ok) throw new Error(`OHTTP keys HTTP ${res.status}`);
   return parseOhttpKeys(new Uint8Array(await res.arrayBuffer()));
+}
+
+export type PayjoinRouteCheck = { ok: true; ms: number } | { ok: false; step: "url" | "same" | "keys" | "relay"; message: string };
+
+/** Check a mailbox and relay address before saving them. No message is stored. */
+export function checkPayjoinUrls(directory: string, relay: string): PayjoinRouteCheck | null {
+  let d: URL, r: URL;
+  try {
+    d = new URL(directory);
+    r = new URL(relay);
+  } catch {
+    return { ok: false, step: "url", message: "Enter both addresses in full, starting with https://." };
+  }
+  if (d.protocol !== "https:" || r.protocol !== "https:") return { ok: false, step: "url", message: "Both addresses must start with https://." };
+  if (d.host === r.host) return { ok: false, step: "same", message: "The mailbox and the relay must be different services. Otherwise the mailbox sees your IP." };
+  return null;
+}
+
+/**
+ * Proves the route works: the mailbox hands out its encryption keys, and an encrypted
+ * request for an empty, random mailbox comes back through the relay. Nothing is posted.
+ */
+export async function testPayjoinRoute(directory: string, relay: string, now = () => Date.now()): Promise<PayjoinRouteCheck> {
+  const bad = checkPayjoinUrls(directory, relay);
+  if (bad) return bad;
+  const t0 = now();
+  let keys: OhttpKeyConfig;
+  try {
+    keys = await fetchDirectoryOhttp(directory);
+  } catch (e) {
+    return { ok: false, step: "keys", message: `The mailbox did not give its encryption keys (${e instanceof Error ? e.message : String(e)}).` };
+  }
+  try {
+    const { id } = newMailboxId();
+    const res = await ohttpRelayTransport(keys, relay).get(`${mailboxBase(directory)}/${id}`);
+    if (res.status === 200 || res.status === 202) return { ok: true, ms: now() - t0 };
+    return { ok: false, step: "relay", message: res.status === 502 ? "The relay did not pass the request to this mailbox." : `The mailbox answered ${res.status} through the relay.` };
+  } catch (e) {
+    return { ok: false, step: "relay", message: `The relay could not be reached (${e instanceof Error ? e.message : String(e)}).` };
+  }
 }

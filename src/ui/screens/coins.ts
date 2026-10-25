@@ -8,6 +8,7 @@ import { cleanLabel } from "../../lib/coinmeta.ts";
 import { randomBytes } from "../../lib/bytes.ts";
 import { DUST } from "../../lib/coinselect.ts";
 import { SPLIT_MAX, SPLIT_MIN, checkSplit, shufflePieces, splitBudget } from "../../lib/split.ts";
+import { randomSplitAmounts } from "../../lib/plan-random.ts";
 
 export async function loadCoins(): Promise<void> {
   S.d.coins = await call<CoinView[]>({ type: "COINS" });
@@ -238,8 +239,8 @@ screens["coin-split"] = () => {
     main: html`
   <div class="hero-amt"><p class="cap">This coin</p><p class="a">${fbShort(c.value, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(c.value)} before the network fee</p></div>
   ${pathPreview({ title: name(c), sub: fbShort(c.value) }, { title: "Your receive code", sub: `${st.n} pieces you still own` })}
-  <div class="banner">${I("info", "s16")}<div><span class="bt">You set every amount</span>PrivateBit does not pick the sizes. Equal amounts are blocked because they look like a mix. Anyone who sees this transaction can tell the pieces were created together. Later you can spend one without spending the others.</div></div>
-  <div class="field"><p class="label" id="sn">How many pieces</p><div class="seg tall" role="radiogroup" aria-labelledby="sn">${seg(2, "Two")}${seg(3, "Three")}${seg(4, "Four")}</div></div>
+  <div class="banner">${I("info", "s16")}<div><span class="bt">You choose the sizes</span>Type each amount, or use Randomize amounts for uneven sizes. Equal amounts are blocked because they look like a mix. Anyone who sees this transaction can tell the pieces were created together. Later you can spend one without spending the others.</div></div>
+  <div class="field"><p class="label" id="sn">How many pieces</p><div class="seg tall" role="radiogroup" aria-labelledby="sn">${seg(2, "Two")}${seg(3, "Three")}${seg(4, "Four")}${seg(5, "Five")}${seg(6, "Six")}</div></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">Network fee</span><span class="v mono">${sats(st.fee)}</span></div>
     <div class="r"><span class="k">To assign</span><span class="v mono">${st.spendable !== null ? fb(st.spendable) : "Waiting for the fee"}</span></div>
@@ -247,8 +248,8 @@ screens["coin-split"] = () => {
   ${rows}${meter}
   ${errMsg ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${errMsg}</span></p>` : ""}
   ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}
-  <p class="small muted">Shuffle only changes the order of the amounts you already typed. It does not invent new ones.</p>`,
-    foot: html`<div class="stack"><button class="btn btn-secondary btn-block" type="button" data-act="split-shuffle" ${st.filled.length < 2 ? html`disabled aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Shuffle order</button><button class="btn btn-primary btn-block" type="button" data-act="split-review" ${ready && !busy("split") ? "" : html`disabled aria-disabled="true"`}>${busy("split") ? html`${I("loader-circle", "s16 spin")}Checking…` : "Review split"}</button></div>`,
+  <p class="small muted">Shuffle only changes the order of the amounts already there. Randomize amounts fills every piece with a new uneven size that adds up to the whole coin. The pieces keep this coin's label.</p>`,
+    foot: html`<div class="stack"><div class="row"><button class="btn btn-secondary grow" type="button" data-act="split-random" ${st.spendable === null ? html`disabled aria-disabled="true"` : ""}>${I("coins", "s16")}Randomize amounts</button><button class="btn btn-secondary grow" type="button" data-act="split-shuffle" ${st.filled.length < 2 ? html`disabled aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Shuffle order</button></div><button class="btn btn-primary btn-block" type="button" data-act="split-review" ${ready && !busy("split") ? "" : html`disabled aria-disabled="true"`}>${busy("split") ? html`${I("loader-circle", "s16 spin")}Checking…` : "Review split"}</button></div>`,
   };
 };
 
@@ -305,6 +306,23 @@ actions["split-shuffle"] = () => {
     S.f[`sp${i}`] = v;
   });
   toast("Order shuffled. Check each piece, then review.");
+  render();
+};
+actions["split-random"] = () => {
+  const c = cur();
+  if (!c) return;
+  const st = splitState(c);
+  if (st.spendable === null) return;
+  try {
+    const amounts = randomSplitAmounts(st.spendable, st.n, randomBytes(st.n * 6 + 8));
+    amounts.forEach((v, i) => {
+      S.f[`sp${i}`] = fb(v, { unit: false, trim: true });
+    });
+    delete S.err.form;
+    toast("New random sizes. Change any of them if you like.");
+  } catch (e) {
+    S.err.form = (e as Error).message;
+  }
   render();
 };
 actions["split-review"] = async () => {

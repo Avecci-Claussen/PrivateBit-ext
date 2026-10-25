@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, render, run, fv, toast } from "../app.ts";
 import { call, type HistoryEntry } from "../api.ts";
-import { html, I, fb, fbShort, sats, mid, num, dayLabel, longDate, ntag, type Safe, UNIT, CHAIN_SHORT, blockTimeText } from "../kit.ts";
+import { html, I, txLink, curNet, explorerHost, fb, fbShort, sats, mid, num, dayLabel, longDate, ntag, type Safe, UNIT, CHAIN_SHORT, blockTimeText } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { usd, scanning, price } from "../derive.ts";
 import { hist, loadHistory, actRow, entryMeta, actTable } from "./home.ts";
@@ -107,19 +107,34 @@ function detailBody(e: HistoryEntry, panel = false): Safe {
         : html`<span class="badge danger">${I("circle-x")}${e.status === "cancelled" ? "Cancelled" : "Failed"}</span>`;
   const editing = S.f.editLbl === true;
   const ask = S.b!.prefs.askExplorer !== false;
-  const cap = e.kind === "self" || e.kind === "moved-in" || e.kind === "split" ? "Moved" : a > 0n ? "Received" : "Sent";
+  const moved = e.kind === "self" || e.kind === "split";
+  const incoming = e.kind === "received" || e.kind === "payjoin-received" || e.kind === "moved-in";
+  const sent = e.kind === "sent" || e.kind === "payjoin-sent";
+  const cap = moved ? "Moved between your coins" : e.kind === "moved-in" ? "Moved in" : a > 0n ? "Received" : "Sent";
+  // History is kept per chain, so an entry without a chain belongs to the open one.
+  const en = e.net ?? curNet();
+  const netName = en === "bitcoin" ? "Bitcoin" : "Fractal Bitcoin";
+  const shown = sent ? -a : a;
   const { from, to } = actPath(e);
-  return html`<div class="hero-amt" ${panel ? html`style="align-items:flex-start;text-align:left"` : ""}>${panel ? "" : html`<p class="cap">${cap}</p>`}<p class="a">${fbShort(a, { unit: false, sign: true })}<span class="unit"> ${UNIT()}</span></p>${usd(a) ? html`<p class="fiat">${usd(a)} at today's price</p>` : ""}${panel ? "" : statusB}</div>
+  const onchainRow = (k: string) =>
+    e.onchain ? html`<div class="r sub"><span class="k">${k}</span><span class="v"><span class="mono small" title="${e.onchain}">${mid(e.onchain, 10, 8)}</span><button class="link small" type="button" data-act="copy-onchain">Copy</button></span></div>` : "";
+  const toKind = e.to ? (e.to.startsWith("sp1") ? ntag(`${en === "bitcoin" ? "Bitcoin" : "Fractal"} receive code`) : e.to.includes("pj=") || e.to.includes("pj%3D") ? ntag("Payment link") : html`<span class="badge">Regular address</span>`) : "";
+  return html`<div class="hero-amt" ${panel ? html`style="align-items:flex-start;text-align:left"` : ""}>${panel ? html`<p class="cap">${cap}</p>` : html`<p class="cap">${cap}</p>`}<p class="a">${fbShort(a, { unit: false, sign: true })}<span class="unit"> ${en === "bitcoin" ? "BTC" : "FB"}</span></p>${usd(a) && en === curNet() ? html`<p class="fiat">${usd(a)} at today's price</p>` : ""}${panel ? "" : statusB}</div>
   ${pathPreview(from, to)}
   <div class="card"><div class="kv">
+    ${sent ? html`<div class="r"><span class="k">Paid to</span><span class="v">${e.to ? html`<span class="mono" title="${e.to}">${mid(e.to, 12, 8)}</span>${toKind}` : html`<span class="muted">Not saved on this computer</span>`}</span></div>${onchainRow("On-chain address")}` : ""}
+    ${incoming ? html`<div class="r"><span class="k">Received to</span><span class="v">${e.kind === "moved-in" ? "Your one-time address" : "Your receive code"}</span></div>${onchainRow("On-chain address")}
+      <div class="r"><span class="k">From</span><span class="v"><span>Not revealed</span><span class="cap">${e.kind === "moved-in" ? "Your old wallet" : "The payment does not show who sent it"}</span></span></div>` : ""}
+    ${moved ? html`<div class="r"><span class="k">What happened</span><span class="v">${e.kind === "split" ? `Broke one coin into ${e.pieces ?? "several"} pieces you still own` : "Moved between your coins"}</span></div>` : ""}
+    <div class="r"><span class="k">Amount</span><span class="v mono">${fb(shown < 0n ? -shown : shown)}</span></div>
+    ${e.change && BigInt(e.change) > 0n ? html`<div class="r"><span class="k">Back to you</span><span class="v mono">${fb(e.change)}</span></div>` : ""}
+    ${e.fee ? html`<div class="r"><span class="k">Network fee</span><span class="v"><span class="mono">${sats(e.fee)}</span>${e.feeRate ? html`<span class="cap">${e.feeRate} sat/vB</span>` : ""}</span></div>` : ""}
+    <div class="r"><span class="k">Network</span><span class="v">${ntag(netName)}</span></div>
     <div class="r"><span class="k">Date</span><span class="v">${e.approxTime ? "About " : ""}${longDate(e.time * 1000)}</span></div>
-    ${e.to ? html`<div class="r"><span class="k">Paid</span><span class="v"><span class="mono">${mid(e.to, 12, 8)}</span>${e.to.startsWith("sp1") ? ntag(`${CHAIN_SHORT()} receive code`) : html`<span class="badge">Regular address</span>`}</span></div>` : ""}
-    <div class="r"><span class="k">Label</span><span class="v">${editing ? html`<span class="row" style="gap:6px" data-enter="act-label-save"><input class="input" id="al" data-f="actLbl" maxlength="64" value="${fv("actLbl")}" aria-label="Label" style="height:36px"><button class="btn btn-secondary btn-sm" type="button" data-act="act-label-save">Save</button></span>` : html`${e.label || html`<span class="muted">Not labeled</span>`} <button class="link small" type="button" data-act="act-label-edit">Edit</button>`}</span></div>
-    ${e.fee ? html`<div class="r"><span class="k">Fee</span><span class="v mono">${sats(e.fee)}</span></div>` : ""}
-    ${e.change ? html`<div class="r"><span class="k">Change</span><span class="v mono">${fb(e.change)}</span></div>` : ""}
     <div class="r"><span class="k">Block</span><span class="v mono">${e.height ? num(e.height) : "Not yet"}</span></div>
+    <div class="r"><span class="k">Label</span><span class="v">${editing ? html`<span class="row" style="gap:6px" data-enter="act-label-save"><input class="input" id="al" data-f="actLbl" maxlength="64" value="${fv("actLbl")}" aria-label="Label" style="height:36px"><button class="btn btn-secondary btn-sm" type="button" data-act="act-label-save">Save</button></span>` : html`${e.label || html`<span class="muted">Not labeled</span>`} <button class="link small" type="button" data-act="act-label-edit">Edit</button>`}</span></div>
     ${txidLine(e.txid)}</div></div>
-  ${explorerBlock(S.f.explorerAsk === true, ask)}
+  ${explorerBlock(S.f.explorerAsk === true, ask, en)}
   ${m ? "" : ""}`;
 }
 
@@ -143,6 +158,12 @@ actions["act-label-save"] = async () => {
   S.f.editLbl = false;
   toast("Label saved.");
 };
+actions["copy-onchain"] = async () => {
+  const a = cur()?.onchain;
+  if (!a) return;
+  await copyText(a);
+  toast("On-chain address copied.");
+};
 actions["copy-act-txid"] = async () => {
   const id = liveTxid();
   if (!id) return;
@@ -152,7 +173,8 @@ actions["copy-act-txid"] = async () => {
 function openExplorer(): void {
   const id = liveTxid();
   if (!id) return;
-  window.open(`https://mempool.fractalbitcoin.io/tx/${encodeURIComponent(id)}`, "_blank", "noopener,noreferrer");
+  const e = hist().entries.find((x) => x.txid === id);
+  window.open(txLink(encodeURIComponent(id), e?.net ?? curNet()), "_blank", "noopener,noreferrer");
 }
 actions.explorer = () => {
   if (S.b!.prefs.askExplorer === false) return openExplorer();

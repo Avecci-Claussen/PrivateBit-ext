@@ -7,7 +7,11 @@ const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
 import { LOCK_CHOICES } from "../../lib/prefs.ts";
 import { THEME_CHOICES, type ThemeChoice } from "../../lib/theme.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
-import { PRICE_HOST } from "../../lib/requests.ts";
+import { PRICE_HOSTS, type PricePref } from "../../lib/requests.ts";
+import { parseCookie } from "../../lib/chain.ts";
+import { checkPayjoinUrls, type PayjoinRouteCheck } from "../../lib/payjoin.ts";
+import { DELAY_CHOICES, type DelayChoice } from "../../lib/plan-random.ts";
+import { LEFTOVER_CHOICES, type LeftoverPref } from "../../lib/coinselect.ts";
 import { price, syncLine } from "../derive.ts";
 
 const chain = (): ChainConfig => S.b!.state.chain;
@@ -63,6 +67,23 @@ actions["theme-set"] = (el) => {
   render();
 };
 
+const DELAY_NAME: Record<DelayChoice, string> = { off: "Off", "1m": "Up to 1 minute", "10m": "Up to 10 minutes", "1h": "Up to 1 hour" };
+const SOURCE_NAME: Record<PricePref, string> = { coingecko: "CoinGecko", mexc: "MEXC", off: "Off" };
+function leftoverName(v: LeftoverPref): string {
+  return v === "auto" ? "Automatic" : v === 0 ? "Always keep change" : `Up to ${num(v)} sats`;
+}
+function sendingSummary(): string {
+  const pr = prefs();
+  const c = chain();
+  const via = c.kind === "core" || c.sendVia === "node" ? "Through your node" : "Through the public service";
+  return `${via}${pr.sendDelay !== "off" ? `, delay ${DELAY_NAME[pr.sendDelay].toLowerCase()}` : ""}`;
+}
+function priceSummary(): string {
+  const pr = prefs();
+  if (pr.priceSource === "off") return "Off, no price requests";
+  return `${SOURCE_NAME[pr.priceSource]}, the other one if it fails`;
+}
+
 const VERSION = chrome.runtime.getManifest?.().version ?? "1.0.0";
 
 /* ---------- list (54) ---------- */
@@ -79,8 +100,10 @@ screens.settings = () => {
   ${row("wallet", "Wallets", (() => { const n = (S.b!.state.wallets ?? []).length || 1; return `${n} ${n === 1 ? "wallet" : "wallets"}, ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"} open`; })(), "wallets")}
   ${row("blocks", "Network and data source", c.kind === "core" ? `${CHAIN_SHORT()}, your own node` : `${CHAIN_SHORT()}, public block data service`, "set-network")}
   ${row("sun", "Appearance", themeSummary(), "set-appearance")}
-  ${row("eye-off", "Privacy", pr.usd ? "USD price, hide balance, explorer" : "USD price off, hide balance, explorer", "set-privacy")}
-  ${row("route", "Payment links", `${mailboxHost()} through a relay`, "set-payjoin")}
+  ${row("arrow-up-right", "Sending", sendingSummary(), "set-sending")}
+  ${row("circle-dollar-sign", "USD price", priceSummary(), "set-price")}
+  ${row("eye-off", "Privacy", "Hide balance, explorer", "set-privacy")}
+  ${row("route", "Payment links", `${CHAIN_SHORT()}: ${mailboxHost()} through a relay`, "set-payjoin")}
   ${row("lock", "Security and lock", `Password, lock after ${pr.lockMinutes} min`, "set-security")}
   ${row("file-key", "Backup", "Recovery words", "set-backup")}
   ${row("scan-line", "Finding coins", `Look back from block ${num(S.b!.state.birthday ?? DEFAULT_BIRTHDAY)}`, "set-scan")}
@@ -141,6 +164,49 @@ actions["net-save"] = async () => {
 };
 
 /* ---------- own node (56) ---------- */
+type NodeResult = { ok: boolean; height?: number; chain?: string; txindex?: boolean | "unknown"; onChain?: "yes" | "other" | "behind"; blocks?: number; headers?: number; msg?: string };
+async function testNode(cfg: ChainConfig, sendNode = false): Promise<NodeResult> {
+  try {
+    const r = await call<Omit<NodeResult, "ok">>({ type: "TEST_CHAIN", chain: cfg, sendNode });
+    return { ok: true, ...r };
+  } catch (e) {
+    return { ok: false, msg: String((e as Error).message) };
+  }
+}
+function nodeResult(t: NodeResult | undefined, forScan = false): Safe | string {
+  if (!t) return "";
+  if (!t.ok) return html`<div class="banner danger" role="alert">${I("circle-x", "s16")}<div><span class="bt">Could not connect</span><span style="overflow-wrap:anywhere">${t.msg}</span></div></div>`;
+  const wrong = t.onChain === "other";
+  const behind = t.onChain === "behind";
+  const syncing = t.headers !== undefined && t.blocks !== undefined && t.headers - t.blocks > 2;
+  const lines: (Safe | string)[] = [];
+  lines.push(html`<li>${wrong ? `It follows a different chain, not ${CHAIN()}.` : behind ? `It has not reached the block that tells ${CHAIN()} apart yet. Let it sync, then test again.` : `It follows ${CHAIN()}.`}</li>`);
+  lines.push(html`<li>At block ${num(t.height ?? t.blocks ?? 0)}${syncing ? `, still catching up to ${num(t.headers ?? 0)}` : ""}.</li>`);
+  if (forScan) lines.push(html`<li>${t.txindex === true ? "Transaction index is on." : t.txindex === false ? "Transaction index is off. Finding coins still works, but checking older payments is slower. Add txindex=1 to its settings for the best results." : "Could not tell whether the transaction index is on."}</li>`);
+  const cls = wrong ? "danger" : behind || syncing || (forScan && t.txindex === false) ? "warn" : "ok";
+  return html`<div class="banner ${cls}" role="status">${I(wrong ? "circle-x" : cls === "warn" ? "triangle-alert" : "circle-check", "s16")}<div><span class="bt">${wrong ? "Wrong chain" : "Connected"}</span><ul class="small" style="margin:4px 0 0;padding-left:18px">${lines}</ul></div></div>`;
+}
+/** Paste the node's .cookie file instead of typing a user and password. */
+function cookieField(id: string, userKey: string, passKey: string): Safe {
+  return html`<details class="card flat pad-sm"><summary class="small strong" style="cursor:pointer">Use the cookie file instead</summary><div class="field" style="margin-top:8px"><label class="label" for="${id}">Paste the contents of .cookie</label><input class="input mono" id="${id}" data-f="${id}" autocomplete="off" spellcheck="false" placeholder="__cookie__:…" aria-describedby="${id}-h"><p class="help" id="${id}-h">Found in the node's data folder. It changes each time the node restarts, so paste it again after a restart.</p>${err(id) ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err(id)}</span></p>` : ""}
+  <button class="btn btn-secondary btn-sm" type="button" data-act="cookie-use" data-id="${id}" data-u="${userKey}" data-p="${passKey}" style="align-self:flex-start">${I("clipboard-paste", "s16")}Use cookie</button></div></details>`;
+}
+actions["cookie-use"] = (el) => {
+  const id = el.dataset.id!;
+  const c = parseCookie(fv(id));
+  if (!c) {
+    S.err[id] = "That is not a cookie file. It looks like __cookie__: followed by a long code.";
+    render();
+    return;
+  }
+  delete S.err[id];
+  S.f[el.dataset.u!] = c.user;
+  S.f[el.dataset.p!] = c.password;
+  S.f[id] = "";
+  toast("Cookie filled in. Test the node to check it.");
+  render();
+};
+
 loaders["set-node"] = () => {
   const c = chain();
   S.f.nu = c.kind === "core" ? c.url : "http://127.0.0.1:8332";
@@ -161,7 +227,7 @@ function nodeCfg(): ChainConfig {
   return { ...chain(), kind: "core", url: fv("nu").trim(), rpcUser: fv("nru").trim(), rpcPassword: fv("nrp") };
 }
 screens["set-node"] = () => {
-  const t = S.d.nodeTest as { ok: boolean; height?: number; msg?: string } | undefined;
+  const t = S.d.nodeTest as NodeResult | undefined;
   let lh = "";
   try {
     lh = new URL(fv("nu")).hostname;
@@ -173,9 +239,10 @@ screens["set-node"] = () => {
     header: hdr({ title: `My own ${CHAIN_SHORT()} node` }),
     main: html`
   <div class="field"><label class="label" for="u">Node RPC URL</label><input class="input mono" id="u" data-f="nu" data-live autocomplete="off" placeholder="http://127.0.0.1:8332" value="${fv("nu")}"></div>
+  ${cookieField("ck", "nru", "nrp")}
   <div class="field"><label class="label" for="ru">RPC user</label><input class="input" id="ru" data-f="nru" autocomplete="off" value="${fv("nru")}"></div>
   <div class="field"><label class="label" for="rp">RPC password</label><input class="input" id="rp" data-f="nrp" type="password" autocomplete="off" value="${fv("nrp")}" aria-describedby="rp-h"><p class="help" id="rp-h">Stored encrypted on this computer only.</p></div>
-  ${t?.ok ? html`<div class="banner ok" role="status">${I("circle-check", "s16")}<div><span class="bt">Connected</span>Block ${num(t.height ?? 0)}.${lh && lh !== "127.0.0.1" && lh !== "localhost" ? ` Chrome asks once to allow access to ${lh}.` : ""}</div></div>` : t ? html`<div class="banner danger" role="alert">${I("circle-x", "s16")}<div><span class="bt">Could not connect</span>${t.msg}</div></div>` : ""}
+  ${nodeResult(t, true)}${t?.ok && lh && lh !== "127.0.0.1" && lh !== "localhost" ? html`<p class="small muted">Chrome asks once to allow access to ${lh}.</p>` : ""}
   ${errP("node")}`,
     foot: { cls: "row", html: html`<button class="btn btn-secondary" type="button" data-act="node-test" ${busy("node") ? html`aria-disabled="true"` : ""}>${busy("node") ? "Testing…" : "Test"}</button><button class="btn btn-primary" type="button" data-act="node-save">Save</button>` },
   };
@@ -189,12 +256,7 @@ actions["node-test"] = async () => {
   }
   S.busy = "node";
   render();
-  try {
-    const tip = await call<{ height: number }>({ type: "TEST_CHAIN", chain: cfg });
-    S.d.nodeTest = { ok: true, height: tip.height };
-  } catch (e) {
-    S.d.nodeTest = { ok: false, msg: String((e as Error).message) };
-  }
+  S.d.nodeTest = await testNode(cfg);
   S.busy = null;
   render();
 };
@@ -207,6 +269,13 @@ actions["node-save"] = async () => {
   }
   if (!(await hostPermission(cfg.url))) {
     S.err.node = "Chrome did not allow access to that address.";
+    render();
+    return;
+  }
+  const t = await testNode(cfg);
+  S.d.nodeTest = t;
+  if (!t.ok || t.onChain === "other") {
+    S.err.node = t.ok ? `That node follows a different chain. PrivateBit on ${CHAIN()} cannot use it.` : "Fix the connection first. Nothing was saved.";
     render();
     return;
   }
@@ -230,56 +299,222 @@ function privacyList(): Safe {
   const pr = prefs();
   return html`<div class="list">
   ${toggle("Hide balance when PrivateBit opens", "Amounts show as dots until you use the eye button.", pr.hideBalance, "t1", "hideBalance")}
-  ${toggle("Show value in USD", "From a price service every 10 minutes. It sees your IP and that someone asked for the FB price, never your coins or codes.", pr.usd, "t3", "usd", S.mode === "popup" ? html`<button class="link small" type="button" data-act="go" data-to="set-price" style="align-self:flex-start">Price source details</button>` : undefined)}
+  ${row("circle-dollar-sign", "USD price", priceSummary(), "set-price")}
   ${toggle("Ask before opening an explorer", "Explorers see your IP and which transaction you looked up.", pr.askExplorer, "t4", "askExplorer")}</div>`;
 }
 screens["set-privacy"] = () => ({ title: "Privacy", header: hdr({ title: "Privacy" }), main: privacyList() });
 
-screens["set-price"] = () => {
+screens["set-price"] = () => ({ title: "USD price", header: hdr({ title: "USD price" }), main: priceForm() });
+function priceForm(): Safe {
   const p = price();
   const pc = S.b!.price;
-  return {
-    title: "USD price",
-    header: hdr({ title: "USD price" }),
-    main: html`
+  const pr = prefs();
+  const src = pr.priceSource;
+  const other = src === "mexc" ? "coingecko" : "mexc";
+  const opt = (v: PricePref, t: string, d: string): Safe =>
+    html`<button class="opt" role="radio" aria-checked="${String(src === v)}" type="button" data-act="price-src" data-v="${v}"><span class="body"><span class="t">${t}</span><span class="d">${d}</span></span>${src === v ? I("check") : ""}</button>`;
+  const used = pc?.source ? SOURCE_NAME[pc.source] : "";
+  const last = pc?.usd && pc.fetchedAt && p.kind !== "na" && p.kind !== "off"
+    ? html`<span class="mono">$${pc.usd >= 100 ? pc.usd.toLocaleString("en-US", { maximumFractionDigits: 0 }) : pc.usd.toFixed(4)}</span><span class="cap ${p.kind === "stale" ? "warn" : ""}">${p.kind === "stale" ? "Not updated since " : "Updated "}${hm(pc.fetchedAt)}${used ? `, from ${used}` : ""}</span>`
+    : html`<span class="muted">${src === "off" ? "Off" : "None yet"}</span>`;
+  return html`
+  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Price source</legend><div class="opt-list" role="radiogroup">
+    ${opt("coingecko", "CoinGecko", `${PRICE_HOSTS.coingecko}. If it does not answer, MEXC is asked.`)}
+    ${opt("mexc", "MEXC", `${PRICE_HOSTS.mexc}, the ${UNIT() === "BTC" ? "BTCUSDT" : "FBUSDT"} market. If it does not answer, CoinGecko is asked.`)}
+    ${opt("off", "Off", "No price request is ever made. Amounts show in " + UNIT() + " only.")}</div></fieldset>
   <div class="card"><div class="kv">
-    <div class="r"><span class="k">Source</span><span class="v"><span class="mono">${PRICE_HOST}</span></span></div>
     <div class="r"><span class="k">Asks for</span><span class="v">${UNIT()} price in USD, nothing else</span></div>
     <div class="r"><span class="k">How often</span><span class="v">Every 10 minutes while unlocked</span></div>
-    <div class="r"><span class="k">Route</span><span class="v">Direct</span></div>
-    <div class="r"><span class="k">Last price</span><span class="v">${pc?.usd && pc.fetchedAt ? html`<span class="mono">$${pc.usd.toFixed(4)}</span><span class="cap">${p.kind === "stale" ? "Not updated since " : "Today, "}${hm(pc.fetchedAt)}</span>` : html`<span class="muted">${prefs().usd ? "None yet" : "Off"}</span>`}</span></div></div></div>
+    <div class="r"><span class="k">Last price</span><span class="v">${last}</span></div></div></div>
+  ${src !== "off" && pc?.error && pc.failedAt && (!pc.fetchedAt || pc.failedAt > pc.fetchedAt) ? html`<div class="banner warn" role="status">${I("triangle-alert", "s16")}<div><span class="bt">Neither price service answered at ${hm(pc.failedAt)}</span><span style="overflow-wrap:anywhere">${pc.error}</span> Your amounts in ${UNIT()} are exact and not affected.</div></div>` : ""}
+  ${src !== "off" ? html`<button class="btn btn-secondary" type="button" data-act="price-now" ${busy("price") ? html`aria-disabled="true"` : ""}>${I("refresh-cw", busy("price") ? "s16 spin" : "s16")}${busy("price") ? "Asking…" : "Update now"}</button>` : ""}
   <div class="list">
     <div class="li" style="cursor:default"><span class="ico warn">${I("globe")}</span><span class="body"><span class="t">The price service learns</span><span class="d" style="white-space:normal">Your IP address and the time you asked.</span></span></div>
     <div class="li" style="cursor:default"><span class="ico in">${I("shield-check")}</span><span class="body"><span class="t">The price service never learns</span><span class="d" style="white-space:normal">Your addresses, codes, coins or balance. The price is applied on this computer.</span></span></div></div>
-  <p class="small muted">If the price is older than 30 minutes it shows in amber with its time. If there is no price, PrivateBit shows FB only.</p>
-  <div class="li" style="padding:0;min-height:auto;cursor:default"><span class="body"><label class="t" for="usd">Show value in USD</label><span class="d">On by default. Off means no request is ever made.</span></span><input class="switch" type="checkbox" role="switch" id="usd" data-act="pref-toggle" data-pref="usd" ${prefs().usd ? html`checked` : ""}></div>`,
+  <p class="small muted">A price older than 30 minutes shows in amber with its time. ${src !== "off" ? `${SOURCE_NAME[other]} is only asked when ${SOURCE_NAME[src]} fails.` : ""}</p>`;
+}
+actions["price-src"] = (el) => {
+  const v = el.dataset.v as PricePref;
+  void run("price", async () => {
+    await call({ type: "PREFS_SET", prefs: { priceSource: v } });
+    await refresh();
+    if (v !== "off") {
+      await call({ type: "PRICE", force: true }).catch(() => undefined);
+      await refresh();
+    }
+  });
+};
+actions["price-now"] = () => {
+  void run("price", async () => {
+    await call({ type: "PRICE", force: true });
+    await refresh();
+  });
+};
+
+/* ---------- sending ---------- */
+loaders["set-sending"] = () => {
+  const c = chain();
+  S.f.sv = c.sendVia === "node" ? "node" : "public";
+  S.f.su = c.sendNodeUrl ?? "http://127.0.0.1:8332";
+  S.f.sru = c.sendNodeUser ?? "";
+  S.f.srp = c.sendNodePassword ?? "";
+  S.d.sendTest = undefined;
+};
+function seg<T extends string | number>(id: string, act: string, cur: T, list: T[], name: (v: T) => string): Safe {
+  return html`<div class="seg wrap" role="radiogroup" aria-labelledby="${id}">${list.map((v) => html`<button type="button" role="radio" data-act="${act}" data-v="${String(v)}" aria-checked="${String(cur === v)}">${name(v)}</button>`)}</div>`;
+}
+function sendNodeCfg(): ChainConfig {
+  return { ...chain(), sendVia: fv("sv") === "node" ? "node" : "public", sendNodeUrl: fv("su").trim() || undefined, sendNodeUser: fv("sru").trim() || undefined, sendNodePassword: fv("srp") || undefined };
+}
+screens["set-sending"] = () => {
+  const pr = prefs();
+  const c = chain();
+  const core = c.kind === "core";
+  const viaNode = fv("sv", c.sendVia === "node" ? "node" : "public") === "node";
+  const t = S.d.sendTest as NodeResult | undefined;
+  const routeOpt = (v: "public" | "node", tt: string, d: string): Safe =>
+    html`<button class="opt" role="radio" aria-checked="${String((v === "node") === viaNode)}" type="button" data-act="set" data-k="sv" data-v="${v}"><span class="body"><span class="t">${tt}</span><span class="d">${d}</span></span>${(v === "node") === viaNode ? I("check") : ""}</button>`;
+  return {
+    title: "Sending",
+    header: hdr({ title: "Sending" }),
+    main: html`
+  <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Send payments through</legend>
+  ${core
+    ? html`<div class="card flat pad-sm"><div class="row">${I("server")}<span class="body grow"><span class="strong" style="display:block">Your own node</span><span class="small muted">PrivateBit reads blocks from your node, so payments go out through it too.</span></span></div></div>`
+    : html`<div class="opt-list" role="radiogroup">
+      ${routeOpt("public", "The public service", "Easiest. The service sees your IP address together with each payment.")}
+      ${routeOpt("node", `My own ${CHAIN_SHORT()} node`, "Blocks still come from the public service, but it never sees your payments.")}</div>`}</fieldset>
+  ${!core && viaNode
+    ? html`<div class="stack" data-enter="send-save">
+      <div class="field"><label class="label" for="su">Node RPC URL</label><input class="input mono" id="su" data-f="su" autocomplete="off" placeholder="http://127.0.0.1:8332" value="${fv("su")}"></div>
+      ${cookieField("sck", "sru", "srp")}
+      <div class="field"><label class="label" for="sru">RPC user</label><input class="input" id="sru" data-f="sru" autocomplete="off" value="${fv("sru")}"></div>
+      <div class="field"><label class="label" for="srp">RPC password</label><input class="input" id="srp" data-f="srp" type="password" autocomplete="off" value="${fv("srp")}"><p class="help">Stored encrypted on this computer only.</p></div>
+      ${nodeResult(t)}
+      <button class="btn btn-secondary" type="button" data-act="send-test" ${busy("stest") ? html`aria-disabled="true"` : ""}>${busy("stest") ? "Testing…" : "Test node"}</button></div>`
+    : ""}
+  ${errP("send")}
+  ${core ? "" : html`<button class="btn btn-primary" type="button" data-act="send-save" style="align-self:flex-start" ${busy("send") ? html`aria-disabled="true"` : ""}>Save route</button>`}
+  <div class="field"><p class="label" id="dl">Delay sending by a random time</p>${seg("dl", "delay-set", pr.sendDelay, DELAY_CHOICES, (v) => DELAY_NAME[v])}
+    <p class="help">The time a payment reaches the network says less about when you were at your computer. It waits signed and encrypted here, even if you lock or close the window, and you can send it now or cancel it until then. Payment links always go right away.</p></div>
+  <div class="list">${toggle("Randomize fee slightly", "Moves the fee rate a little up or down, never below the network minimum, so your payments do not all share one fee rate.", pr.randomizeFee, "rf", "randomizeFee")}</div>
+  <div class="field"><p class="label" id="lo">Small leftover</p>${seg("lo", "leftover-set", pr.leftover, LEFTOVER_CHOICES, leftoverName)}
+    <p class="help">When the change would be this small, it is added to the network fee and no change coin is made. A tiny coin costs about as much to spend later as it is worth, and it links your payments. Automatic uses the cost of spending it at the current fee rate, at least 1,000 sats. The review always shows the amount.</p></div>`,
   };
+};
+actions["delay-set"] = (el) => {
+  void run("pref", async () => {
+    await call({ type: "PREFS_SET", prefs: { sendDelay: el.dataset.v as DelayChoice } });
+    await refresh();
+  });
+};
+actions["leftover-set"] = (el) => {
+  const v = el.dataset.v === "auto" ? "auto" : Number(el.dataset.v);
+  void run("pref", async () => {
+    await call({ type: "PREFS_SET", prefs: { leftover: v as LeftoverPref } });
+    await refresh();
+  });
+};
+actions["send-test"] = async () => {
+  const cfg = sendNodeCfg();
+  if (!cfg.sendNodeUrl || !(await hostPermission(cfg.sendNodeUrl))) {
+    S.d.sendTest = { ok: false, msg: cfg.sendNodeUrl ? "Chrome did not allow access to that address." : "Enter the node URL first." };
+    render();
+    return;
+  }
+  S.busy = "stest";
+  render();
+  S.d.sendTest = await testNode(cfg, true);
+  S.busy = null;
+  render();
+};
+actions["send-save"] = async () => {
+  const cfg = sendNodeCfg();
+  if (cfg.sendVia === "node") {
+    if (!cfg.sendNodeUrl || !/^https?:\/\//.test(cfg.sendNodeUrl)) {
+      S.err.send = "Enter a node URL that starts with http:// or https://.";
+      render();
+      return;
+    }
+    if (!(await hostPermission(cfg.sendNodeUrl))) {
+      S.err.send = "Chrome did not allow access to that address.";
+      render();
+      return;
+    }
+    const t = await testNode(cfg, true);
+    S.d.sendTest = t;
+    if (!t.ok || t.onChain === "other") {
+      S.err.send = t.ok ? `That node follows a different chain. Payments on ${CHAIN()} would fail there.` : "Fix the node connection first. Nothing was saved.";
+      render();
+      return;
+    }
+  }
+  const ok = await run(
+    "send",
+    async () => {
+      await call({ type: "SAVE_CHAIN", chain: cfg });
+      await refresh();
+      return true;
+    },
+    "send",
+  );
+  if (ok) toast(cfg.sendVia === "node" ? "Saved. Payments now go out through your node." : "Saved. Payments go out through the public service.");
 };
 
 /* ---------- payment links (58) ---------- */
 loaders["set-payjoin"] = () => {
   S.f.mb = chain().payjoinDirectory ?? DEFAULT_PAYJOIN_DIRECTORY;
   S.f.rl = chain().ohttpRelay ?? DEFAULT_OHTTP_RELAY;
+  S.d.pjTest = undefined;
 };
 function payjoinForm(): Safe {
   const same = host(fv("mb"), "") === host(fv("rl"), "") && fv("mb") !== "";
-  return html`<p class="small muted">Payment links pass encrypted messages through a mailbox. A relay sits in between so the mailbox never sees your IP, and the relay never sees the message.</p>
+  const t = S.d.pjTest as PayjoinRouteCheck | undefined;
+  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("current")}<span class="body grow"><span class="strong" style="display:block">For ${CHAIN()}</span><span class="small muted">Each chain keeps its own mailbox and relay.</span></span></div></div>
+  <p class="small muted">Payment links pass encrypted messages through a mailbox. A relay sits in between so the mailbox never sees your IP, and the relay never sees the message.</p>
   <div class="field"><label class="label" for="mb">Mailbox</label><input class="input mono" id="mb" data-f="mb" data-live autocomplete="off" value="${fv("mb")}" aria-describedby="mb-h"><p class="help" id="mb-h">Sees: an encrypted 7 KB blob and when it was posted.</p></div>
   <div class="field"><label class="label" for="rl">Relay</label><input class="input mono" id="rl" data-f="rl" data-live autocomplete="off" value="${fv("rl")}" aria-describedby="rl-h"><p class="help" id="rl-h">Sees: your IP, not the content.</p></div>
   <div class="banner ${same ? "warn" : ""}">${I(same ? "triangle-alert" : "info", "s16")}<div>Running both mailbox and relay yourself defeats the purpose of the relay. Use different operators.</div></div>
+  ${t ? (t.ok ? html`<div class="banner ok" role="status">${I("circle-check", "s16")}<div><span class="bt">Route works</span>The mailbox gave its keys and answered through the relay in ${Math.round(t.ms / 1000)} seconds. Nothing was posted.</div></div>` : html`<div class="banner danger" role="alert">${I("circle-x", "s16")}<div><span class="bt">${t.step === "keys" ? "Mailbox not usable" : t.step === "relay" ? "Relay not usable" : "Check the addresses"}</span>${t.message}</div></div>`) : ""}
   ${errP("pj")}`;
 }
 screens["set-payjoin"] = () => ({
   title: "Payment links",
   header: hdr({ title: "Payment links" }),
   main: payjoinForm(),
-  foot: html`<button class="btn btn-primary btn-block" type="button" data-act="pj-save">Save</button>`,
+  foot: { cls: "row", html: html`<button class="btn btn-secondary" type="button" data-act="pj-test" ${busy("pjt") ? html`aria-disabled="true"` : ""}>${busy("pjt") ? "Testing, up to 40 s…" : "Test"}</button><button class="btn btn-primary" type="button" data-act="pj-save">Save</button>` },
 });
+actions["pj-test"] = async () => {
+  const mb = fv("mb").trim();
+  const rl = fv("rl").trim();
+  const bad = checkPayjoinUrls(mb, rl);
+  if (bad) {
+    S.d.pjTest = bad;
+    render();
+    return;
+  }
+  if (!(await hostPermission(mb)) || !(await hostPermission(rl))) {
+    S.err.pj = "Chrome did not allow access to those addresses.";
+    render();
+    return;
+  }
+  S.busy = "pjt";
+  delete S.err.pj;
+  render();
+  try {
+    S.d.pjTest = await call<PayjoinRouteCheck>({ type: "PJ_TEST", directory: mb, relay: rl });
+  } catch (e) {
+    S.d.pjTest = { ok: false, step: "relay", message: String((e as Error).message) };
+  }
+  S.busy = null;
+  render();
+};
 actions["pj-save"] = async () => {
   const mb = fv("mb").trim();
   const rl = fv("rl").trim();
-  if (!/^https:\/\//.test(mb) || !/^https:\/\//.test(rl)) {
-    S.err.pj = "Both addresses must start with https://.";
+  const bad = checkPayjoinUrls(mb, rl);
+  if (bad) {
+    S.err.pj = bad.ok ? "" : bad.message;
     render();
     return;
   }
@@ -521,7 +756,9 @@ actions["rm-final"] = async () => {
 
 /* ---------- full page settings (F2) ---------- */
 function fullSettings(): Safe {
-  if (S.f.src === undefined) {
+  if (S.f.src === undefined || S.f.fsNet !== S.b!.state.net) {
+    S.f.fsNet = S.b!.state.net;
+    loaders["set-sending"]!();
     S.f.src = chain().kind === "core" ? "core" : "service";
     S.f.tok = chain().unisatToken ?? "";
     S.f.mb = chain().payjoinDirectory ?? DEFAULT_PAYJOIN_DIRECTORY;
@@ -529,7 +766,7 @@ function fullSettings(): Safe {
   }
   const pr = prefs();
   return html`<div class="topbar"><h1>Settings</h1><span class="cap">Changes save when you select Save in each section</span></div>
-  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
+  <div class="settings-grid"><nav class="subnav" data-clip aria-label="Settings sections"><a href="#wallets">Wallets</a><a href="#net">Network and data</a><a href="#ap">Appearance</a><a href="#send">Sending</a><a href="#price">USD price</a><a href="#priv">Privacy</a><a href="#pj">Payment links</a><a href="#sec">Security</a><a href="#bk">Backup and coins</a></nav>
   <div class="stack" style="gap:var(--s-8)">
     <section class="sect" id="wallets"><header><h2>Wallets</h2><p>Open now: <strong>${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"}</strong>. Several wallets can sit on this computer, one open at a time, each with its own password. Rename, add, import or remove them in one place.</p></header>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="wallets">${I("wallet", "s16")}Manage wallets</button></div></section>
@@ -539,11 +776,12 @@ function fullSettings(): Safe {
     <section class="sect" id="ap"><header><h2>Appearance</h2><p>Dark is the default. Your choice stays on this computer.</p></header>
       <div class="field" style="max-width:420px"><p class="label" id="apf">Theme</p>${themeSeg("apf")}</div>
 </section>
-    <section class="sect" id="priv"><header><h2>Privacy</h2><p>Each switch says who would learn something.</p></header>${privacyList()}
-      ${pr.usd ? html`<p class="small muted">USD price from <span class="mono">${PRICE_HOST}</span>, asked directly every 10 minutes while unlocked. If the price is older than 30 minutes it shows in amber with its time.</p>` : ""}</section>
+    <section class="sect" id="send"><header><h2>Sending</h2><p>How and when your payments reach the ${CHAIN()} network.</p></header><div class="stack" style="max-width:560px">${(screens["set-sending"]!() as { main: Safe }).main}</div></section>
+    <section class="sect" id="price"><header><h2>USD price</h2><p>Only the price of ${UNIT()} is asked for. Your coins never leave this computer.</p></header><div class="stack" style="max-width:560px">${priceForm()}</div></section>
+    <section class="sect" id="priv"><header><h2>Privacy</h2><p>Each switch says who would learn something.</p></header>${privacyList()}</section>
     <section class="sect" id="pj"><header><h2>Payment links</h2><p>Two servers carry payment link messages. Each one sees only what is listed under it.</p></header>
       ${payjoinForm()}
-      <div class="row"><button class="btn btn-primary" type="button" data-act="pj-save">Save</button></div></section>
+      <div class="row"><button class="btn btn-secondary" type="button" data-act="pj-test" ${busy("pjt") ? html`aria-disabled="true"` : ""}>${busy("pjt") ? "Testing, up to 40 s…" : "Test"}</button><button class="btn btn-primary" type="button" data-act="pj-save">Save</button></div></section>
     <section class="sect" id="sec"><header><h2>Security</h2><p>Lock deletes payment link keys. Auto lock waits while a payment is in progress.</p></header>
       <div class="field"><span class="label" id="alf">Lock after no use for</span><div style="max-width:420px">${lockSeg("alf")}</div><p class="help">Waits while a payment link or Payjoin payment is in progress.</p></div>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "wallet"}</button></div></section>

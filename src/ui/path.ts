@@ -1,4 +1,4 @@
-import { html, I, mid, type Safe } from "./kit.ts";
+import { html, I, mid, curNet, explorerHost, type Safe } from "./kit.ts";
 
 export type PathLeg = { title: string; sub?: string };
 
@@ -18,10 +18,11 @@ export function txidLine(txid: string): Safe {
 }
 
 /** Ask before opening the explorer: it learns the user's IP and which tx they looked at. */
-export function explorerBlock(askOpen: boolean, askFirst: boolean): Safe {
+export function explorerBlock(askOpen: boolean, askFirst: boolean, net: "fractal" | "bitcoin" = curNet()): Safe {
+  const host = explorerHost(net);
   if (askOpen) {
-    return html`<div class="banner warn" role="alert">${I("globe", "s16")}<div><span class="bt">Open mempool.fractalbitcoin.io?</span>It learns your IP and which transaction you looked at. <span class="row" style="gap:8px;margin-top:8px"><button class="btn btn-primary btn-sm" type="button" data-act="explorer-open">Open</button><button class="btn btn-ghost btn-sm" type="button" data-act="explorer-cancel">Cancel</button></span></div></div>`;
+    return html`<div class="banner warn" role="alert">${I("globe", "s16")}<div><span class="bt">Open ${host}?</span>It learns your IP and which transaction you looked at. <span class="row" style="gap:8px;margin-top:8px"><button class="btn btn-primary btn-sm" type="button" data-act="explorer-open">Open</button><button class="btn btn-ghost btn-sm" type="button" data-act="explorer-cancel">Cancel</button></span></div></div>`;
   }
-  return html`<button class="btn btn-secondary btn-block" type="button" data-act="explorer">${I("external-link", "s16")}View on mempool.fractalbitcoin.io</button>
+  return html`<button class="btn btn-secondary btn-block" type="button" data-act="explorer">${I("external-link", "s16")}View on ${host}</button>
   <p class="cap">Opening an explorer tells it your IP and which transaction you looked at.${askFirst ? " PrivateBit asks first." : ""}</p>`;
 }

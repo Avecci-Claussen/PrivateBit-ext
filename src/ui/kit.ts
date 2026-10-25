@@ -74,6 +74,9 @@ export function CHAIN_SHORT(): string {
 export function blockTimeText(): string {
   return uiNet === "bitcoin" ? "Bitcoin makes a block about every 10 minutes." : "Fractal makes a block about every 30 seconds.";
 }
+export function explorerHost(net: UiNet = uiNet): string {
+  return net === "bitcoin" ? "mempool.space" : "mempool.fractalbitcoin.io";
+}
 export function txLink(txid: string, net: UiNet = uiNet): string {
   return net === "bitcoin" ? `https://mempool.space/tx/${txid}` : `https://mempool.fractalbitcoin.io/tx/${txid}`;
 }

@@ -20,3 +20,4 @@ button.action{padding:0 4px}
 .panel .li .t{white-space:normal}
 .fp-overlay .sheet .grab{display:none}
 .net.compact{padding:0 6px 0 8px;gap:2px}.hdr .net.compact{flex:none}
+.kv .r.sub .k{font:var(--t-caption);color:var(--c-fg2)}.kv .r.sub{padding-top:0}

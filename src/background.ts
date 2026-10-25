@@ -5,6 +5,7 @@ import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, isNetworkId, 
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
 import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
+import { testPayjoinRoute } from "./lib/payjoin.ts";
 import { randomDelayMs } from "./lib/plan-random.ts";
 import { getPriceWithFallback, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates, type PriceSource } from "./lib/requests.ts";
 import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
@@ -302,6 +303,7 @@ type Msg =
   | { type: "LOAD_CHAIN" }
   | { type: "TEST_CHAIN"; chain: ChainConfig; sendNode?: boolean }
   | { type: "SET_NETWORK"; network: NetworkId }
+  | { type: "PJ_TEST"; directory: string; relay: string }
   | { type: "SET_BIRTHDAY"; birthday: number }
   | { type: "FOLLOW_TIP" }
   | { type: "OFFER_PAYJOIN"; amount: string }
@@ -535,10 +537,14 @@ async function handle(msg: Msg): Promise<unknown> {
       return refreshPrice(!!msg.force);
     case "PREFS_SET": {
       const prev = await getPrefs();
-      const next = normalizePrefs({ ...prev, ...msg.prefs });
+      const patch: Partial<Prefs> = { ...msg.prefs };
+      // The old on/off switch still works: on picks the last source, or CoinGecko.
+      if (patch.usd !== undefined && patch.priceSource === undefined) patch.priceSource = patch.usd ? (prev.priceSource === "off" ? "coingecko" : prev.priceSource) : "off";
+      delete patch.usd;
+      const next = normalizePrefs({ ...prev, ...patch });
       await kv.set({ [PREFS_KEY]: next });
       if (!next.usd) await kv.remove([PRICE_KEY]);
-      else if (!prev.usd) void refreshPrice(true);
+      else if (!prev.usd || prev.priceSource !== next.priceSource) void refreshPrice(true);
       return next;
     }
     case "COINS":
@@ -622,6 +628,8 @@ async function handle(msg: Msg): Promise<unknown> {
       const onChain = await nodeFollows(nodeCfg, net);
       return { ...check, net, onChain };
     }
+    case "PJ_TEST":
+      return testPayjoinRoute(msg.directory.trim(), msg.relay.trim());
     case "SET_NETWORK": {
       if (!isNetworkId(msg.network)) throw new Error("Unknown network");
       const prev = await getPrefs();

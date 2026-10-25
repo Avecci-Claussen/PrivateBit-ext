@@ -1,7 +1,7 @@
 import { S, screens, actions, loaders, go, render, refresh, run, toast } from "../app.ts";
 import { heldCard } from "./send.ts";
 import { call, type HistoryEntry, type SessionView } from "../api.ts";
-import { html, I, NETLOGO, fbShort, num, hm, when, dayLabel, left, type Safe, UNIT, CHAIN, CHAIN_SHORT } from "../kit.ts";
+import { html, I, explorerHost, NETLOGO, fbShort, num, hm, when, dayLabel, left, type Safe, UNIT, CHAIN, CHAIN_SHORT } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { scanning, health, price, usd, hidden, syncLine, retryIn, retryText } from "../derive.ts";
 
@@ -195,7 +195,7 @@ export function whoSees(): Safe {
   const since = S.b!.health?.since ? hm(S.b!.health.since) : "";
   const usdOn = S.b!.prefs.usd !== false;
   return html`<section class="panel" aria-labelledby="p-h"><h2 id="p-h">Who can see what</h2><div class="list">
-  <div class="li" style="cursor:default"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding coins</span><span class="d" style="white-space:normal">${own ? "Your node sends the blocks. Matching them to your keys happens here." : "mempool.fractalbitcoin.io sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code."}</span></span><span class="badge ${own ? "ok" : "warn"}">${own ? "Private" : "Shared"}</span></div>
+  <div class="li" style="cursor:default"><span class="ico in">${I("scan-line")}</span><span class="body"><span class="t">Finding coins</span><span class="d" style="white-space:normal">${own ? "Your node sends the blocks. Matching them to your keys happens here." : `${explorerHost()} sends the blocks and sees your IP. Blocks saved on this computer are reused for every wallet. Matching them to your keys happens here. It is not given your receive code.`}</span></span><span class="badge ${own ? "ok" : "warn"}">${own ? "Private" : "Shared"}</span></div>
   <div class="li" style="cursor:default"><span class="ico ${h !== "ok" ? "danger" : own ? "in" : "warn"}">${I("server")}</span><span class="body"><span class="t">${own ? "Your own node" : "Block data service"}</span><span class="d" style="white-space:normal">${h === "offline" ? `Not reachable${since ? ` since ${since}` : ""}.` : h === "rate-limited" ? "Limiting requests without an API key." : own ? "Only your node sees what you read and broadcast." : "Sees your IP, fee rate requests and payments you broadcast."}</span></span><span class="badge ${h !== "ok" ? "danger" : own ? "ok" : "warn"}">${h === "offline" ? "Offline" : h === "rate-limited" ? "Limited" : own ? "Private" : "Shared"}</span></div>
   <div class="li" style="cursor:default"><span class="ico in">${I("route")}</span><span class="body"><span class="t">Payment links via relay</span><span class="d" style="white-space:normal">Encrypted blobs only. IP hidden by relay.</span></span><span class="badge ok">Private</span></div>
   <div class="li" style="cursor:default"><span class="ico ${usdOn ? "warn" : "in"}">${I("circle-dollar-sign")}</span><span class="body"><span class="t">USD price: ${usdOn ? "price service" : "off"}</span><span class="d" style="white-space:normal">${usdOn ? "Sees your IP, never your coins." : "No price requests are made."}</span></span><span class="badge ${usdOn ? "warn" : "ok"}">${usdOn ? "Shared" : "Off"}</span></div></div>

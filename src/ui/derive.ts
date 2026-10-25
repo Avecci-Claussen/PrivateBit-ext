@@ -1,3 +1,5 @@
+import { netInfo } from "../lib/network.ts";
+import { curNet } from "./kit.ts";
 import { S } from "./app.ts";
 import { PRICE_STALE_MS } from "../lib/requests.ts";
 import { usd as usdFmt } from "./kit.ts";
@@ -42,7 +44,10 @@ export function price(): { kind: "ok" | "stale" | "na" | "off"; usd?: number; at
   const b = S.b;
   if (!b || b.prefs.usd === false) return { kind: "off" };
   const p = b.price;
-  if (!p?.usd || !p.fetchedAt) return { kind: p?.failedAt ? "na" : "na" };
+  if (!p?.usd || !p.fetchedAt) return { kind: "na" };
+  // A price for the other chain's coin is never shown.
+  const asset = netInfo(curNet()).price;
+  if (p.asset && p.asset !== asset.coingecko && p.asset !== asset.mexc) return { kind: "na" };
   if (Date.now() - p.fetchedAt > PRICE_STALE_MS) return { kind: "stale", usd: p.usd, at: p.fetchedAt };
   return { kind: "ok", usd: p.usd, at: p.fetchedAt };
 }

@@ -1,6 +1,14 @@
 import type { CoinMetaMap } from "./coinmeta.ts";
 import { CHANGE_LABEL } from "./network.ts";
 import type { LabeledUtxo, ScanStore } from "./scan.ts";
+import { bech32m } from "@scure/base";
+
+/** A Taproot output script as its bc1p address. Both chains use the same address format. */
+export function taprootAddress(scriptHex: string): string | undefined {
+  if (!/^5120[0-9a-f]{64}$/i.test(scriptHex)) return undefined;
+  const key = new Uint8Array(scriptHex.slice(4).match(/../g)!.map((b) => parseInt(b, 16)));
+  return bech32m.encode("bc", [1, ...bech32m.toWords(key)]);
+}
 
 /**
  * Activity history (DATA.md section 4). Stored encrypted in privatebit.history,
@@ -138,6 +146,10 @@ export function deriveHistory(
     else delete entry.approxTime;
     if (linked) entry.linked = true;
     if (kind === "split") entry.pieces = o.length >= 2 ? o.length : old?.pieces;
+    if (incoming && !entry.onchain && o[0]) {
+      const landed = taprootAddress(o[0].scriptPubKey);
+      if (landed) entry.onchain = landed;
+    }
     entries[txid] = entry;
   }
   const out: HistoryStore = { v: 1, entries };
