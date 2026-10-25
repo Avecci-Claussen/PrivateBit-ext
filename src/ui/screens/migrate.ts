@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, go, render, run, refresh, busy, err, toast } from "../app.ts";
 import { call, type CoinView, type OneTimeRecord, type Fees } from "../api.ts";
-import { html, I, codeHi, fb, fbShort, sats, mid, num, ntag, type Safe, CHAIN_SHORT, CHAIN } from "../kit.ts";
+import { html, I, UNIT, codeHi, fb, fbShort, sats, mid, num, ntag, type Safe, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { copyText } from "../copy.ts";
 import { qrSvg } from "../qr.ts";
@@ -156,7 +156,7 @@ screens.migrate = () => {
     <li class="step todo"><span class="n">2</span><div><p class="st">In your old wallet, switch to ${CHAIN()} mainnet</p><p class="sd">Usually in its network menu.</p></div></li>
     <li class="step todo"><span class="n">3</span><div><p class="st">Send once</p><p class="sd">Paste the code in your old wallet. If it refuses the code, use a one-time address and send the whole amount in one payment.</p></div></li>
     <li class="step todo"><span class="n">4</span><div><p class="st">Stop using the old address</p><p class="sd">Coins that came from it stay labeled Linked. A new move needs a new one-time address, after the previous one is empty.</p></div></li></ol>
-  <div class="banner warn">${I("triangle-alert", "s16")}<div>Holding inscriptions or tokens on that address? Do not send everything. Move only plain FB, or ask about inscriptions first.</div></div>`,
+  <div class="banner warn">${I("triangle-alert", "s16")}<div>Holding inscriptions or tokens on that address? Do not send everything. Move only plain ${UNIT()}, or ask about inscriptions first.</div></div>`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="migrate-copy">${I("copy", "s16")}Copy my receive code</button>`,
   };
 };

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Private Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
+  "description": "Private Bitcoin and Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
   "scripts": {
     "build": "tsc --noEmit && vite build && node scripts/check-dist.mjs dist",
     "build:e2e": "vite build --mode e2e --outDir dist-e2e",

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PrivateBit",
   "version": "1.0.0",
-  "description": "Private Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
+  "description": "Private Bitcoin and Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
   "action": {
     "default_title": "PrivateBit",
     "default_popup": "popup.html",
@@ -38,7 +38,7 @@
     "http://*/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+    "extension_pages": "script-src 'self'; object-src 'self'"
   },
   "icons": {
     "16": "icons/icon-16.png",

@@ -1,11 +1,12 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, refreshUntilReady, fv, busy, err, toast } from "../app.ts";
 import { call, type Bundle } from "../api.ts";
-import { html, I, MARK, NETLOGO, codeHi, num, type Safe } from "../kit.ts";
+import { html, I, curNet, MARK, NETLOGO, codeHi, num, type Safe } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { validateMnemonic } from "@scure/bip39";
-import { DEFAULT_BIRTHDAY } from "../../lib/network.ts";
+import { netInfo } from "../../lib/network.ts";
 import { copyText } from "../copy.ts";
+const defBirthday = (): number => netInfo(curNet()).defaultBirthday;
 
 const dots = (n: number, of = 4): Safe =>
   html`<p class="sr-only">Step ${n} of ${of}</p><div class="dots" aria-hidden="true">${Array.from({ length: of }, (_, i) => html`<i class="${i < n ? "on" : ""}"></i>`)}</div>`;
@@ -71,7 +72,7 @@ function passwordScreen(mode: "create" | "import") {
   ${create
     ? html`<div class="card flat pad-sm"><p class="strong">24 recovery words</p><p class="small muted">A new wallet is 256 bits, drawn from this computer's secure random generator. That is the strongest BIP39 backup. Write the words on paper.</p>
     <div class="field" style="margin-top:8px"><label class="label" for="pp">Extra passphrase <span class="optl">(optional)</span></label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}" aria-describedby="pp-h"><p class="help" id="pp-h">Leave this empty unless you want a second secret. It is not the password above. Without it, the words alone cannot recover the coins, and nobody can reset it.</p></div>
-    <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" autocomplete="off" value="${fv("wname")}" placeholder="Wallet"></div></div>`
+    <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" maxlength="40" autocomplete="off" value="${fv("wname")}" placeholder="Wallet" aria-describedby="wname-h"><p class="help" id="wname-h">Up to 40 characters. Shown at the top and in the wallet list. You can rename it later.</p></div></div>`
     : ""}
   ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
     foot: create
@@ -301,7 +302,7 @@ screens.import = () => {
   const hasVault = S.b?.state.hasVault;
   const forgot = S.f.forgot === true;
   const openName = (S.b?.state.wallets ?? []).find((w) => w.active)?.name ?? "this wallet";
-  const tip = typeof S.d.tipHeight === "number" ? S.d.tipHeight : DEFAULT_BIRTHDAY;
+  const tip = typeof S.d.tipHeight === "number" ? S.d.tipHeight : defBirthday();
   return {
     title: "Import wallet",
     solo: true,
@@ -317,7 +318,7 @@ screens.import = () => {
     </div>
     ${custom ? html`<div class="field" style="margin-top:8px"><label class="label" for="bd">Block height</label><input class="input mono" id="bd" data-f="bd" data-live inputmode="numeric" placeholder="${num(tip)}" value="${fv("bd")}" ${err("bd") ? html`aria-invalid="true" aria-describedby="bd-e"` : ""}>${err("bd") ? html`<p class="err" id="bd-e" role="alert">${I("circle-alert", "s16")}<span>${err("bd")}</span></p>` : html`<p class="help">A lower number finds older coins and takes longer. The scan starts as soon as this wallet is open.</p>`}</div>` : ""}</fieldset>
   <div class="field"><label class="label" for="pp">Extra passphrase <span class="optl">(only if this wallet has one)</span></label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}" aria-describedby="pp-h"><p class="help" id="pp-h">This is not the password you are about to choose. Leave it empty if you never set one. A wrong passphrase opens a different, empty wallet.</p></div>
-  <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" autocomplete="off" value="${fv("wname")}" placeholder="Wallet"></div>
+  <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" maxlength="40" autocomplete="off" value="${fv("wname")}" placeholder="Wallet" aria-describedby="wname-h"><p class="help" id="wname-h">Up to 40 characters. Shown at the top and in the wallet list. You can rename it later.</p></div>
   <div class="banner">${I("info", "s16")}<div>These words can come from any BIP39 wallet. PrivateBit derives its own Silent Payment keys from them, so addresses from the old wallet do not appear here.</div></div>`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="import-continue">Continue to password</button>`,
   };
@@ -337,7 +338,7 @@ actions.set = (el) => {
 function birthdayValue(): number | null {
   if (S.f.bdMode !== "custom") {
     const tip = S.d.tipHeight;
-    return typeof tip === "number" && tip > 0 ? tip : DEFAULT_BIRTHDAY;
+    return typeof tip === "number" && tip > 0 ? tip : defBirthday();
   }
   const n = Number(fv("bd").replace(/[,\s]/g, ""));
   if (!Number.isInteger(n) || n < 1) return null;
@@ -358,7 +359,7 @@ actions["import-finish"] = async () => {
   if (!checkPasswords()) return;
   const mnemonic = fv("mn").trim().toLowerCase().split(/\s+/).join(" ");
   const ok = await run("restore", async () => {
-    const r = await call<Bundle & { imported?: ImportResult }>({ type: "RESTORE", mnemonic, password: fv("pw"), passphrase: fv("pp"), birthday: birthdayValue() ?? DEFAULT_BIRTHDAY, add: S.f.adding === true, name: fv("wname"), forgot: S.f.forgot === true });
+    const r = await call<Bundle & { imported?: ImportResult }>({ type: "RESTORE", mnemonic, password: fv("pw"), passphrase: fv("pp"), birthday: birthdayValue() ?? defBirthday(), add: S.f.adding === true, name: fv("wname"), forgot: S.f.forgot === true });
     S.b = r;
     return r.imported ?? true;
   });

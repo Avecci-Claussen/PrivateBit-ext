@@ -699,7 +699,7 @@ export class WalletCore {
       hasBackup,
       unlocked: true,
       receive: account.receive,
-      birthday: session.birthday,
+      birthday: this.birthdayFor(session.birthday),
       lastHeight: scan.lastHeight,
       tip: scan.tip,
       reading: scan.inflight
@@ -1426,6 +1426,7 @@ export class WalletCore {
         createdAt: Date.now(),
         expiresAt: built.request.sessionExpiresAt ?? Date.now() + 24 * 60 * 60 * 1000,
         status: "waiting",
+        label: extra?.label,
       };
       const sends = await this.loadPayjoinSends();
       sends.push(send);
@@ -2522,20 +2523,30 @@ export class WalletCore {
         await this.forgetPayjoinSecrets([SEND_HPKE_PREFIX + s.id]);
         try {
           const ours = s.signableInputs.map((u) => `${u.txid}:${u.vout}`);
+          // Audit L6: the real fee, from the proposal's own input values.
+          let fee = 0n;
+          let vsize = 0;
+          try {
+            const t = btc.Transaction.fromPSBT(Uint8Array.from(atob(proposal), (c) => c.charCodeAt(0)));
+            fee = t.fee;
+            vsize = btc.Transaction.fromRaw(fromHex(signed.txHex), { allowUnknownOutputs: true }).vsize;
+          } catch {
+            /* unknown fee stays unrecorded */
+          }
           const hist = recordBroadcast(await this.loadHistory(), {
             txid,
             kind: "payjoin-sent",
             net: this.net,
             amount: BigInt(s.amount || "0"),
-            fee: 0n,
-            feeRate: 0,
+            fee,
+            feeRate: fee > 0n && vsize > 0 ? Math.round((Number(fee) / vsize) * 10) / 10 : 0,
             to: s.destination,
-            label: this.pendingSendLabels.get(s.id),
+            label: s.label ?? this.pendingSendLabels.get(s.id),
             outpoints: ours,
             now: Date.now(),
           });
           const e = hist.entries[txid];
-          if (e) delete e.fee;
+          if (e && fee === 0n) delete e.fee;
           await this.saveHistory(hist);
         } catch {
           /* history is best effort; the payment is already broadcast */

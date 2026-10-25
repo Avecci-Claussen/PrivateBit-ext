@@ -58,7 +58,7 @@ export function actRow(e: HistoryEntry, withDay = true): Safe {
   const amt = BigInt(e.amount);
   const inn = amt > 0n;
   const hide = hidden();
-  return html`<a class="li" href="#" data-act="go" data-to="activity-detail" data-id="${e.txid}"><span class="ico ${m.cls}">${I(m.ic)}</span><span class="body"><span class="t">${m.t}</span><span class="d">${entryTime(e, withDay)}</span></span><span class="end">${hide ? html`<span class="amt" aria-label="Amount hidden">\u2022\u2022\u2022\u2022 FB</span>` : html`<span class="amt ${inn ? "in" : ""}">${fbShort(amt, { sign: true })}</span>${m.badge}`}</span></a>`;
+  return html`<a class="li" href="#" data-act="go" data-to="activity-detail" data-id="${e.txid}"><span class="ico ${m.cls}">${I(m.ic)}</span><span class="body"><span class="t">${m.t}</span><span class="d">${entryTime(e, withDay)}</span></span><span class="end">${hide ? html`<span class="amt" aria-label="Amount hidden">\u2022\u2022\u2022\u2022 ${UNIT()}</span>` : html`<span class="amt ${inn ? "in" : ""}">${fbShort(amt, { sign: true })}</span>${m.badge}`}</span></a>`;
 }
 
 export function balanceSec(): Safe {
@@ -222,7 +222,7 @@ export function actTable(rows: HistoryEntry[], label = "Recent activity", select
   const p = price();
   const showUsd = p.kind === "ok" || p.kind === "stale";
   const hide = hidden();
-  return html`<div class="tscroll" tabindex="0" role="region" aria-label="${label} table"><table class="t"><caption class="sr-only">${label}</caption><thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col" class="col-hide">Who knows</th><th scope="col" class="r">Amount (FB)</th>${showUsd ? html`<th scope="col" class="r col-hide">USD today</th>` : ""}<th scope="col" class="col-hide">Status</th></tr></thead><tbody>
+  return html`<div class="tscroll" tabindex="0" role="region" aria-label="${label} table"><table class="t"><caption class="sr-only">${label}</caption><thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col" class="col-hide">Who knows</th><th scope="col" class="r">Amount (${UNIT()})</th>${showUsd ? html`<th scope="col" class="r col-hide">USD today</th>` : ""}<th scope="col" class="col-hide">Status</th></tr></thead><tbody>
   ${rows.map((e) => {
     const m = entryMeta(e);
     const a = BigInt(e.amount);

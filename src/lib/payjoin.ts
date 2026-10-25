@@ -312,6 +312,8 @@ export type PayjoinSendSession = {
   txid?: string;
   /** When the payment reached a final state. */
   closedAt?: number;
+  /** The label typed on Send, kept with the encrypted session so a worker restart keeps it (audit L6). */
+  label?: string;
 };
 
 export function createReceiverSession(args: {

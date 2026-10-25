@@ -1,8 +1,8 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
 import { call, type ChainConfig, type Prefs } from "../api.ts";
-import { html, I, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
+import { html, I, curNet, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { hdr, tabs, mailboxHost } from "../chrome.ts";
-import { DEFAULT_BIRTHDAY, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
+import { netInfo, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
 const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
 import { LOCK_CHOICES } from "../../lib/prefs.ts";
 import { THEME_CHOICES, type ThemeChoice } from "../../lib/theme.ts";
@@ -13,6 +13,7 @@ import { checkPayjoinUrls, type PayjoinRouteCheck } from "../../lib/payjoin.ts";
 import { DELAY_CHOICES, type DelayChoice } from "../../lib/plan-random.ts";
 import { LEFTOVER_CHOICES, type LeftoverPref } from "../../lib/coinselect.ts";
 import { price, syncLine } from "../derive.ts";
+const defBirthday = (): number => netInfo(curNet()).defaultBirthday;
 
 const chain = (): ChainConfig => S.b!.state.chain;
 const prefs = (): Prefs => S.b!.prefs;
@@ -106,7 +107,7 @@ screens.settings = () => {
   ${row("route", "Payment links", `${CHAIN_SHORT()}: ${mailboxHost()} through a relay`, "set-payjoin")}
   ${row("lock", "Security and lock", `Password, lock after ${pr.lockMinutes} min`, "set-security")}
   ${row("file-key", "Backup", "Recovery words", "set-backup")}
-  ${row("scan-line", "Finding coins", `Look back from block ${num(S.b!.state.birthday ?? DEFAULT_BIRTHDAY)}`, "set-scan")}
+  ${row("scan-line", "Finding coins", `Look back from block ${num(S.b!.state.birthday ?? defBirthday())}`, "set-scan")}
   ${row("arrow-right-left", "Move coins from another wallet", "One payment, then move it into your receive code", "migrate")}
 </div>
   ${S.mode === "popup" ? html`<button class="btn btn-secondary btn-block" type="button" data-act="open-full">${I("external-link", "s16")}Open full page</button>` : ""}
@@ -188,7 +189,7 @@ function nodeResult(t: NodeResult | undefined, forScan = false): Safe | string {
 }
 /** Paste the node's .cookie file instead of typing a user and password. */
 function cookieField(id: string, userKey: string, passKey: string): Safe {
-  return html`<details class="card flat pad-sm"><summary class="small strong" style="cursor:pointer">Use the cookie file instead</summary><div class="field" style="margin-top:8px"><label class="label" for="${id}">Paste the contents of .cookie</label><input class="input mono" id="${id}" data-f="${id}" autocomplete="off" spellcheck="false" placeholder="__cookie__:…" aria-describedby="${id}-h"><p class="help" id="${id}-h">Found in the node's data folder. It changes each time the node restarts, so paste it again after a restart.</p>${err(id) ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err(id)}</span></p>` : ""}
+  return html`<details class="card flat pad-sm" ${S.f[`${id}Open`] || err(id) ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle-k" data-k="${id}Open">Use the cookie file instead</summary><div class="field" style="margin-top:8px"><label class="label" for="${id}">Paste the contents of .cookie</label><input class="input mono" id="${id}" data-f="${id}" autocomplete="off" spellcheck="false" placeholder="__cookie__:…" aria-describedby="${id}-h"><p class="help" id="${id}-h">Found in the node's data folder. It changes each time the node restarts, so paste it again after a restart.</p>${err(id) ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err(id)}</span></p>` : ""}
   <button class="btn btn-secondary btn-sm" type="button" data-act="cookie-use" data-id="${id}" data-u="${userKey}" data-p="${passKey}" style="align-self:flex-start">${I("clipboard-paste", "s16")}Use cookie</button></div></details>`;
 }
 actions["cookie-use"] = (el) => {
@@ -550,7 +551,7 @@ screens["set-security"] = () => {
     header: hdr({ title: "Security and lock" }),
     main: waiting
       ? html`
-  <div class="banner warn" role="status">${I("hourglass", "s16")}<div><span class="bt">Auto lock is waiting</span>${pj?.role === "send" ? "A Payjoin payment" : "A payment link"}${pj?.amount && pj.amount !== "0" ? ` of ${Number(pj.amount) / 1e8} FB` : ""} is in progress. Locking now would delete its keys. PrivateBit locks ${prefs().lockMinutes} minutes after it ends.</div></div>
+  <div class="banner warn" role="status">${I("hourglass", "s16")}<div><span class="bt">Auto lock is waiting</span>${pj?.role === "send" ? "A Payjoin payment" : "A payment link"}${pj?.amount && pj.amount !== "0" ? ` of ${Number(pj.amount) / 1e8} ${UNIT()}` : ""} is in progress. Locking now would delete its keys. PrivateBit locks ${prefs().lockMinutes} minutes after it ends.</div></div>
   <div class="field"><p class="label" id="al2">Lock after no use for</p>${lockSeg("al2")}</div>
   <div class="card flat pad-sm"><div class="kv">
     ${last ? html`<div class="r"><span class="k">Last used</span><span class="v">${hm(last)}</span></div><div class="r"><span class="k">Would have locked</span><span class="v">${hm(last + prefs().lockMinutes * 60_000)}</span></div>` : ""}
@@ -638,7 +639,7 @@ actions["backup-hide"] = () => {
 
 /* ---------- finding coins (61) ---------- */
 loaders["set-scan"] = () => {
-  S.f.bk = num(S.b!.state.birthday ?? DEFAULT_BIRTHDAY);
+  S.f.bk = num(S.b!.state.birthday ?? defBirthday());
 };
 screens["set-scan"] = () => {
   const st = S.b!.state;
@@ -647,14 +648,14 @@ screens["set-scan"] = () => {
     title: "Finding coins",
     header: hdr({ title: "Finding coins" }),
     main: html`
-  <div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Looking from block</span><span class="v mono">${num(st.birthday ?? DEFAULT_BIRTHDAY)}</span></div><div class="r"><span class="k">Checked up to</span><span class="v mono">${num(st.lastHeight ?? 0)}</span></div><div class="r"><span class="k">Status</span><span class="v">${done ? html`<span class="badge ok">${I("circle-check")}Up to date</span>` : !st.tip ? html`<span class="badge">${I("clock")}${syncLine()}</span>` : html`<span class="badge">${I("refresh-cw")}Finding coins, ${num(st.tip - (st.lastHeight ?? 0))} blocks to go</span>`}</span></div></div></div>
-  <div class="field" data-enter="rescan"><label class="label" for="bk">Look again from block</label><input class="input mono" id="bk" data-f="bk" inputmode="numeric" autocomplete="off" value="${fv("bk")}" aria-describedby="bk-h" ${err("bk") ? html`aria-invalid="true"` : ""}><p class="help" id="bk-h">Use this if a payment is missing. Earlier blocks take longer. The default start is block ${num(DEFAULT_BIRTHDAY)}.</p>${errP("bk")}</div>
-  <button class="btn btn-ghost btn-sm" type="button" data-act="bk-default" style="align-self:flex-start">Use block ${num(DEFAULT_BIRTHDAY)}</button>`,
+  <div class="card flat pad-sm"><div class="kv"><div class="r"><span class="k">Looking from block</span><span class="v mono">${num(st.birthday ?? defBirthday())}</span></div><div class="r"><span class="k">Checked up to</span><span class="v mono">${num(st.lastHeight ?? 0)}</span></div><div class="r"><span class="k">Status</span><span class="v">${done ? html`<span class="badge ok">${I("circle-check")}Up to date</span>` : !st.tip ? html`<span class="badge">${I("clock")}${syncLine()}</span>` : html`<span class="badge">${I("refresh-cw")}Finding coins, ${num(st.tip - (st.lastHeight ?? 0))} blocks to go</span>`}</span></div></div></div>
+  <div class="field" data-enter="rescan"><label class="label" for="bk">Look again from block</label><input class="input mono" id="bk" data-f="bk" inputmode="numeric" autocomplete="off" value="${fv("bk")}" aria-describedby="bk-h" ${err("bk") ? html`aria-invalid="true"` : ""}><p class="help" id="bk-h">Use this if a payment is missing. Earlier blocks take longer. The default start is block ${num(defBirthday())}.</p>${errP("bk")}</div>
+  <button class="btn btn-ghost btn-sm" type="button" data-act="bk-default" style="align-self:flex-start">Use block ${num(defBirthday())}</button>`,
     foot: html`<button class="btn btn-secondary btn-block" type="button" data-act="rescan" ${busy("bk") ? html`aria-disabled="true"` : ""}>${I("refresh-cw", "s16")}Look again from this block</button>`,
   };
 };
 actions["bk-default"] = () => {
-  S.f.bk = num(DEFAULT_BIRTHDAY);
+  S.f.bk = num(defBirthday());
   render();
 };
 actions.rescan = async () => {

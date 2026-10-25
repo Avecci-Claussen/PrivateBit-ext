@@ -331,6 +331,8 @@ async function bundle() {
 }
 
 async function birthdayForNewWallet(): Promise<number> {
+  // The vault keeps the Fractal start. On Bitcoin the tip is a Bitcoin height, so it cannot be used here.
+  if (wallet.net !== "fractal") return DEFAULT_BIRTHDAY;
   try {
     const tip = await wallet.source().getTip();
     await noteHealth();
@@ -434,6 +436,11 @@ async function handle(msg: Msg): Promise<unknown> {
         await wallet.createChecked({ mnemonic: ob.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday, name: msg.name });
       }
       await kv.remove([ONBOARD_KEY, LOCKINFO_KEY]);
+      if (wallet.net !== "fractal") {
+        // A new wallet has no older coins: start the Bitcoin scan at the Bitcoin tip.
+        const tip = await wallet.source().getTip().catch(() => null);
+        if (tip && tip.height > 0) await wallet.setBirthday(tip.height).catch(() => undefined);
+      }
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void refreshPrice(true);
       kickCatchup(0);
@@ -441,14 +448,18 @@ async function handle(msg: Msg): Promise<unknown> {
     }
     case "RESTORE": {
       // Import never replaces a wallet (audit M5): it adds one, or opens the same words already here.
+      // The typed start block belongs to the open chain. The vault keeps the Fractal one, so
+      // on Bitcoin the vault gets the Fractal default and Bitcoin gets the typed block.
+      const onBitcoin = wallet.net === "bitcoin";
       const imported = await wallet.importWallet({
         mnemonic: msg.mnemonic,
         password: msg.password,
         passphrase: msg.passphrase,
-        birthday: msg.birthday,
+        birthday: onBitcoin ? netInfo("fractal").defaultBirthday : msg.birthday,
         name: msg.name,
         resetPassword: msg.forgot === true,
       });
+      if (onBitcoin && imported.result === "added" && msg.birthday > 0) await wallet.setBirthday(msg.birthday);
       await kv.remove([LOCKINFO_KEY, FEES_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void pumpPayjoin();
@@ -615,11 +626,13 @@ async function handle(msg: Msg): Promise<unknown> {
       return redactChain(await wallet.loadChain());
     case "TEST_CHAIN": {
       const prev = await wallet.loadChain();
+      // Audit L5: a saved secret only goes back to the address it was saved for.
+      const same = (a?: string, b?: string) => !!a && !!b && a.trim().replace(/\/$/, "") === b.trim().replace(/\/$/, "");
       const cfg: ChainConfig = {
         ...msg.chain,
-        rpcPassword: msg.chain.rpcPassword === "********" ? prev.rpcPassword : msg.chain.rpcPassword,
-        unisatToken: msg.chain.unisatToken === "********" ? prev.unisatToken : msg.chain.unisatToken,
-        sendNodePassword: msg.chain.sendNodePassword === "********" ? prev.sendNodePassword : msg.chain.sendNodePassword,
+        rpcPassword: msg.chain.rpcPassword === "********" ? (same(msg.chain.url, prev.url) ? prev.rpcPassword : undefined) : msg.chain.rpcPassword,
+        unisatToken: msg.chain.unisatToken === "********" ? (same(msg.chain.url, prev.url) ? prev.unisatToken : undefined) : msg.chain.unisatToken,
+        sendNodePassword: msg.chain.sendNodePassword === "********" ? (same(msg.chain.sendNodeUrl, prev.sendNodeUrl) ? prev.sendNodePassword : undefined) : msg.chain.sendNodePassword,
       };
       const net = wallet.net;
       const nodeCfg = cfg.kind === "core" ? { url: cfg.url, rpcUser: cfg.rpcUser, rpcPassword: cfg.rpcPassword } : msg.sendNode && cfg.sendNodeUrl ? { url: cfg.sendNodeUrl, rpcUser: cfg.sendNodeUser, rpcPassword: cfg.sendNodePassword } : undefined;
