@@ -188,3 +188,14 @@ describe("L6: labels match only P_k + L", () => {
     expect(hex(schnorr.getPublicKey(d))).toBe(hex(Pk.add(L).toRawBytes(true).slice(1)));
   });
 });
+
+describe("L7: payment links", () => {
+  it("refuse test network codes and amounts with more than 8 decimals", async () => {
+    const { parseBip21 } = await import("../src/lib/bip21.ts");
+    expect(() => parseBip21("bitcoin:bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh?amount=0.123456789")).toThrow(/8 decimals/);
+    expect(() => parseBip21("bitcoin:bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh?amount=1e3")).toThrow(/valid amount/);
+    expect(parseBip21("bitcoin:bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh?amount=0.12345678").amount).toBe(12_345_678n);
+    expect(() => parseBip21("tsp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv")).toThrow(/test network/);
+    expect(() => parseBip21("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")).toThrow(/test network/);
+  });
+});

@@ -29,10 +29,13 @@ export function parseBip21(input: string): PaymentRequest {
   const amountStr = query.get("amount");
   let amount: bigint | undefined;
   if (amountStr) {
+    // Audit L7 (independent): no silent rounding. More than 8 decimals is refused.
+    if (!/^\d*(\.\d{0,8})?$/.test(amountStr) || amountStr === "." || amountStr === "") throw new Error("The amount in this link is not a valid amount (at most 8 decimals).");
     const [w, f = ""] = amountStr.split(".");
     const frac = (f + "00000000").slice(0, 8);
     amount = BigInt(w || "0") * 100_000_000n + BigInt(frac);
   }
+  if (/^(tsp1|tb1|bcrt1)/i.test(address)) throw new Error("This code is for a test network, not this chain.");
   let silent = false;
   try {
     decodeSilentAddress(address);
