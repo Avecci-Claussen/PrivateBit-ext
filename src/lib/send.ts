@@ -503,6 +503,36 @@ export async function buildSplit(args: {
   };
 }
 
+/** Address for an output script (same prefixes on Fractal and Bitcoin). Null for scripts without one. */
+export function addressOfScript(script: Uint8Array): string | null {
+  try {
+    return btc.Address(NETWORK).encode(btc.OutScript.decode(script));
+  } catch {
+    return null;
+  }
+}
+
+/** The payment output of a transaction we built: the first output that is not one of ours. */
+export function paymentOutputAddress(txHex: string, ourVouts: number[]): string | undefined {
+  try {
+    const tx = btc.Transaction.fromRaw(fromHexLocal(txHex), { allowUnknownOutputs: true, disableScriptCheck: true });
+    for (let i = 0; i < tx.outputsLength; i++) {
+      if (ourVouts.includes(i)) continue;
+      const script = tx.getOutput(i).script;
+      if (script) return addressOfScript(script) ?? undefined;
+    }
+  } catch {
+    /* unknown layout: the row shows the entered recipient only */
+  }
+  return undefined;
+}
+
+function fromHexLocal(h: string): Uint8Array {
+  const out = new Uint8Array(h.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
 /**
  * Spending coins that different people know about in one payment tells each of them that the
  * coins belong to the same person. Groups the inputs by label; more than one group means warn.

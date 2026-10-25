@@ -26,6 +26,10 @@ export type HistoryEntry = {
   approxTime?: boolean;
   status: HistoryStatus;
   to?: string;
+  /** The output the payment actually went to, as an address (for a sp1 code this is a fresh P2TR). */
+  onchain?: string;
+  /** Chain the payment was made on, for the explorer link and the label. Missing means Fractal. */
+  net?: "fractal" | "bitcoin";
   outpoints: string[];
   label?: string;
   linked?: boolean;
@@ -150,6 +154,8 @@ export function recordBroadcast(
     fee: bigint;
     feeRate: number;
     to?: string;
+    onchain?: string;
+    net?: "fractal" | "bitcoin";
     label?: string;
     outpoints: string[];
     change?: bigint;
@@ -175,6 +181,8 @@ export function recordBroadcast(
     fromWallet: true,
   };
   if (e.to) entry.to = e.to;
+  if (e.onchain) entry.onchain = e.onchain;
+  if (e.net && e.net !== "fractal") entry.net = e.net;
   if (e.label) entry.label = e.label;
   if (e.change !== undefined && e.change > 0n) entry.change = e.change.toString();
   if (e.linked) entry.linked = true;

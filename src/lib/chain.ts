@@ -234,6 +234,24 @@ export function parseCookie(text: string): { user: string; password: string } | 
 
 export type NodeCheck = { height: number; chain: string; txindex: boolean | "unknown"; blocks: number; headers: number };
 
+/**
+ * Which chain a node follows. Bitcoin and Fractal share the genesis block and both call
+ * themselves "main", so a block only one of them has decides. "behind": the node has not
+ * reached that block yet, so it cannot tell.
+ */
+export async function nodeFollows(cfg: { url: string; rpcUser?: string; rpcPassword?: string }, net: NetworkId): Promise<"yes" | "other" | "behind"> {
+  const auth = { user: cfg.rpcUser, password: cfg.rpcPassword };
+  const here = netInfo(net).checkpoint;
+  const other = netInfo(net === "bitcoin" ? "fractal" : "bitcoin").checkpoint;
+  const blocks = Number(((await rpc(cfg.url, auth, "getblockchaininfo")) as { blocks?: number }).blocks ?? 0);
+  const hashAt = async (h: number): Promise<string | null> => (blocks >= h ? String(await rpc(cfg.url, auth, "getblockhash", [h])).toLowerCase() : null);
+  const mine = await hashAt(here.height);
+  if (mine === here.hash) return "yes";
+  const theirs = await hashAt(other.height);
+  if (theirs === other.hash || (mine !== null && mine !== here.hash)) return "other";
+  return "behind";
+}
+
 /** Test a node: which chain it is on, how far it is, and whether its transaction index is on. */
 export async function checkNode(cfg: { url: string; rpcUser?: string; rpcPassword?: string }): Promise<NodeCheck> {
   const auth = { user: cfg.rpcUser, password: cfg.rpcPassword };

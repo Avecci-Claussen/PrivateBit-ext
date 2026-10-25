@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, back, go, render, run, fv, busy, err, toast } from "../app.ts";
 import { call, type CoinView, type Fees } from "../api.ts";
-import { html, I, fb, fbShort, sats, parseFb, mid, num, type Safe } from "../kit.ts";
+import { html, I, fb, fbShort, sats, parseFb, mid, num, type Safe, UNIT } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { usd, hidden } from "../derive.ts";
 import { explorerBlock, pathPreview, txidLine } from "../path.ts";
@@ -78,7 +78,7 @@ screens["coin-detail"] = () => {
   const c = cur();
   if (!c) return { title: "Coin", header: hdr({ title: "Coin", net: true }), main: html`<p class="muted">This coin was spent or is no longer in this wallet.</p>` };
   const v = BigInt(c.value);
-  const big = v < 100_000n ? html`${num(Number(v))}<span class="unit"> sats</span>` : html`${fbShort(v, { unit: false })}<span class="unit"> FB</span>`;
+  const big = v < 100_000n ? html`${num(Number(v))}<span class="unit"> sats</span>` : html`${fbShort(v, { unit: false })}<span class="unit"> ${UNIT()}</span>`;
   const kv = html`<div class="card"><div class="kv">
     ${c.status === "frozen" ? html`<div class="r"><span class="k">Who knows</span><span class="v">${c.label || "Not labeled"}</span></div>${c.reason ? html`<div class="r"><span class="k">Why frozen</span><span class="v">${c.reason}</span></div>` : ""}` : ""}
     <div class="r"><span class="k">Type</span><span class="v">${c.kind === "bip86" ? "One-time address (Taproot)" : "Silent Payment output"}</span></div>
@@ -218,7 +218,7 @@ screens["coin-split"] = () => {
     const parsed = pieceSats(i);
     const bad = v.trim() !== "" && (parsed === null || parsed < DUST);
     return html`<div class="field"><div class="row between"><label class="label" for="sp${i}">Piece ${i + 1}</label><button class="link small" type="button" data-act="split-rest" data-i="${String(i)}" ${st.spendable === null ? html`disabled` : ""}>Put rest here</button></div>
-  <div class="input-wrap"><input class="input mono" id="sp${i}" data-f="sp${i}" data-live inputmode="decimal" autocomplete="off" placeholder="0.00" value="${v}" ${bad ? html`aria-invalid="true"` : ""}><span class="unit">FB</span></div>
+  <div class="input-wrap"><input class="input mono" id="sp${i}" data-f="sp${i}" data-live inputmode="decimal" autocomplete="off" placeholder="0.00" value="${v}" ${bad ? html`aria-invalid="true"` : ""}><span class="unit">${UNIT()}</span></div>
   ${parsed !== null && parsed > 0n ? html`<p class="help">${sats(parsed)}</p>` : ""}</div>`;
   });
   const left = st.left;
@@ -236,7 +236,7 @@ screens["coin-split"] = () => {
     title: "Break into pieces",
     header: hdr({ title: "Break into pieces", net: true }),
     main: html`
-  <div class="hero-amt"><p class="cap">This coin</p><p class="a">${fbShort(c.value, { unit: false })}<span class="unit"> FB</span></p><p class="fiat">${sats(c.value)} before the network fee</p></div>
+  <div class="hero-amt"><p class="cap">This coin</p><p class="a">${fbShort(c.value, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(c.value)} before the network fee</p></div>
   ${pathPreview({ title: name(c), sub: fbShort(c.value) }, { title: "Your receive code", sub: `${st.n} pieces you still own` })}
   <div class="banner">${I("info", "s16")}<div><span class="bt">You set every amount</span>PrivateBit does not pick the sizes. Equal amounts are blocked because they look like a mix. Anyone who sees this transaction can tell the pieces were created together. Later you can spend one without spending the others.</div></div>
   <div class="field"><p class="label" id="sn">How many pieces</p><div class="seg tall" role="radiogroup" aria-labelledby="sn">${seg(2, "Two")}${seg(3, "Three")}${seg(4, "Four")}</div></div>
@@ -263,7 +263,7 @@ screens["coin-split-review"] = () => {
     title: "Review split",
     header: hdr({ title: "Review split", net: true }),
     main: html`
-  <div class="hero-amt"><p class="cap">Break into ${p.pieces.length} coins</p><p class="a">${fbShort(p.amount, { unit: false })}<span class="unit"> FB</span></p><p class="fiat">${sats(p.amount)} after a ${sats(p.fee)} fee</p></div>
+  <div class="hero-amt"><p class="cap">Break into ${p.pieces.length} coins</p><p class="a">${fbShort(p.amount, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(p.amount)} after a ${sats(p.fee)} fee</p></div>
   ${pathPreview({ title: name(c), sub: fbShort(c.value) }, { title: "Your receive code", sub: `${p.pieces.length} pieces you still own` })}
   <div class="card"><div class="kv">${pieces}
     <div class="r"><span class="k">Network fee</span><span class="v"><span class="mono">${sats(p.fee)}</span><span class="cap">${p.rate} sat/vB, ${num(p.vbytes)} vB</span></span></div>

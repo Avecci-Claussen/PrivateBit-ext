@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, render, run, fv, toast } from "../app.ts";
 import { call, type HistoryEntry } from "../api.ts";
-import { html, I, fb, fbShort, sats, mid, num, dayLabel, longDate, ntag, type Safe } from "../kit.ts";
+import { html, I, fb, fbShort, sats, mid, num, dayLabel, longDate, ntag, type Safe, UNIT, CHAIN_SHORT, blockTimeText } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { usd, scanning, price } from "../derive.ts";
 import { hist, loadHistory, actRow, entryMeta, actTable } from "./home.ts";
@@ -77,7 +77,7 @@ function actPath(e: HistoryEntry): { from: PathLeg; to: PathLeg } {
     case "payjoin-sent":
       return {
         from: { title: "Your coins" },
-        to: { title: them, sub: e.to ? (e.to.startsWith("sp1") ? "Fractal receive code" : "Address") : e.kind === "payjoin-sent" ? "Payment link" : undefined },
+        to: { title: them, sub: e.to ? (e.to.startsWith("sp1") ? `${CHAIN_SHORT()} receive code` : "Address") : e.kind === "payjoin-sent" ? "Payment link" : undefined },
       };
     default:
       return { from: { title: them === "Them" ? "Someone with your code" : them }, to: { title: "Your receive code" } };
@@ -109,11 +109,11 @@ function detailBody(e: HistoryEntry, panel = false): Safe {
   const ask = S.b!.prefs.askExplorer !== false;
   const cap = e.kind === "self" || e.kind === "moved-in" || e.kind === "split" ? "Moved" : a > 0n ? "Received" : "Sent";
   const { from, to } = actPath(e);
-  return html`<div class="hero-amt" ${panel ? html`style="align-items:flex-start;text-align:left"` : ""}>${panel ? "" : html`<p class="cap">${cap}</p>`}<p class="a">${fbShort(a, { unit: false, sign: true })}<span class="unit"> FB</span></p>${usd(a) ? html`<p class="fiat">${usd(a)} at today's price</p>` : ""}${panel ? "" : statusB}</div>
+  return html`<div class="hero-amt" ${panel ? html`style="align-items:flex-start;text-align:left"` : ""}>${panel ? "" : html`<p class="cap">${cap}</p>`}<p class="a">${fbShort(a, { unit: false, sign: true })}<span class="unit"> ${UNIT()}</span></p>${usd(a) ? html`<p class="fiat">${usd(a)} at today's price</p>` : ""}${panel ? "" : statusB}</div>
   ${pathPreview(from, to)}
   <div class="card"><div class="kv">
     <div class="r"><span class="k">Date</span><span class="v">${e.approxTime ? "About " : ""}${longDate(e.time * 1000)}</span></div>
-    ${e.to ? html`<div class="r"><span class="k">Paid</span><span class="v"><span class="mono">${mid(e.to, 12, 8)}</span>${e.to.startsWith("sp1") ? ntag("Fractal receive code") : html`<span class="badge">Regular address</span>`}</span></div>` : ""}
+    ${e.to ? html`<div class="r"><span class="k">Paid</span><span class="v"><span class="mono">${mid(e.to, 12, 8)}</span>${e.to.startsWith("sp1") ? ntag(`${CHAIN_SHORT()} receive code`) : html`<span class="badge">Regular address</span>`}</span></div>` : ""}
     <div class="r"><span class="k">Label</span><span class="v">${editing ? html`<span class="row" style="gap:6px" data-enter="act-label-save"><input class="input" id="al" data-f="actLbl" maxlength="64" value="${fv("actLbl")}" aria-label="Label" style="height:36px"><button class="btn btn-secondary btn-sm" type="button" data-act="act-label-save">Save</button></span>` : html`${e.label || html`<span class="muted">Not labeled</span>`} <button class="link small" type="button" data-act="act-label-edit">Edit</button>`}</span></div>
     ${e.fee ? html`<div class="r"><span class="k">Fee</span><span class="v mono">${sats(e.fee)}</span></div>` : ""}
     ${e.change ? html`<div class="r"><span class="k">Change</span><span class="v mono">${fb(e.change)}</span></div>` : ""}
@@ -175,7 +175,7 @@ function fullActivity(list: HistoryEntry[], filter: string): Safe {
   const p = price();
   if (!h.entries.length && !h.rebuilding) {
     return html`<div class="topbar"><h1>Activity</h1></div>
-  <section class="panel"><div class="state"><div class="big neutral">${I("history")}</div><h1>No activity yet</h1><p>Payments to your receive code show here after PrivateBit finds them in a block. Fractal makes a block about every 30 seconds.</p><button class="btn btn-primary" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Show my receive code</button></div></section>`;
+  <section class="panel"><div class="state"><div class="big neutral">${I("history")}</div><h1>No activity yet</h1><p>Payments to your receive code show here after PrivateBit finds them in a block. ${blockTimeText()}</p><button class="btn btn-primary" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Show my receive code</button></div></section>`;
   }
   const e = cur() ?? list[0];
   const sc = scanning();

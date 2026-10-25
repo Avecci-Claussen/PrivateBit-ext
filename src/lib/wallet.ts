@@ -67,7 +67,7 @@ import {
   type ScanStore,
 } from "./scan.ts";
 import { evenPriv, sessionTweak, tweakSpend } from "./schnorr-util.ts";
-import { buildSend, buildSplit, destinationNeedsPayjoin, groupInputLabels, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
+import { buildSend, buildSplit, destinationNeedsPayjoin, groupInputLabels, paymentOutputAddress, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
 import { isPlanSeed, jitterFeeRate, newPlanSeed } from "./plan-random.ts";
 import type { SignableInput } from "./send.ts";
 import type { OwnedOutput } from "./scan.ts";
@@ -147,6 +147,8 @@ import { parseBip21 } from "./bip21.ts";
 
 export type WalletState = {
   hasVault: boolean;
+  /** The chain shown. */
+  net?: NetworkId;
   /** A replaced vault is still on this computer (one generation). */
   hasBackup?: boolean;
   unlocked: boolean;
@@ -1468,6 +1470,8 @@ export class WalletCore {
       fee: built.fee,
       feeRate,
       to: kind === "self" || kind === "split" ? undefined : built.request.raw,
+      onchain: kind === "self" || kind === "split" ? undefined : paymentOutputAddress(built.txHex, built.ourOutputs.map((o) => o.vout)),
+      net: this.net,
       label,
       outpoints: [...spent, ...change],
       change: built.change,
@@ -1612,6 +1616,7 @@ export class WalletCore {
         fee: BigInt(d.fee),
         change: BigInt(d.change),
         request: { raw: d.destination },
+        txHex: d.txHex,
       } as unknown as Awaited<ReturnType<typeof buildSend>>;
       await this.afterBroadcast(d.txid, builtLike, "sent", d.label, d.feeRate);
       d.recorded = true;
@@ -2070,7 +2075,7 @@ export class WalletCore {
     const stored = got[CHAIN_KEY] as ChainConfig | undefined;
     const migrated = migrateChainConfig(stored ?? DEFAULT_CHAIN);
     const { plain } = splitChainSecrets(migrated);
-    const secretsInPlain = !!(stored?.unisatToken || stored?.rpcPassword);
+    const secretsInPlain = !!(stored?.unisatToken || stored?.rpcPassword || stored?.sendNodePassword);
     if (stored && !secretsInPlain && JSON.stringify(stored) !== JSON.stringify(plain)) {
       await this.kv.set({ [CHAIN_KEY]: plain });
     }
@@ -2082,6 +2087,7 @@ export class WalletCore {
       ...plain,
       unisatToken: secrets.unisatToken ?? migrated.unisatToken,
       rpcPassword: secrets.rpcPassword ?? migrated.rpcPassword,
+      sendNodePassword: secrets.sendNodePassword ?? migrated.sendNodePassword,
     });
     return this.chainCfg;
   }
@@ -2092,11 +2098,12 @@ export class WalletCore {
       ...cfg,
       rpcPassword: isRedactedSecret(cfg.rpcPassword) ? prev.rpcPassword : cfg.rpcPassword,
       unisatToken: isRedactedSecret(cfg.unisatToken) ? prev.unisatToken : cfg.unisatToken,
+      sendNodePassword: isRedactedSecret(cfg.sendNodePassword) ? prev.sendNodePassword : cfg.sendNodePassword,
     });
     const clearToken = cfg.unisatToken === "";
     const { plain, secrets } = splitChainSecrets(next);
     if (clearToken) delete secrets.unisatToken;
-    if (secrets.unisatToken || secrets.rpcPassword || clearToken) {
+    if (secrets.unisatToken || secrets.rpcPassword || secrets.sendNodePassword || clearToken) {
       await this.saveSealed(CHAIN_SECRETS_KEY, secrets);
     } else {
       const key = await this.scanKey();
@@ -2518,6 +2525,7 @@ export class WalletCore {
           const hist = recordBroadcast(await this.loadHistory(), {
             txid,
             kind: "payjoin-sent",
+            net: this.net,
             amount: BigInt(s.amount || "0"),
             fee: 0n,
             feeRate: 0,
@@ -2645,6 +2653,8 @@ export class PrivateBit {
     setSharedChainNetwork(net);
     const old = this.current;
     if (old) {
+      // A held payment is only sent by the open chain's worker loop: send it now rather than leave it waiting unseen.
+      await old.sendAllDelayedNow().catch(() => undefined);
       await old.settle().catch(() => undefined);
       old.close();
       this.current = undefined;
@@ -2715,7 +2725,7 @@ export class PrivateBit {
   async state(): Promise<WalletState> {
     const core = await this.core();
     const st = await core.state();
-    return { ...st, wallets: await this.summaries() };
+    return { ...st, net: this.net, wallets: await this.summaries() };
   }
 
   async create(args: Parameters<WalletCore["create"]>[0]): Promise<string> {

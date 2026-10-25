@@ -55,6 +55,61 @@ export function parsePrice(body: unknown, now = Date.now()): Price {
   return { usd, at, fetchedAt: now };
 }
 
+export type PriceSource = "coingecko" | "mexc";
+export type PricePref = PriceSource | "off";
+export const PRICE_SOURCES: PricePref[] = ["coingecko", "mexc", "off"];
+export const PRICE_HOSTS: Record<PriceSource, string> = { coingecko: "api.coingecko.com", mexc: "api.mexc.com" };
+export type PricedAsset = { coingecko: string; mexc: string };
+export type SourcedPrice = Price & { source: PriceSource; asset: string };
+
+export function coingeckoUrl(id: string): string {
+  return `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(id)}&vs_currencies=usd&include_last_updated_at=true`;
+}
+export function mexcUrl(symbol: string): string {
+  return `https://api.mexc.com/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`;
+}
+
+/** CoinGecko answers `{ "<id>": { usd, last_updated_at } }`; an unknown id is `{}`. */
+export function parseCoingecko(body: unknown, id: string, now = Date.now()): Price {
+  const row = (body as Record<string, { usd?: unknown; last_updated_at?: unknown }> | null)?.[id];
+  const usd = row?.usd;
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0) throw new Error(`CoinGecko has no USD price for ${id}`);
+  const at = typeof row?.last_updated_at === "number" ? row.last_updated_at * 1000 : now;
+  return { usd, at, fetchedAt: now };
+}
+
+/** MEXC answers `{ symbol, price: "0.38" }` (USDT, read as USD); errors are `{ code, msg }`. */
+export function parseMexc(body: unknown, symbol: string, now = Date.now()): Price {
+  const b = body as { symbol?: unknown; price?: unknown; msg?: unknown } | null;
+  if (!b || b.symbol !== symbol) throw new Error(`MEXC has no price for ${symbol}${typeof b?.msg === "string" ? `: ${b.msg}` : ""}`);
+  const usd = Number(b.price);
+  if (!Number.isFinite(usd) || usd <= 0) throw new Error(`MEXC price for ${symbol} is not a number`);
+  return { usd, at: now, fetchedAt: now };
+}
+
+async function priceFrom(source: PriceSource, asset: PricedAsset, fetcher?: Fetcher): Promise<SourcedPrice> {
+  const url = source === "coingecko" ? coingeckoUrl(asset.coingecko) : mexcUrl(asset.mexc);
+  const res = await fetchVia(DIRECT, url, { headers: { accept: "application/json" } }, fetcher);
+  if (!res.ok) throw new Error(`${source === "coingecko" ? "CoinGecko" : "MEXC"} answered ${res.status}`);
+  const body = await res.json();
+  const p = source === "coingecko" ? parseCoingecko(body, asset.coingecko) : parseMexc(body, asset.mexc);
+  return { ...p, source, asset: source === "coingecko" ? asset.coingecko : asset.mexc };
+}
+
+/** The chosen source first; if it fails, the other one. Both failing throws the first error. */
+export async function getPriceWithFallback(pref: PriceSource, asset: PricedAsset, fetcher?: Fetcher): Promise<SourcedPrice> {
+  const order: PriceSource[] = pref === "mexc" ? ["mexc", "coingecko"] : ["coingecko", "mexc"];
+  let first: unknown;
+  for (const s of order) {
+    try {
+      return await priceFrom(s, asset, fetcher);
+    } catch (e) {
+      first ??= e;
+    }
+  }
+  throw first instanceof Error ? first : new Error("price unavailable");
+}
+
 export async function getPrice(route: RequestRoute = DIRECT, fetcher?: Fetcher): Promise<Price> {
   const res = await fetchVia(route, PRICE_URL, { headers: { accept: "application/json" } }, fetcher);
   if (!res.ok) throw new Error(`price ${res.status}`);

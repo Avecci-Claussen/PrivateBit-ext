@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, go, render, run, refresh, busy, err, toast } from "../app.ts";
 import { call, type CoinView, type OneTimeRecord, type Fees } from "../api.ts";
-import { html, I, codeHi, fb, fbShort, sats, mid, num, ntag, type Safe } from "../kit.ts";
+import { html, I, codeHi, fb, fbShort, sats, mid, num, ntag, type Safe, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { copyText } from "../copy.ts";
 import { qrSvg } from "../qr.ts";
@@ -55,7 +55,7 @@ screens.migrate = () => {
   ${pathPreview({ title: "Your old wallet", sub: "Reused address" }, { title: "Your receive code", sub: `${code.slice(0, 8)} \u2026 ${code.slice(-8)}` })}
   <ol class="steps">
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Code copied</p><p class="sd mono">${code.slice(0, 8)} \u2026 ${code.slice(-8)}</p></div></li>
-    <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Switch your old wallet to Fractal</p></div></li>
+    <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Switch your old wallet to ${CHAIN()}</p></div></li>
     <li class="step now"><span class="n">3</span><div><p class="st">Waiting for your coins…</p><p class="sd">Checked up to block ${num(S.b!.state.lastHeight ?? 0)}. Fractal blocks come every 30 seconds.</p></div></li>
     <li class="step todo"><span class="n">4</span><div><p class="st">Stop using the old address</p></div></li></ol>
   <div class="card flat pad-sm" role="status"><div class="row">${I("refresh-cw", "s16 spin")}<span class="small">Looking at new blocks as they arrive…</span></div></div>
@@ -89,7 +89,7 @@ screens.migrate = () => {
   ${pathPreview({ title: "Your old wallet", sub: "Reused address" }, { title: "One-time address", sub: o ? mid(o.address, 8, 6) : "Taproot, this move only" })}
   <div class="banner warn" role="note">${I("triangle-alert", "s16")}<div><span class="bt">One payment, then move it</span>Your old wallet and anyone reading the chain can see this address. It is not your receive code. When the coins arrive, move them into the receive code. That does not hide where they came from, so they stay labeled Linked.</div></div>
   ${o ? html`<div class="qr">${qrSvg(o.address, "QR code of your one-time address")}</div>` : ""}
-  <div class="codebox"><div class="row between">${ntag("Fractal one-time address")}<span class="cap">This move only</span></div><p class="code" aria-label="One-time address">${o ? codeHi(o.address) : ""}</p></div>
+  <div class="codebox"><div class="row between">${ntag(`${CHAIN_SHORT()} one-time address`)}<span class="cap">This move only</span></div><p class="code" aria-label="One-time address">${o ? codeHi(o.address) : ""}</p></div>
   <ul class="small" style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">
     <li>Send the whole amount in one payment. A second payment to this same address ties the two together. Both can still be moved.</li>
     <li>Made from your recovery words, so your backup already covers it.</li>
@@ -152,8 +152,8 @@ screens.migrate = () => {
   <div class="card pad-sm"><p class="strong">Where the coins should finish</p><p class="small">Under your receive code, the one that starts with <span class="mono">sp1</span>. If your old wallet can pay that code, send there once. If it cannot, PrivateBit gives you a one-time address. You send to that address once, then PrivateBit moves those coins into the receive code. That empties the one-time address. It is not used again.</p></div>
   ${pathPreview({ title: "Your old wallet", sub: "Reused address" }, { title: "Your receive code", sub: `${code.slice(0, 8)} \u2026 ${code.slice(-8)}` })}
   <ol class="steps">
-    <li class="step now"><span class="n">1</span><div><p class="st">Copy your PrivateBit receive code</p><p class="sd">It starts with sp1 and is for Fractal.</p></div></li>
-    <li class="step todo"><span class="n">2</span><div><p class="st">In your old wallet, switch to Fractal Bitcoin mainnet</p><p class="sd">Usually in its network menu.</p></div></li>
+    <li class="step now"><span class="n">1</span><div><p class="st">Copy your PrivateBit receive code</p><p class="sd">It starts with sp1 and is for ${CHAIN()}.</p></div></li>
+    <li class="step todo"><span class="n">2</span><div><p class="st">In your old wallet, switch to ${CHAIN()} mainnet</p><p class="sd">Usually in its network menu.</p></div></li>
     <li class="step todo"><span class="n">3</span><div><p class="st">Send once</p><p class="sd">Paste the code in your old wallet. If it refuses the code, use a one-time address and send the whole amount in one payment.</p></div></li>
     <li class="step todo"><span class="n">4</span><div><p class="st">Stop using the old address</p><p class="sd">Coins that came from it stay labeled Linked. A new move needs a new one-time address, after the previous one is empty.</p></div></li></ol>
   <div class="banner warn">${I("triangle-alert", "s16")}<div>Holding inscriptions or tokens on that address? Do not send everything. Move only plain FB, or ask about inscriptions first.</div></div>`,

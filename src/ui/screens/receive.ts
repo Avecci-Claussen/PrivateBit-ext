@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
 import { call, type SessionView, type CoinView } from "../api.ts";
-import { html, I, MARK, NETLOGO, codeHi, fbShort, fb, parseFb, left, when, type Safe } from "../kit.ts";
+import { html, I, MARK, NETLOGO, codeHi, fbShort, fb, parseFb, left, when, type Safe, UNIT, CHAIN, CHAIN_SHORT } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { ntag as ntagF } from "../kit.ts";
 import { usd } from "../derive.ts";
@@ -16,7 +16,7 @@ screens.receive = () => {
   const copied = S.f.copied === true;
   const main = html`
   <div class="qr">${qrSvg(code.toUpperCase(), "QR code of your receive code")}${qmark()}</div>
-  <div class="codebox"><div class="row between">${ntagF("Fractal receive code")}<span class="cap">Reusable</span></div><p class="code" aria-label="Receive code">${codeHi(code)}</p></div>
+  <div class="codebox"><div class="row between">${ntagF(`${CHAIN_SHORT()} receive code`)}<span class="cap">Reusable</span></div><p class="code" aria-label="Receive code">${codeHi(code)}</p></div>
   <div class="stack">${copied
     ? html`<p class="small"><strong>Check the first and last 8 characters</strong> after pasting: <span class="mono">${code.slice(0, 8)}</span> and <span class="mono">${code.slice(-8)}</span>.</p>`
     : html`<p class="small"><strong>Safe to share and reuse.</strong> Each payment to this code lands at a new address that only this wallet can find.</p>`}</div>`;
@@ -127,7 +127,7 @@ screens.paylink = () => {
     header: H,
     main: html`
   <div class="stack"><h2 style="font:var(--t-title)">Get paid with Payjoin</h2><p class="muted">For payments from another PrivateBit user. You add one of your coins to their payment, so nobody watching the chain can tell which coins belong to whom.</p></div>
-  <div class="field" data-enter="pj-create"><label class="label" for="amt">Amount <span class="optl">(optional)</span></label><div class="input-wrap"><input class="input mono" id="amt" data-f="pjAmt" data-live inputmode="decimal" autocomplete="off" value="${a}" placeholder="0.00" ${bad ? html`aria-invalid="true" aria-describedby="amt-e"` : html`aria-describedby="amt-h"`}><span class="unit">FB</span></div>
+  <div class="field" data-enter="pj-create"><label class="label" for="amt">Amount <span class="optl">(optional)</span></label><div class="input-wrap"><input class="input mono" id="amt" data-f="pjAmt" data-live inputmode="decimal" autocomplete="off" value="${a}" placeholder="0.00" ${bad ? html`aria-invalid="true" aria-describedby="amt-e"` : html`aria-describedby="amt-h"`}><span class="unit">${UNIT()}</span></div>
   ${bad ? html`<p class="err" id="amt-e" role="alert">${I("circle-alert", "s16")}<span>${sats === null ? "Enter an amount like 0.04, with up to 8 decimals." : "Minimum amount is 330 sats."}</span></p>` : html`<p class="help" id="amt-h">${sats && sats > 0n && usd(sats) ? `${usd(sats)}. ` : ""}Leave empty and they choose the amount.</p>`}</div>
   ${pathPreview({ title: "Them", sub: "Another PrivateBit user" }, { title: "You", sub: coin ? `Payjoin, you add ${fb(coin.value)}` : "Payjoin, you add one of your coins" })}
   ${coin ? html`<div class="card flat pad-sm"><div class="row">${I("lock-keyhole", "s16")}<span class="strong grow">Coin you will add</span><span class="amt">${fb(coin.value)}</span></div><p class="small muted">${coin.label ? `${coin.label}. ` : ""}It stays yours, set aside until the payment finishes or the link expires in 24 hours.</p></div>` : ""}
@@ -201,7 +201,7 @@ function progress(s: SessionView, H: Safe) {
     title: "Payment link",
     header: hdr({ title: "Payment link", net: true, right: html`<span class="badge">${I("loader-circle", "spin")}Working</span>` }),
     main: html`
-  <div class="hero-amt"><p class="cap">Incoming</p><p class="a">${amt ? fbShort(amt, { unit: false }) : "Payment"}${amt ? html`<span class="unit"> FB</span>` : ""}</p>${amt && usd(amt) ? html`<p class="fiat">${usd(amt)}</p>` : ""}</div>
+  <div class="hero-amt"><p class="cap">Incoming</p><p class="a">${amt ? fbShort(amt, { unit: false }) : "Payment"}${amt ? html`<span class="unit"> ${UNIT()}</span>` : ""}</p>${amt && usd(amt) ? html`<p class="fiat">${usd(amt)}</p>` : ""}</div>
   ${pathPreview({ title: "Them", sub: "They sent their part, encrypted" }, { title: "You", sub: "Your coin is added and signed" })}
   <ol class="steps" aria-label="Payment progress">
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Link shared</p><p class="sd">${when(s.createdAt)}</p></div></li>
@@ -337,7 +337,7 @@ function fullReceive(): Safe {
   const code = S.b!.state.receive ?? "";
   const s = liveReceive();
   const amt = s?.amount && s.amount !== "0" ? s.amount : undefined;
-  return html`<div class="topbar"><h1>Receive</h1><span class="cap row" style="gap:6px">${NETLOGO("fractal")}On Fractal Bitcoin</span></div>
+  return html`<div class="topbar"><h1>Receive</h1><span class="cap row" style="gap:6px">${NETLOGO()}On ${CHAIN()}</span></div>
   <div class="grid2">
     <section class="panel" aria-labelledby="rc-h"><div class="row between"><h2 id="rc-h">Your receive code</h2><span class="cap">Reusable</span></div>
       <div class="qr" style="width:216px;height:216px"><div style="width:192px;height:192px">${qrSvg(code.toUpperCase(), "QR code of your receive code")}</div>${qmark()}</div>

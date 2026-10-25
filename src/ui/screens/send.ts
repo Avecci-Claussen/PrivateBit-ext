@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast, code } from "../app.ts";
 import { call, type CoinView, type Fees, type PlanPayload, type SessionView } from "../api.ts";
-import { html, I, NETLOGO, fb, fbShort, sats, parseFb, mid, hm, left, when, ntag, type Safe } from "../kit.ts";
+import { html, I, raw, NETLOGO, fb, fbShort, sats, parseFb, mid, hm, left, when, ntag, type Safe, UNIT, CHAIN, CHAIN_SHORT, blockTimeText } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { usd, health } from "../derive.ts";
 import { classify, type Dest } from "../dest.ts";
@@ -71,7 +71,7 @@ function destField(d: Dest, errMsg?: string): Safe {
   const v = fv("to");
   const tag =
     d.kind === "sp"
-      ? html`<div class="row" style="flex-wrap:wrap">${ntag("Fractal receive code")}<span class="badge ok">${I("shield-check")}Private</span></div>`
+      ? html`<div class="row" style="flex-wrap:wrap">${ntag(`${CHAIN_SHORT()} receive code`)}<span class="badge ok">${I("shield-check")}Private</span></div>`
       : d.kind === "paylink"
         ? html`<div class="row" style="flex-wrap:wrap">${ntag("PrivateBit payment link")}<span class="badge ok">${I("route")}Payjoin</span></div>`
         : d.kind === "notpb"
@@ -213,6 +213,7 @@ actions.review = async () => {
     S.d.planChanged = undefined;
     S.d.planArgs = { destination: fv("to").trim(), amount: (amt.sats ?? 0n).toString(), feeRate: rate, coins: coinsArg, max: S.f.max === true ? true : undefined, kind: d.kind };
     S.f.ack = false;
+    S.f.ackMerge = false;
     S.busy = null;
     go("review");
   } catch (e) {
@@ -351,14 +352,14 @@ screens["send-fee"] = () => {
   <div class="fees" role="radiogroup" aria-label="Fee speed">${opt("slow")}${opt("normal")}${opt("fast")}</div>
   <div class="field"><label class="label" for="cf">Custom <span class="optl">(sat/vB)</span></label><div class="input-wrap"><input class="input mono" id="cf" data-f="feeCustom" data-live inputmode="decimal" autocomplete="off" placeholder="${String(minRate())}" value="${cv}" ${chk && !chk.ok ? html`aria-invalid="true" aria-describedby="cf-e"` : ""} data-act-focus="custom"><span class="unit">sat/vB</span></div>
   ${chk && !chk.ok ? html`<p class="err" id="cf-e" role="alert">${I("circle-alert", "s16")}<span>${chk.reason === "too-low" ? `Too low. Below ${minRate()} sat/vB most nodes will not relay it, so it may never confirm and your coins stay stuck until it drops out.` : chk.reason === "too-high" ? "That is far above every current rate. Check the number." : "Enter a number, such as the Normal rate."}</span></p>` : ""}</div>
-  ${same && !cv ? html`<div class="banner" role="status">${I("info", "s16")}<div><span class="bt">Every speed is ${f!.normal} sat/vB right now</span>Blocks on Fractal are not full, so Normal gets in as fast as Fast.</div></div>` : ""}
+  ${same && !cv ? html`<div class="banner" role="status">${I("info", "s16")}<div><span class="bt">Every speed is ${f!.normal} sat/vB right now</span>Blocks on ${CHAIN()} are not full right now, so Normal gets in as fast as Fast.</div></div>` : ""}
   <div class="card"><div class="kv">
     ${tooLow
       ? html`<div class="r"><span class="k">Fee at ${cn} sat/vB</span><span class="v mono">${sats(feeAt(cn))}</span></div><div class="r"><span class="k">Lowest that relays</span><span class="v"><span class="mono">${minRate()} sat/vB, ${sats(feeAt(minRate()))}</span><span class="cap">Minimum rate from the service</span></span></div>`
       : html`<div class="r"><span class="k">This payment</span><span class="v mono">${plan ? "" : "About "}${vb} vB</span></div>
     ${rate !== null ? html`<div class="r"><span class="k">Fee at ${rate} sat/vB</span><span class="v"><span class="mono">${sats(feeAt(rate))}</span>${usd(feeAt(rate), { approx: false }) ? html`<span class="fiat">${usd(feeAt(rate), { approx: false })}</span>` : ""}</span></div>` : ""}
     ${f ? html`<div class="r"><span class="k">Rates from</span><span class="v">${f.source === "node" ? "Your node" : "Block data service"}, ${hm(f.updatedAt ?? f.fetchedAt)}</span></div>` : ""}`}</div></div>
-  <p class="small muted">${f?.source === "node" ? "Your node gives a rate for each speed, not a time." : "The block data service gives a rate for each speed, not a time."} Fractal makes a block about every 30 seconds. The fee does not change your privacy.</p>`,
+  <p class="small muted">${f?.source === "node" ? "Your node gives a rate for each speed, not a time." : "The block data service gives a rate for each speed, not a time."} ${blockTimeText()} The fee does not change your privacy.</p>`,
     foot: tooLow
       ? html`<button class="btn btn-primary btn-block" type="button" disabled aria-disabled="true">Use ${cn} sat/vB</button>${f ? html`<button class="btn btn-ghost btn-block" type="button" data-act="fee-use" data-v="slow">Use Slow, ${f.slow} sat/vB</button>` : ""}`
       : html`<button class="btn btn-primary btn-block" type="button" data-act="fee-use" ${rate === null ? html`aria-disabled="true" disabled` : ""}>${rate === null ? "Choose a rate" : `Use ${feeName()}, ${sats(feeAt(rate))}`}</button>`,
@@ -412,8 +413,9 @@ screens.review = () => {
   const to = classify(a.destination);
   const who = lbl || (to.kind === "sp" ? "them" : "");
   const inputsTotal = p.preview.inputs.reduce((s, x) => s + BigInt(x.value), 0n);
-  const rate = a.feeRate;
-  const modeTxt = `${feeName()}, ${rate} sat/vB${feeMode() !== "custom" ? `, ${TARGET[feeMode()]!.toLowerCase()}` : ""}`;
+  const rate = p.feeRate ?? a.feeRate;
+  const nudged = p.feeRate !== undefined && p.feeRate !== a.feeRate;
+  const modeTxt = `${feeName()}, ${rate} sat/vB${nudged ? " (moved slightly)" : ""}${feeMode() !== "custom" ? `, ${TARGET[feeMode()]!.toLowerCase()}` : ""}`;
   const legacy = to.kind === "address" || to.kind === "notpb";
   const pj = to.kind === "paylink";
   const nIn = p.inputs.length;
@@ -421,36 +423,56 @@ screens.review = () => {
     <p class="io-h">Goes to</p><div class="io">${ior(lbl || (pj ? "Payment link" : "Them"), "ok", mid(to.kind === "none" || to.kind === "error" ? "" : to.address, 8, 5), fb(amt))}${change > 0n ? ior("Change", "", "Back to you, private", fb(change)) : ""}</div>
     <p class="io-h">Fee</p><div class="io-row"><span class="badge">Miners</span><span class="code">${rate} sat/vB, ${p.vbytes} vB</span><span class="amt">${sats(fee)}</span></div>
     ${to.kind === "sp" ? html`<p class="cap">Both outputs look like ordinary Taproot outputs. Nobody can tell which one is change.</p>` : ""}`;
-  const toRow = html`<div class="r"><span class="k">To</span><span class="v"><span class="mono">${to.kind === "none" || to.kind === "error" ? "" : mid(to.address, 12, 8)}</span>${to.kind === "sp" ? ntag("Fractal receive code") : pj ? ntag("Payment link") : html`<span class="badge">Regular address</span>`}</span></div>`;
+  const toRow = html`<div class="r"><span class="k">To</span><span class="v"><span class="mono">${to.kind === "none" || to.kind === "error" ? "" : mid(to.address, 12, 8)}</span>${to.kind === "sp" ? ntag(`${CHAIN_SHORT()} receive code`) : pj ? ntag("Payment link") : html`<span class="badge">Regular address</span>`}</span></div>`;
   const privRow = pj
     ? html`<div class="r"><span class="k">Privacy</span><span class="v"><span class="badge ok">${I("route")}Payjoin</span><span class="cap">They add a coin. Ownership is hidden.</span></span></div>`
     : legacy
       ? html`<div class="r"><span class="k">Privacy</span><span class="v"><span class="badge warn">${I("triangle-alert")}Less private</span><span class="cap">Visible to anyone who knows this address</span></span></div>`
       : html`<div class="r"><span class="k">Privacy</span><span class="v"><span class="badge ok">${I("shield-check")}Private</span><span class="cap">New address only ${who === "them" ? "they" : who} can find</span></span></div>`;
   const changed = S.d.planChanged as string[] | undefined;
+  const groups = p.inputLabels ?? [];
+  const merges = !pj && groups.length > 1;
+  const named = groups.map((g) => (g.label ? `"${g.label}"` : "no label"));
+  const mergeBox = merges
+    ? html`<div class="banner warn" role="alert" id="merge-warn">${I("triangle-alert", "s16")}<div><span class="bt">This payment spends coins with different labels together</span>Anyone looking at the transaction can see these coins have one owner: ${named.join(", ")}. If the labels mean different people know about them, they may learn about each other.
+      <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" type="button" data-act="merge-back">${I("coins", "s16")}Change coins</button></div>
+      <label class="check" style="margin-top:8px"><input type="checkbox" data-f="ackMerge" ${S.f.ackMerge ? html`checked` : ""}> <span>Continue and spend them together</span></label></div></div>`
+    : "";
+  const delay = S.b?.prefs.sendDelay ?? "off";
+  const delayTxt: Record<string, string> = { "1m": "1 minute", "10m": "10 minutes", "1h": "1 hour" };
+  const delayBox = !pj && delay !== "off"
+    ? html`<div class="banner" role="status">${I("timer", "s16")}<div><span class="bt">Sent at a random time within ${delayTxt[delay]}</span>After you confirm, the signed payment waits on this computer, encrypted. Until it goes out you can send it now or cancel it, and nothing reaches the network.</div></div>`
+    : "";
   const main = html`
   ${changed?.length ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">Nothing was sent. The payment changed since you reviewed it</span>${changed.join(" ")} Check it again below before you confirm.</div></div>` : ""}
-  <div class="hero-amt"><p class="cap">${pj ? "You pay" : "You send"}</p><p class="a">${fbShort(amt, { unit: false })}<span class="unit"> FB</span></p>${usd(amt) || (lbl && !legacy) ? html`<p class="fiat">${usd(amt)}${lbl && !legacy ? ` to ${lbl}` : ""}${pj ? " with a PrivateBit payment link" : ""}</p>` : ""}</div>
+  <div class="hero-amt"><p class="cap">${pj ? "You pay" : "You send"}</p><p class="a">${fbShort(amt, { unit: false })}<span class="unit"> ${UNIT()}</span></p>${usd(amt) || (lbl && !legacy) ? html`<p class="fiat">${usd(amt)}${lbl && !legacy ? ` to ${lbl}` : ""}${pj ? " with a PrivateBit payment link" : ""}</p>` : ""}</div>
   ${pathPreview(fromLeg(), toLeg(to, lbl))}
   <div class="card"><div class="kv">
     ${toRow}${privRow}
     <div class="r"><span class="k">Network fee</span><span class="v"><span class="mono">${sats(fee)}</span><span class="cap">${pj ? "You pay the fee for your part" : modeTxt}</span>${pj ? "" : html`<button class="link small" type="button" data-act="go" data-to="send-fee">Change</button>`}</span></div>
     ${pj ? "" : html`<div class="r"><span class="k">Pay from</span><span class="v"><span>${nIn} ${nIn === 1 ? "coin" : "coins"}, ${fbShort(inputsTotal)}</span><span class="cap">${coinMode() === "choose" ? "Chosen by you" : "Automatic, largest first"}</span></span></div>`}
-    ${change > 0n ? html`<div class="r"><span class="k">Back to you</span><span class="v">${legacy ? html`<span class="mono">${fb(change)}</span><span class="cap">Private change</span>` : html`<span class="mono">${fb(change)}</span>`}</span></div>` : ""}
+    ${change > 0n ? html`<div class="r"><span class="k">Back to you</span><span class="v"><span class="mono">${fb(change)}</span><span class="cap">${p.changeTypeDiffers ? "Kept as a Taproot coin, the only kind this wallet holds" : legacy ? "Private change, at a random position" : "Looks like a payment, at a random position"}</span></span></div>` : ""}
+    ${p.changeless ? html`<div class="r" id="nochange"><span class="k">No change</span><span class="v"><span>${sats(p.changeless.extra)} extra go to the network fee</span><span class="cap">Too small to keep as a coin. It would cost about as much to spend later.</span></span></div>` : ""}
     <div class="r total"><span class="k">Total leaving</span><span class="v">${fb(amt + fee)}</span></div></div></div>
   ${pj
     ? html`<div class="banner">${I("info", "s16")}<div><span class="bt">What happens next</span>Your signed payment goes to the other person, encrypted. When they add their coin, PrivateBit checks it and broadcasts. If they never answer, nothing is broadcast.</div></div>`
     : html`<details class="card pad-sm" ${S.f.det ? html`open` : ""}><summary class="small strong" style="cursor:pointer" data-act="toggle-k" data-k="det">Transaction details</summary><div class="stack" style="margin-top:12px">${details}<button class="btn btn-ghost btn-sm" type="button" data-act="copy-psbt" style="align-self:flex-start">${I("copy", "s16")}Copy PSBT</button></div></details>`}
+  ${mergeBox}${delayBox}
   ${legacy ? html`<label class="check"><input type="checkbox" data-f="ack" ${S.f.ack ? html`checked` : ""}> <span>I understand this payment can be linked to this address.</span></label>` : ""}
   ${changed?.length ? html`<label class="check"><input type="checkbox" data-f="ackChange" ${S.f.ackChange ? html`checked` : ""}> <span>I checked the new amounts and coins.</span></label>` : ""}
   ${p.preview.warnings.length ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div>${p.preview.warnings.join(" ")}</div></div>` : ""}`;
-  const can = (!legacy || S.f.ack === true) && (!changed?.length || S.f.ackChange === true);
+  const can = (!legacy || S.f.ack === true) && (!changed?.length || S.f.ackChange === true) && (!merges || S.f.ackMerge === true);
   return {
     title: "Review",
     header: hdr({ title: "Review", net: true }),
     main,
     foot: { cls: "row", html: html`<button class="btn btn-secondary" type="button" data-act="back">Edit</button><button class="btn btn-primary" type="button" data-act="sheet" data-sheet="confirm" ${can ? "" : html`disabled aria-disabled="true"`}>Confirm</button>` },
   };
+};
+actions["merge-back"] = () => {
+  S.f.coinMode = "choose";
+  S.f.ackMerge = false;
+  go("send-coins");
 };
 actions["toggle-k"] = (el) => {
   S.f[el.dataset.k!] = !S.f[el.dataset.k!];
@@ -475,8 +497,8 @@ sheets.confirm = () => {
   return html`<div class="scrim" data-act="sheet-close" aria-hidden="true"></div><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cf-h"><span class="grab" aria-hidden="true"></span>
   <div class="sheet-h"><h2 id="cf-h">Send ${fbShort(amt)}${lbl ? ` to ${lbl}` : ""}?</h2></div>
   ${pathPreview(fromLeg(), toLeg(to, lbl))}
-  <div class="kv"><div class="r"><span class="k">Network</span><span class="v">${ntag("Fractal Bitcoin")}</span></div><div class="r"><span class="k">${kindName}</span><span class="v mono">${address.slice(0, 8)} \u2026 ${address.slice(-8)}</span></div><div class="r total"><span class="k">Total</span><span class="v">${fb(amt + fee)}${usd(amt + fee) ? html`<span class="fiat">${usd(amt + fee)}</span>` : ""}</span></div></div>
-  <p class="small muted">Payments on Fractal cannot be reversed. Check the first and last characters${lbl ? ` with ${lbl}` : ""}.</p>
+  <div class="kv"><div class="r"><span class="k">Network</span><span class="v">${ntag(CHAIN())}</span></div><div class="r"><span class="k">${kindName}</span><span class="v mono">${address.slice(0, 8)} \u2026 ${address.slice(-8)}</span></div><div class="r total"><span class="k">Total</span><span class="v">${fb(amt + fee)}${usd(amt + fee) ? html`<span class="fiat">${usd(amt + fee)}</span>` : ""}</span></div></div>
+  <p class="small muted">Payments on ${CHAIN()} cannot be reversed. Check the first and last characters${lbl ? ` with ${lbl}` : ""}.</p>
   <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="broadcast">Send ${fbShort(amt)}</button><button class="btn btn-ghost btn-block" type="button" data-act="sheet-close">Cancel</button></div></div>`;
 };
 
@@ -486,7 +508,7 @@ actions.broadcast = async () => {
   S.sheet = null;
   go("sending", {}, { replace: true });
   try {
-    const r = await call<{ txid?: string; pending?: boolean; fee: string; changed?: boolean; plan?: PlanPayload }>({
+    const r = await call<{ txid?: string; pending?: boolean; fee: string; changed?: boolean; plan?: PlanPayload; delayed?: { id: string; sendAt: number } }>({
       type: "BROADCAST",
       planId: p.planId,
       intent: a.kind === "paylink" ? "payjoin" : "simple-send",
@@ -495,6 +517,7 @@ actions.broadcast = async () => {
       feeRate: a.feeRate,
       coins: a.coins,
       max: a.max,
+      seed: p.seed,
       label: fv("lbl") || undefined,
     });
     if (r.changed && r.plan) {
@@ -503,8 +526,16 @@ actions.broadcast = async () => {
       S.d.plan = r.plan;
       S.f.ack = false;
       S.f.ackChange = false;
+      S.f.ackMerge = false;
       await refresh();
       go("review", {}, { replace: true });
+      return;
+    }
+    if (r.delayed) {
+      S.d.held = { id: r.delayed.id, sendAt: r.delayed.sendAt, amount: p.amount, label: fv("lbl") };
+      clearForm();
+      await refresh();
+      go("held", {}, { replace: true });
       return;
     }
     S.d.planChanged = undefined;
@@ -525,7 +556,7 @@ actions.broadcast = async () => {
   }
 };
 function clearForm(): void {
-  for (const k of ["to", "amt", "lbl", "max", "coinMode", "coinsSel", "feeCustom", "feeMode", "ack", "ackChange", "det"]) delete S.f[k];
+  for (const k of ["to", "amt", "lbl", "max", "coinMode", "coinsSel", "feeCustom", "feeMode", "ack", "ackChange", "ackMerge", "det"]) delete S.f[k];
   S.d.plan = undefined;
   S.d.planChanged = undefined;
   S.d.max = undefined;
@@ -538,7 +569,7 @@ screens.sending = () => {
   return {
     title: "Sending",
     header: hdr({ title: "Sending", back: false, net: true }),
-    main: html`<div class="state"><div class="big neutral">${I("loader-circle", "spin")}</div><h1>Sending ${p ? fbShort(p.amount) : ""}…</h1><p>${a?.kind === "paylink" ? "Signing on this computer and sending your part to the other person, encrypted." : S.b?.state.chain.kind === "core" ? "Signing on this computer and broadcasting through your node." : "Signing on this computer and broadcasting through the block data service."}</p></div>
+    main: html`<div class="state"><div class="big neutral">${I("loader-circle", "spin")}</div><h1>Sending ${p ? fbShort(p.amount) : ""}…</h1><p>${a?.kind === "paylink" ? "Signing on this computer and sending your part to the other person, encrypted." : S.b?.state.chain.kind === "core" || S.b?.state.chain.sendVia === "node" ? "Signing on this computer and broadcasting through your node." : "Signing on this computer and broadcasting through the public service. It sees your IP address with the payment."}</p></div>
   ${pathPreview(fromLeg(), toLeg(to))}
   ${p ? html`<div class="card"><div class="kv"><div class="r"><span class="k">Amount</span><span class="v mono">${fb(p.amount)}</span></div></div></div>` : ""}`,
   };
@@ -553,7 +584,7 @@ screens.sent = () => {
     title: "Sent",
     header: hdr({ title: "Sent", back: false, net: true, close: true }),
     main: html`
-  <div class="state"><div class="big">${I("circle-check")}</div><h1>${s ? fbShort(s.amount) : ""} sent${s?.label ? ` to ${s.label}` : ""}</h1><p>Fractal makes a block about every 30 seconds.</p></div>
+  <div class="state"><div class="big">${I("circle-check")}</div><h1>${s ? fbShort(s.amount) : ""} sent${s?.label ? ` to ${s.label}` : ""}</h1><p>${blockTimeText()}</p></div>
   ${pathPreview(from, to)}
   <div class="card"><div class="kv">
     ${s?.txid ? txidLine(s.txid) : ""}
@@ -624,7 +655,7 @@ screens["pj-waiting"] = () => {
     title: "Payjoin",
     header: hdr({ title: "Payjoin", back: false, net: true, close: true }),
     main: html`
-  <div class="hero-amt"><p class="cap">Paying with Payjoin</p><p class="a">${s?.amount ? fbShort(s.amount, { unit: false }) : ""}<span class="unit"> FB</span></p></div>
+  <div class="hero-amt"><p class="cap">Paying with Payjoin</p><p class="a">${s?.amount ? fbShort(s.amount, { unit: false }) : ""}<span class="unit"> ${UNIT()}</span></p></div>
   ${pathPreview({ title: "Your coins" }, s?.destination ? toLeg(classify(s.destination)) : { title: "Their payment link" })}
   <ol class="steps">
     <li class="step done"><span class="n">${I("check", "s16")}</span><div><p class="st">Your part sent, encrypted</p><p class="sd">${s ? when(s.createdAt) : ""}</p></div></li>
@@ -702,7 +733,7 @@ function fullSend(): Safe {
   const cv = fv("feeCustom");
   const chk = cv ? checkCustomFee(Number(cv), minRate(), f?.fast ?? 1) : null;
   const lbl = fv("lbl");
-  return html`<div class="topbar"><h1>Send</h1><span class="cap row" style="gap:6px">${NETLOGO("fractal")}On Fractal Bitcoin</span></div>
+  return html`<div class="topbar"><h1>Send</h1><span class="cap row" style="gap:6px">${NETLOGO()}On ${CHAIN()}</span></div>
   ${health() === "offline" ? html`<div class="banner danger">${I("unplug", "s16")}<div>Sending is paused until the block data service answers again.</div></div>` : ""}
   <div class="grid2 g-main">
     <div class="stack" style="gap:var(--s-6)">
@@ -719,7 +750,7 @@ function fullSend(): Safe {
     </div>
     <aside class="panel" aria-labelledby="sum-h" style="position:sticky;top:var(--s-6)"><h2 id="sum-h">Summary</h2>
       ${sendPath(d)}
-      <div class="hero-amt" style="align-items:flex-start;text-align:left"><p class="a">${amt.sats !== null && !amt.err ? fbShort(amt.sats, { unit: false }) : "0"}<span class="unit"> FB</span></p>${amt.sats && usd(amt.sats) ? html`<p class="fiat">${usd(amt.sats)}${lbl ? ` to ${lbl}` : ""}</p>` : ""}</div>
+      <div class="hero-amt" style="align-items:flex-start;text-align:left"><p class="a">${amt.sats !== null && !amt.err ? fbShort(amt.sats, { unit: false }) : "0"}<span class="unit"> ${UNIT()}</span></p>${amt.sats && usd(amt.sats) ? html`<p class="fiat">${usd(amt.sats)}${lbl ? ` to ${lbl}` : ""}</p>` : ""}</div>
       <div class="kv">
         <div class="r"><span class="k">Privacy</span><span class="v">${d.kind === "sp" ? html`<span class="badge ok">${I("shield-check")}Private</span><span class="cap">New address only ${lbl || "they"} can find</span>` : d.kind === "paylink" ? html`<span class="badge ok">${I("route")}Payjoin</span>` : d.kind === "address" || d.kind === "notpb" ? html`<span class="badge warn">${I("triangle-alert")}Less private</span>` : html`<span class="muted">Paste a destination</span>`}</span></div>
         <div class="r"><span class="k">Pay from</span><span class="v">${coinMode() === "auto" ? "Automatic, largest first" : `${sel.length} ${sel.length === 1 ? "coin" : "coins"}`}</span></div>
@@ -737,3 +768,62 @@ actions["only-private"] = () => {
 
 void run;
 void err;
+
+/* ---------- held payment ("Delay sending by a random time") ---------- */
+
+export function waitText(ms: number): string {
+  if (ms <= 0) return "any moment now";
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return `in ${s} ${s === 1 ? "second" : "seconds"}`;
+  const m = Math.ceil(s / 60);
+  return `in about ${m} ${m === 1 ? "minute" : "minutes"}`;
+}
+
+/** Card for a payment waiting to go out. Used on the held screen and on the wallet overview. */
+export function heldCard(d: NonNullable<NonNullable<typeof S.b>["delayed"]>[number]): Safe {
+  if (d.status === "failed") {
+    return html`<div class="card pad-sm" role="status" data-held="${d.id}"><div class="row between" style="gap:12px;flex-wrap:wrap"><div class="stack" style="gap:4px;min-width:0"><span class="badge danger">${I("circle-x")}Not sent</span><span class="strong">${fbShort(d.amount)}${d.label ? ` to ${d.label}` : ""}</span><span class="small muted" style="overflow-wrap:anywhere">The network refused it: ${d.error ?? "unknown reason"}. Your coins were not spent.</span></div>
+    <button class="btn btn-secondary btn-sm" type="button" data-act="held-dismiss" data-id="${d.id}">Dismiss</button></div></div>`;
+  }
+  const left = d.sendAt - Date.now();
+  return html`<div class="card pad-sm" role="status" data-held="${d.id}"><div class="stack" style="gap:8px"><div class="row" style="gap:8px;flex-wrap:wrap"><span class="badge warn">${I("timer")}Waiting to send</span><span class="small muted">Goes out ${waitText(left)}</span></div>
+    <span class="strong">${fbShort(d.amount)}${d.label ? ` to ${d.label}` : ""}</span>
+    <span class="small muted">Signed and kept on this computer, encrypted. Nothing has reached the network, so cancelling is safe.</span>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm" type="button" data-act="held-now" data-id="${d.id}" ${busy("held") ? raw('aria-disabled="true"') : ""}>Send now</button><button class="btn btn-secondary btn-sm" type="button" data-act="held-cancel" data-id="${d.id}" ${busy("held") ? raw('aria-disabled="true"') : ""}>Cancel</button></div></div></div>`;
+}
+
+screens.held = () => {
+  const h = S.d.held as { id: string; sendAt: number; amount: string; label?: string } | undefined;
+  const d = (S.b?.delayed ?? []).find((x) => x.id === h?.id);
+  const gone = !d;
+  return {
+    title: "Waiting to send",
+    header: hdr({ title: "Waiting to send", back: false, net: true, close: true }),
+    main: gone
+      ? html`<div class="state"><div class="big">${I("circle-check")}</div><h1>${h ? fbShort(h.amount) : ""} sent</h1><p>It went out. You find it in Activity. ${blockTimeText()}</p></div>`
+      : html`<div class="state"><div class="big neutral">${I("timer")}</div><h1>${fbShort(d.amount)} waits to be sent</h1><p>It goes out ${waitText(d.sendAt - Date.now())}, even if you close this window or lock.</p></div>${heldCard(d)}`,
+  };
+};
+
+actions["held-now"] = (el) => {
+  const id = el.dataset.id!;
+  void run("held", async () => {
+    const r = await call<{ sent: string[]; failed: string[]; bundle: NonNullable<typeof S.b> }>({ type: "DELAYED_SEND_NOW", id });
+    S.b = r.bundle;
+    toast(r.sent.length ? "Sent" : r.failed.length ? "The network refused it" : "Could not reach the network. It stays waiting.");
+  });
+};
+actions["held-cancel"] = (el) => {
+  const id = el.dataset.id!;
+  void run("held", async () => {
+    S.b = await call({ type: "DELAYED_CANCEL", id });
+    toast("Cancelled. Nothing was sent.");
+    if (S.route === "held") go("home", {}, { replace: true });
+  });
+};
+actions["held-dismiss"] = (el) => {
+  const id = el.dataset.id!;
+  void run("held", async () => {
+    S.b = await call({ type: "DELAYED_DISMISS", id });
+  });
+};

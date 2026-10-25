@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
 import { call, type ChainConfig, type Prefs } from "../api.ts";
-import { html, I, NETLOGO, num, hm, type Safe } from "../kit.ts";
+import { html, I, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { hdr, tabs, mailboxHost } from "../chrome.ts";
 import { DEFAULT_BIRTHDAY, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
 const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
@@ -77,7 +77,7 @@ screens.settings = () => {
   <h1 style="font:var(--t-title)">Settings</h1>
   <div class="list">
   ${row("wallet", "Wallets", (() => { const n = (S.b!.state.wallets ?? []).length || 1; return `${n} ${n === 1 ? "wallet" : "wallets"}, ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "Wallet"} open`; })(), "wallets")}
-  ${row("blocks", "Network and data source", c.kind === "core" ? "Fractal, your own node" : "Fractal, public block data service", "set-network")}
+  ${row("blocks", "Network and data source", c.kind === "core" ? `${CHAIN_SHORT()}, your own node` : `${CHAIN_SHORT()}, public block data service`, "set-network")}
   ${row("sun", "Appearance", themeSummary(), "set-appearance")}
   ${row("eye-off", "Privacy", pr.usd ? "USD price, hide balance, explorer" : "USD price off, hide balance, explorer", "set-privacy")}
   ${row("route", "Payment links", `${mailboxHost()} through a relay`, "set-payjoin")}
@@ -103,10 +103,10 @@ loaders["set-network"] = () => {
 };
 function networkForm(): Safe {
   const own = fv("src", chain().kind === "core" ? "core" : "service") === "core";
-  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("fractal", "lg")}<span class="body grow"><span class="strong" style="display:block">Fractal Bitcoin</span><span class="small muted">Mainnet. PrivateBit works on Fractal only.</span></span></div></div>
+  return html`<div class="card flat pad-sm"><div class="row">${NETLOGO("current", "lg")}<span class="body grow"><span class="strong" style="display:block">${CHAIN()}</span><span class="small muted">Mainnet. Switch chains with the chip at the top.</span></span></div></div>
   <fieldset class="field" style="border:0;padding:0;margin:0"><legend class="label" style="margin-bottom:6px">Where block data comes from</legend><div class="opt-list" role="radiogroup">
     <button class="opt" role="radio" aria-checked="${String(!own)}" type="button" data-act="set" data-k="src" data-v="service"><span class="body"><span class="t">Public block data service</span><span class="d">Easiest. The service sees your IP, the blocks and fee rates you ask for, and the payments you broadcast. It is not given your receive code.</span></span>${!own ? I("check") : ""}</button>
-    <button class="opt" role="radio" aria-checked="${String(own)}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own Fractal node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
+    <button class="opt" role="radio" aria-checked="${String(own)}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own ${CHAIN_SHORT()} node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
   ${own
     ? html`<button class="rowlink" type="button" data-act="go" data-to="set-node"><span class="body"><span class="t">Node settings</span><span class="d">${chain().kind === "core" ? chain().url : "Not set up yet"}</span></span><span class="v">${I("chevron-right", "s16")}</span></button>`
     : html`<div class="field" data-enter="net-save"><label class="label" for="tok">Data service API key <span class="optl">(optional)</span></label><input class="input" id="tok" data-f="tok" type="password" autocomplete="off" value="${fv("tok")}" aria-describedby="tok-h"><p class="help" id="tok-h">Stored encrypted on this computer only. Without a key the service often limits requests. Leave empty to use it without one.</p></div>`}
@@ -169,8 +169,8 @@ screens["set-node"] = () => {
     /* typing */
   }
   return {
-    title: "My own Fractal node",
-    header: hdr({ title: "My own Fractal node" }),
+    title: `My own ${CHAIN_SHORT()} node`,
+    header: hdr({ title: `My own ${CHAIN_SHORT()} node` }),
     main: html`
   <div class="field"><label class="label" for="u">Node RPC URL</label><input class="input mono" id="u" data-f="nu" data-live autocomplete="off" placeholder="http://127.0.0.1:8332" value="${fv("nu")}"></div>
   <div class="field"><label class="label" for="ru">RPC user</label><input class="input" id="ru" data-f="nru" autocomplete="off" value="${fv("nru")}"></div>
@@ -244,7 +244,7 @@ screens["set-price"] = () => {
     main: html`
   <div class="card"><div class="kv">
     <div class="r"><span class="k">Source</span><span class="v"><span class="mono">${PRICE_HOST}</span></span></div>
-    <div class="r"><span class="k">Asks for</span><span class="v">FB price in USD, nothing else</span></div>
+    <div class="r"><span class="k">Asks for</span><span class="v">${UNIT()} price in USD, nothing else</span></div>
     <div class="r"><span class="k">How often</span><span class="v">Every 10 minutes while unlocked</span></div>
     <div class="r"><span class="k">Route</span><span class="v">Direct</span></div>
     <div class="r"><span class="k">Last price</span><span class="v">${pc?.usd && pc.fetchedAt ? html`<span class="mono">$${pc.usd.toFixed(4)}</span><span class="cap">${p.kind === "stale" ? "Not updated since " : "Today, "}${hm(pc.fetchedAt)}</span>` : html`<span class="muted">${prefs().usd ? "None yet" : "Off"}</span>`}</span></div></div></div>

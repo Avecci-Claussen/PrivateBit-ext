@@ -41,7 +41,7 @@ screens.welcome = () => ({
   ${MARK(64)}
   <div class="stack-3">
     <h1 style="font:var(--t-display);letter-spacing:var(--track-tight)">PrivateBit</h1>
-    <p style="font:var(--t-body);color:var(--c-fg2);max-width:290px">A Fractal Bitcoin wallet with one reusable receive code. Every payment lands at a new address only you can find.</p>
+    <p style="font:var(--t-body);color:var(--c-fg2);max-width:290px">A Bitcoin and Fractal Bitcoin wallet with one reusable receive code. Every payment lands at a new address only you can find.</p>
   </div>
   ${S.b?.state.hasBackup ? html`<div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">A previous wallet is still on this computer</span>Reloading the extension does not delete it. Recover it instead of creating a new one.</div></div>` : ""}
   <ul class="stack" style="list-style:none;margin:0;padding:0">
@@ -238,7 +238,7 @@ screens.ready = () => {
     solo: true,
     main: html`
   <div class="state"><div class="big">${I("circle-check")}</div><h1>Your wallet is ready</h1><p>This is your receive code. Share it with anyone. Each payment arrives at a new, unlinkable address.</p></div>
-  <div class="codebox"><div class="row between"><span class="ntag">${NETLOGO("fractal")}Fractal code</span><button class="btn btn-ghost btn-sm" type="button" data-act="copy-code">${I("copy", "s16")}Copy</button></div><p class="code">${codeHi(code, 8, 8)}</p></div>
+  <div class="codebox"><div class="row between"><span class="ntag">${NETLOGO()}Receive code</span><button class="btn btn-ghost btn-sm" type="button" data-act="copy-code">${I("copy", "s16")}Copy</button></div><p class="code">${codeHi(code, 8, 8)}</p></div>
   <button class="card pad-sm" type="button" data-act="go" data-to="migrate" style="flex-direction:row;align-items:center;text-align:left;color:inherit;font:inherit;width:100%;cursor:pointer"><span class="ico">${I("arrow-right-left")}</span><span class="grow"><span class="strong" style="display:block">Moving coins from another wallet?</span><span class="small muted">Send them to this code once, then stop using the old address.</span></span>${I("chevron-right")}</button>`,
     foot: { cls: "plain", html: html`<button class="btn btn-primary btn-block" type="button" data-act="open-wallet">Open wallet</button>` },
   };
@@ -318,7 +318,7 @@ screens.import = () => {
     ${custom ? html`<div class="field" style="margin-top:8px"><label class="label" for="bd">Block height</label><input class="input mono" id="bd" data-f="bd" data-live inputmode="numeric" placeholder="${num(tip)}" value="${fv("bd")}" ${err("bd") ? html`aria-invalid="true" aria-describedby="bd-e"` : ""}>${err("bd") ? html`<p class="err" id="bd-e" role="alert">${I("circle-alert", "s16")}<span>${err("bd")}</span></p>` : html`<p class="help">A lower number finds older coins and takes longer. The scan starts as soon as this wallet is open.</p>`}</div>` : ""}</fieldset>
   <div class="field"><label class="label" for="pp">Extra passphrase <span class="optl">(only if this wallet has one)</span></label><input class="input" id="pp" data-f="pp" type="password" autocomplete="off" value="${fv("pp")}" aria-describedby="pp-h"><p class="help" id="pp-h">This is not the password you are about to choose. Leave it empty if you never set one. A wrong passphrase opens a different, empty wallet.</p></div>
   <div class="field"><label class="label" for="wname">Name <span class="optl">(optional)</span></label><input class="input" id="wname" data-f="wname" autocomplete="off" value="${fv("wname")}" placeholder="Wallet"></div>
-  <div class="banner">${I("info", "s16")}<div>These words can come from any BIP39 wallet. PrivateBit derives its own Fractal keys from them, so addresses from the old wallet do not appear here.</div></div>`,
+  <div class="banner">${I("info", "s16")}<div>These words can come from any BIP39 wallet. PrivateBit derives its own Silent Payment keys from them, so addresses from the old wallet do not appear here.</div></div>`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="import-continue">Continue to password</button>`,
   };
 };
@@ -399,7 +399,7 @@ screens.unlock = () => {
   <div class="unlock-hero"><h1>${active && wallets.length > 1 ? `Unlock ${active.name}` : "Unlock your wallet"}</h1><p class="muted">Your balance, codes and payment links stay sealed until you do. The password is the one for this computer, not the extra passphrase.</p></div>
   ${wallets.length > 1 ? html`<div class="stack" style="gap:var(--s-2)"><p class="label" id="wl-h">Wallet to unlock</p><ul class="opt-list ulist" aria-labelledby="wl-h">${wallets.map((w) => html`<li><button class="opt" type="button" data-act="wallet-pick" data-id="${w.id}" ${w.active ? html`aria-current="true"` : ""} aria-label="${w.name}${w.active ? ", selected" : ", select"}"><span class="body"><span class="t">${w.name}</span><span class="d">${w.words ? `${w.words} words` : "Recovery words"}${w.hasPassphrase ? ", extra passphrase" : ""}, from block ${num(w.birthday)}</span></span>${w.active ? I("check") : I("chevron-right", "s16")}</button></li>`)}</ul></div>` : ""}
   ${li?.by === "auto" ? html`<p class="small row" role="status" style="gap:6px">${I("timer", "s16")}Locked itself after ${li.minutes ?? 15} minutes without use.</p>` : ""}
-  <div class="vault">${I("hard-drive", "s16")}<span class="grow"><span class="strong" style="display:block">Keys on this computer only</span><span class="k">Encrypted with your password. Nothing is sent anywhere.</span></span>${NETLOGO("fractal")}</div>
+  <div class="vault">${I("hard-drive", "s16")}<span class="grow"><span class="strong" style="display:block">Keys on this computer only</span><span class="k">Encrypted with your password. Nothing is sent anywhere.</span></span>${NETLOGO()}</div>
   <div data-enter="unlock">${pwField("pw", "Password", "current-password")}</div>
 `,
     foot: {

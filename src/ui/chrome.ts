@@ -1,10 +1,10 @@
 import { S, type View, type Foot } from "./app.ts";
-import { html, I, MARK, NETLOGO, raw, fbShort, type Safe } from "./kit.ts";
+import { html, I, MARK, NETLOGO, raw, fbShort, CHAIN, CHAIN_SHORT, curNet, type Safe } from "./kit.ts";
 import { status } from "./derive.ts";
 
-/** PrivateBit runs on Fractal Bitcoin only, so the network is a label, not a menu. */
-export function netChip(): Safe {
-  return html`<span class="net static" title="Fractal Bitcoin">${NETLOGO("fractal")}Fractal</span>`;
+/** The chain on screen. Opens the chain picker. */
+export function netChip(compact = false): Safe {
+  return html`<button class="net ${compact ? "compact" : ""}" type="button" data-act="sheet" data-sheet="network" aria-haspopup="dialog" aria-label="Network: ${CHAIN()}. Change network">${NETLOGO()}${compact ? "" : html`<span>${CHAIN_SHORT()}</span>`}${I("chevron-down", "s16")}</button>`;
 }
 
 type WalletRow = NonNullable<NonNullable<typeof S.b>["state"]["wallets"]>[number];
@@ -43,7 +43,7 @@ export function hdr(o: { title?: string; back?: boolean; net?: boolean; right?: 
   if (o.title !== undefined) {
     return html`<header class="hdr">${o.back !== false ? html`<button class="icon-btn back" type="button" data-act="back" aria-label="Back">${I("arrow-left")}</button>` : ""}<h1 class="hdr-title">${o.title}</h1>${o.net ? netChip() : ""}${o.right ?? ""}${o.close ? html`<button class="icon-btn" type="button" data-act="home" aria-label="Close">${I("x")}</button>` : ""}</header>`;
   }
-  return html`<header class="hdr">${MARK(24)}${walletChip()}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="lock" aria-label="Lock wallet">${I("lock")}</button></header>`;
+  return html`<header class="hdr">${MARK(24)}${walletChip()}${netChip(true)}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="lock" aria-label="Lock wallet">${I("lock")}</button></header>`;
 }
 
 export function tabs(active: string): Safe {
@@ -114,7 +114,7 @@ export function fullHtml(v: View): string {
   const side = html`<aside class="side"><div class="brandrow">${MARK(28, false)}<span class="wordmark">PrivateBit</span></div>
   ${walletSwitch()}<div>${netChip()}</div>${sideNav()}
   <div class="foot-s">${pstat()}<button class="btn btn-secondary btn-sm" type="button" data-act="lock">${I("lock", "s16")}Lock</button></div></aside>`;
-  const mbar = html`<div class="mobilebar">${MARK(24, false)}${walletChip()}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="sheet" data-sheet="menu" aria-label="Open menu" aria-haspopup="dialog">${I("menu")}</button></div>`;
+  const mbar = html`<div class="mobilebar">${MARK(24, false)}${walletChip()}${netChip(true)}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="sheet" data-sheet="menu" aria-label="Open menu" aria-haspopup="dialog">${I("menu")}</button></div>`;
   const ov = overlayFor(v);
   const app = `<div class="app">${side.s}<div style="min-width:0">${mbar.s}<main class="content" id="main">${inner}</main></div></div>`;
   return `${ov ? `<div inert>${app}</div><div class="fp-overlay">${ov}</div>` : app}${toastHtml() ? `<div class="fp-toast">${toastHtml()}</div>` : ""}`;
@@ -127,7 +127,19 @@ function sheet(id: string, title: string, body: Safe): Safe {
   <div class="sheet-h"><h2 id="${id}">${title}</h2><button class="icon-btn" type="button" data-act="sheet-close" aria-label="Close">${I("x")}</button></div>${body}</div>`;
 }
 
+function netOption(id: "fractal" | "bitcoin", name: string, d: string): Safe {
+  const on = curNet() === id;
+  return html`<button class="li" type="button" role="radio" aria-checked="${String(on)}" data-act="net-set" data-v="${id}"><span class="ico">${NETLOGO(id === "bitcoin" ? "btc" : "fractal")}</span><span class="body"><span class="t">${name}</span><span class="d" style="white-space:normal">${d}</span></span>${on ? I("check") : ""}</button>`;
+}
+
 export const sheets: Record<string, () => Safe> = {
+  network: () =>
+    sheet(
+      "nw-h",
+      "Network",
+      html`<div class="list" role="radiogroup" aria-labelledby="nw-h">${netOption("fractal", "Fractal Bitcoin", "Unit FB. A block about every 30 seconds.")}${netOption("bitcoin", "Bitcoin", "Unit BTC. A block about every 10 minutes.")}</div>
+  <p class="small muted">The same words give a different receive code on each network. Coins, activity and settings are kept apart, and the wallet stays unlocked when you switch. A payment waiting to be sent goes out first.</p>`,
+    ),
   wallets: () => {
     const list = S.b?.state.wallets ?? [];
     return sheet(

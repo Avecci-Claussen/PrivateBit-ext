@@ -33,7 +33,7 @@ export function classify(input: string): Dest {
   }
   const a = r.address;
   const low = a.toLowerCase();
-  if (low.startsWith("tsp1")) return { kind: "error", msg: "This is a test network code. PrivateBit sends on Fractal mainnet only." };
+  if (low.startsWith("tsp1")) return { kind: "error", msg: "This is a test network code. PrivateBit sends on mainnet only." };
   if (low.startsWith("sp1")) {
     try {
       const d = decodeSilentAddress(a);
@@ -46,7 +46,7 @@ export function classify(input: string): Dest {
   }
   const type = addrType(a);
   if (!type) {
-    if (/^(tb1|bcrt1|[mn2])/i.test(a)) return { kind: "error", msg: "This is a test network address. PrivateBit sends on Fractal mainnet only." };
+    if (/^(tb1|bcrt1|[mn2])/i.test(a)) return { kind: "error", msg: "This is a test network address. PrivateBit sends on mainnet only." };
     return { kind: "error", msg: "This is not a receive code, payment link or address PrivateBit can pay. Check you copied all of it." };
   }
   if (r.pj) {

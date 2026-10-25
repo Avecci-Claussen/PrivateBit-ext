@@ -1,6 +1,7 @@
 import { S, screens, actions, loaders, go, render, refresh, run, toast } from "../app.ts";
+import { heldCard } from "./send.ts";
 import { call, type HistoryEntry, type SessionView } from "../api.ts";
-import { html, I, NETLOGO, fbShort, num, hm, when, dayLabel, left, type Safe } from "../kit.ts";
+import { html, I, NETLOGO, fbShort, num, hm, when, dayLabel, left, type Safe, UNIT, CHAIN, CHAIN_SHORT } from "../kit.ts";
 import { hdr, tabs } from "../chrome.ts";
 import { scanning, health, price, usd, hidden, syncLine, retryIn, retryText } from "../derive.ts";
 
@@ -80,8 +81,8 @@ export function balanceSec(): Safe {
   void h;
   const blockLine = html`<span>${syncLine()}</span>`;
   return html`<section class="bal" aria-label="Balance">
-  <div class="bal-top"><h2 class="cap row" style="gap:6px">${NETLOGO("fractal")}${sc.on ? "Balance so far" : "Fractal Bitcoin"}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
-  <p class="bal-amt ${hide ? "hidden" : ""}">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">FB</span></p>
+  <div class="bal-top"><h2 class="cap row" style="gap:6px">${NETLOGO()}${sc.on ? "Balance so far" : CHAIN()}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
+  <p class="bal-amt ${hide ? "hidden" : ""}">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">${UNIT()}</span></p>
   ${fiat}
   <p class="bal-sub">${hide ? html`<span>Hidden. Use the eye button to show it.</span>` : html`${pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}${blockLine}`}</p></section>`;
 }
@@ -137,6 +138,11 @@ function payjoinCard(): Safe | string {
     <p class="small">${what} Closing this window is fine. Finished and cancelled links stay in Payment link history.</p></button>`;
 }
 
+function heldCards(): Safe | string {
+  const list = S.b?.delayed ?? [];
+  return list.length ? html`${list.map((d) => heldCard(d))}` : "";
+}
+
 function oneTimeCard(): Safe | string {
   const f = S.b!.state.oneTimeFunded;
   if (!f) return "";
@@ -159,7 +165,7 @@ screens.home = () => {
   const p = price();
   let body: Safe;
   if (sc.on) {
-    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}
+    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}
   <div class="card" role="status" aria-live="polite"><div class="row between"><span class="strong row">${I("refresh-cw", "s16 spin")}Finding your coins…</span><span class="cap num">${sc.pct}%</span></div>
     <div class="progress" role="progressbar" aria-label="Finding your coins" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div>
     <p class="small muted">${sc.reading ? (sc.reading.count > 0 ? html`Reading block ${num(sc.reading.height)}, transaction ${num(sc.reading.index + 1)} of ${num(sc.reading.count)}. ` : html`Downloading block ${num(sc.reading.height)}. `) : ""}Checked through block ${num(sc.at)} of ${num(sc.tip)}. Closing this window keeps going. Locking hides the wallet, and finding coins continues until you quit the browser or switch wallets. Only this wallet moves; another wallet continues from its own block the next time you open it. ${S.b!.state.chain.kind === "core" ? "Blocks come from your node." : "Blocks already saved on this computer are reused."}</p></div>
@@ -169,10 +175,10 @@ screens.home = () => {
     body = html`${healthBanner()}${backupBanner()}${balanceSec()}${actionsRow()}
   <div class="card"><div class="stack"><h2 class="strong">Get your first coins</h2><p class="small muted">Share your receive code, or move coins from another wallet.</p></div>
     <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Show my receive code</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div></div>
-  ${p.kind !== "off" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD prices come from a price service</span><p>It sees your IP and that someone asked for the FB price, never your coins. <button class="link" type="button" data-act="go" data-to="set-privacy">Turn off in Privacy</button></p></div></div>` : ""}`;
+  ${p.kind !== "off" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD prices come from a price service</span><p>It sees your IP and that someone asked for the ${UNIT()} price, never your coins. <button class="link" type="button" data-act="go" data-to="set-privacy">Turn off in Privacy</button></p></div></div>` : ""}`;
   } else {
-    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${actionsRow()}
-  ${p.kind === "na" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD price unavailable</span><p>The price service did not answer. Amounts in FB are exact and not affected. Trying again in 10 minutes.</p></div></div>` : ""}
+    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}${actionsRow()}
+  ${p.kind === "na" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD price unavailable</span><p>The price service did not answer. Amounts in ${UNIT()} are exact and not affected. Trying again in 10 minutes.</p></div></div>` : ""}
   <div class="sec-h"><h2>Recent</h2>${h.entries.length ? html`<button class="link small" type="button" data-act="tab" data-to="activity">See all</button>` : ""}</div>${h.entries.length ? recent() : html`<p class="small muted">No payments yet.</p>`}`;
   }
   return { title: "Wallet", header: hdr(), main: body, nav: tabs("home"), page: fullOverview() };
@@ -204,11 +210,11 @@ function balPanel(): Safe {
   const p = price();
   const h = health();
   const sc = scanning();
-  return html`<section class="panel" aria-labelledby="b-h"><div class="row between"><h2 id="b-h" class="cap row" style="font:var(--t-caption);gap:6px">${NETLOGO("fractal")}${sc.on ? "Balance so far" : "Fractal Bitcoin"}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
-  <p class="bigbal">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">FB</span></p>
+  return html`<section class="panel" aria-labelledby="b-h"><div class="row between"><h2 id="b-h" class="cap row" style="font:var(--t-caption);gap:6px">${NETLOGO()}${sc.on ? "Balance so far" : CHAIN()}</h2><button class="icon-btn" type="button" data-act="hide-bal" aria-pressed="${String(hide)}" aria-label="${hide ? "Show balance" : "Hide balance"}">${I(hide ? "eye-off" : "eye")}</button></div>
+  <p class="bigbal">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">${UNIT()}</span></p>
   ${hide || p.kind === "off" ? "" : p.kind === "na" ? html`<p class="fiat">USD price unavailable</p>` : p.kind === "stale" ? html`<p class="fiat stale">${usd(conf)} <span class="muted">price from ${hm(p.at!)}, not updated</span></p>` : html`<p class="fiat">${usd(conf)} <span class="muted">at $${p.usd!.toFixed(4)}, ${hm(p.at!)}</span></p>`}
   <div class="bal-sub">${!hide && pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}<span>${syncLine()}</span></div>
-  <hr class="divider"><div class="row between"><span class="small strong">Your receive code</span><span class="ntag">${NETLOGO("fractal")}Fractal</span></div><p class="code" style="font-size:12px;line-height:18px">${codeHi(st.receive ?? "")}</p>
+  <hr class="divider"><div class="row between"><span class="small strong">Your receive code</span><span class="ntag">${NETLOGO()}${CHAIN_SHORT()}</span></div><p class="code" style="font-size:12px;line-height:18px">${codeHi(st.receive ?? "")}</p>
   <div class="row"><button class="btn btn-secondary btn-sm" type="button" data-act="copy-code">${I("copy", "s16")}Copy code</button><button class="btn btn-ghost btn-sm" type="button" data-act="go" data-to="receive">${I("qr-code", "s16")}Show QR</button></div></section>`;
 }
 
@@ -232,7 +238,7 @@ function fullOverview(): Safe {
   const off = health() === "offline";
   return html`${healthBanner()}
   <div class="topbar"><h1>Overview</h1><button class="btn btn-secondary" type="button" data-act="go" data-to="paylink">${I("link-2", "s16")}Payment link</button><button class="btn btn-secondary" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Receive</button><button class="btn btn-primary" type="button" data-act="go" data-to="send" ${off ? html`aria-disabled="true" style="opacity:.5"` : ""}>${I("arrow-up-right", "s16")}Send</button></div>
-  ${oneTimeCard()}${payjoinCard()}
+  ${oneTimeCard()}${payjoinCard()}${heldCards()}
   <div class="grid2">${balPanel()}${whoSees()}</div>
   <section class="panel" aria-labelledby="a-h"><div class="row between"><h2 id="a-h">Activity</h2>${h.entries.length ? html`<button class="link small" type="button" data-act="tab" data-to="activity">See all</button>` : ""}</div>${h.entries.length ? actTable(h.entries.slice(0, 5)) : html`<p class="small muted">No payments yet. Payments to your receive code show here after PrivateBit finds them in a block.</p>`}</section>
   ${coins.length ? html`<section class="panel" aria-labelledby="c-h"><div class="row between"><h2 id="c-h">Coins</h2><span class="cap">${coinSummary()}</span></div>${coinTable(false)}</section>` : ""}`;

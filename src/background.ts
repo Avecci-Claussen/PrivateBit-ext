@@ -1,20 +1,30 @@
 import { chromeKv } from "./chrome-kv.ts";
 import { installE2E } from "./e2e-hook.ts";
 import { jsonSafe } from "./lib/json.ts";
-import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, redactChain, type ChainConfig } from "./lib/network.ts";
+import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, isNetworkId, netInfo, redactChain, type ChainConfig, type NetworkId } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
 import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
 import { randomDelayMs } from "./lib/plan-random.ts";
-import { getPrice, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates } from "./lib/requests.ts";
+import { getPriceWithFallback, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates, type PriceSource } from "./lib/requests.ts";
 import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
-import { openChain } from "./lib/chain.ts";
+import { checkNode, nodeFollows, openChain } from "./lib/chain.ts";
 import { clearSharedChain, formatBlockStats, onBlockStats } from "./lib/blockshare.ts";
 import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
 
 const kv = chromeKv();
 const wallet = new PrivateBit(kv, DEFAULT_CHAIN);
+
+/** The chain from the last session, set before anything reads a wallet. */
+const networkReady: Promise<void> = (async () => {
+  try {
+    const prefs = normalizePrefs((await kv.get([PREFS_KEY]))[PREFS_KEY]);
+    await wallet.setNetwork(prefs.network);
+  } catch {
+    /* Fractal stays */
+  }
+})();
 // Browser end-to-end build only (vite build --mode e2e). Removed from the production bundle.
 if (import.meta.env.MODE === "e2e") installE2E(wallet);
 const FOLLOW_ALARM = "privatebit.follow-tip";
@@ -39,7 +49,7 @@ export type Health = {
   /** When the block download tries again after a failure or a run with no progress. */
   retryAt?: number;
 };
-export type PriceCache = { usd?: number; at?: number; fetchedAt?: number; failedAt?: number };
+export type PriceCache = { usd?: number; at?: number; fetchedAt?: number; failedAt?: number; source?: PriceSource; asset?: string; error?: string };
 export type LockInfo = { by: "auto" | "user"; minutes?: number; at: number };
 
 async function getPrefs(): Promise<Prefs> {
@@ -90,6 +100,7 @@ function stopPayjoinTimer(): void {
 }
 
 async function pumpPayjoin(): Promise<void> {
+  await networkReady;
   if (pjRunning) return;
   pjRunning = true;
   stopPayjoinTimer();
@@ -137,16 +148,20 @@ async function checkAutoLock(): Promise<void> {
 async function refreshPrice(force = false): Promise<PriceCache> {
   const prev = ((await kv.get([PRICE_KEY]))[PRICE_KEY] as PriceCache | undefined) ?? {};
   const prefs = await getPrefs();
-  if (!prefs.usd || !(await isUnlocked())) return prev;
-  const fresh = prev.fetchedAt && Date.now() - prev.fetchedAt < PRICE_PERIOD_MIN * 60_000;
+  if (prefs.priceSource === "off" || !(await isUnlocked())) return prev;
+  const asset = netInfo(prefs.network).price;
+  // A cached price for the other coin is not shown, and not reused.
+  const sameAsset = prev.asset === asset.coingecko || prev.asset === asset.mexc;
+  const fresh = sameAsset && prev.fetchedAt && Date.now() - prev.fetchedAt < PRICE_PERIOD_MIN * 60_000;
   if (fresh && !force) return prev;
   try {
-    const p = await getPrice();
-    const next: PriceCache = { usd: p.usd, at: p.at, fetchedAt: p.fetchedAt };
+    const p = await getPriceWithFallback(prefs.priceSource, asset);
+    const next: PriceCache = { usd: p.usd, at: p.at, fetchedAt: p.fetchedAt, source: p.source, asset: p.asset };
     await kv.set({ [PRICE_KEY]: next });
     return next;
-  } catch {
-    const next: PriceCache = { ...prev, failedAt: Date.now() };
+  } catch (e) {
+    const base = sameAsset ? prev : {};
+    const next: PriceCache = { ...base, failedAt: Date.now(), error: e instanceof Error ? e.message : String(e) };
     await kv.set({ [PRICE_KEY]: next });
     return next;
   }
@@ -177,7 +192,7 @@ function kickCatchup(delayMs: number): void {
   if (catchupTimer !== undefined) clearTimeout(catchupTimer);
   catchupTimer = setTimeout(() => {
     catchupTimer = undefined;
-    void runCatchup();
+    void networkReady.then(() => runCatchup());
   }, delayMs);
 }
 
@@ -285,7 +300,8 @@ type Msg =
   | { type: "CANCEL_SEND"; id: string }
   | { type: "SAVE_CHAIN"; chain: ChainConfig }
   | { type: "LOAD_CHAIN" }
-  | { type: "TEST_CHAIN"; chain: ChainConfig }
+  | { type: "TEST_CHAIN"; chain: ChainConfig; sendNode?: boolean }
+  | { type: "SET_NETWORK"; network: NetworkId }
   | { type: "SET_BIRTHDAY"; birthday: number }
   | { type: "FOLLOW_TIP" }
   | { type: "OFFER_PAYJOIN"; amount: string }
@@ -376,6 +392,7 @@ async function scheduleDelayed(next: number | undefined): Promise<void> {
 
 async function pumpDelayed(): Promise<void> {
   try {
+    await networkReady;
     await wallet.loadChain();
     const r = await wallet.runDelayed();
     if (r.sent.length) kickCatchup(0);
@@ -386,7 +403,9 @@ async function pumpDelayed(): Promise<void> {
   }
 }
 
+
 async function handle(msg: Msg): Promise<unknown> {
+  await networkReady;
   switch (msg.type) {
     case "STATE":
       return wallet.state();
@@ -594,8 +613,26 @@ async function handle(msg: Msg): Promise<unknown> {
         ...msg.chain,
         rpcPassword: msg.chain.rpcPassword === "********" ? prev.rpcPassword : msg.chain.rpcPassword,
         unisatToken: msg.chain.unisatToken === "********" ? prev.unisatToken : msg.chain.unisatToken,
+        sendNodePassword: msg.chain.sendNodePassword === "********" ? prev.sendNodePassword : msg.chain.sendNodePassword,
       };
-      return openChain(cfg).getTip();
+      const net = wallet.net;
+      const nodeCfg = cfg.kind === "core" ? { url: cfg.url, rpcUser: cfg.rpcUser, rpcPassword: cfg.rpcPassword } : msg.sendNode && cfg.sendNodeUrl ? { url: cfg.sendNodeUrl, rpcUser: cfg.sendNodeUser, rpcPassword: cfg.sendNodePassword } : undefined;
+      if (!nodeCfg) return { ...(await openChain(cfg, net).getTip()), net };
+      const check = await checkNode(nodeCfg);
+      const onChain = await nodeFollows(nodeCfg, net);
+      return { ...check, net, onChain };
+    }
+    case "SET_NETWORK": {
+      if (!isNetworkId(msg.network)) throw new Error("Unknown network");
+      const prev = await getPrefs();
+      await kv.set({ [PREFS_KEY]: normalizePrefs({ ...prev, network: msg.network }) });
+      await kv.remove([FEES_KEY, HEALTH_KEY]);
+      await wallet.setNetwork(msg.network);
+      void refreshPrice(true);
+      void pumpDelayed();
+      void pumpPayjoin();
+      kickCatchup(0);
+      return bundle();
     }
     case "SET_BIRTHDAY":
       await wallet.setBirthday(msg.birthday);

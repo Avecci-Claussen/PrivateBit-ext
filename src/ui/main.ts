@@ -2,7 +2,7 @@ import "../styles/tokens.css";
 import "../styles/components.css";
 import "../styles/fullpage.css";
 import "../styles/app.css";
-import { S, actions, screens, mount, go, back, render, refresh, setRenderer, type Mode } from "./app.ts";
+import { S, actions, screens, mount, go, back, render, refresh, setRenderer, run, toast, type Mode } from "./app.ts";
 import { call } from "./api.ts";
 import { popupHtml, fullHtml } from "./chrome.ts";
 import { boot } from "./screens/onboard.ts";
@@ -38,6 +38,17 @@ actions.sheet = (el) => {
   S.sheet = el.dataset.sheet!;
   render();
   queueMicrotask(() => document.querySelector<HTMLElement>(".sheet button, .dialog button")?.focus());
+};
+actions["net-set"] = (el) => {
+  const network = el.dataset.v;
+  if (network !== "fractal" && network !== "bitcoin") return;
+  void run("net", async () => {
+    S.b = await call({ type: "SET_NETWORK", network });
+    S.sheet = null;
+    delete S.f.plan;
+    toast(network === "bitcoin" ? "Now on Bitcoin" : "Now on Fractal Bitcoin");
+    render();
+  });
 };
 actions["sheet-close"] = () => {
   S.sheet = null;

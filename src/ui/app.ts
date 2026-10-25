@@ -1,5 +1,5 @@
 import { call, ApiError, type Bundle } from "./api.ts";
-import { html, raw, type Safe } from "./kit.ts";
+import { html, raw, setUiNet, type Safe } from "./kit.ts";
 
 export type Foot = Safe | { cls: string; html: Safe };
 export type View = {
@@ -128,6 +128,7 @@ export async function run<T>(busy: string, fn: () => Promise<T>, errKey = "form"
 export async function refresh(): Promise<void> {
   try {
     S.b = await call<Bundle>({ type: "BUNDLE" });
+    setUiNet(S.b.state.net);
     delete S.err.bundle;
   } catch (e) {
     S.err.bundle = message(e);
@@ -146,6 +147,7 @@ export async function refreshUntilReady(tries = 20): Promise<boolean> {
 
 let lastMarkup = "";
 export function render(): void {
+  setUiNet(S.b?.state.net);
   if (!root) return;
   const fn = screens[S.route] ?? screens.boot!;
   const view = fn();

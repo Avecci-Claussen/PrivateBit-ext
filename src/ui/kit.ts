@@ -53,14 +53,40 @@ export function MARK(sz = 24, label = true, cls = "mark"): Safe {
   );
 }
 
-export function NETLOGO(net: "fractal" | "btc" = "fractal", cls = ""): Safe {
+/** The chain on screen, set from each bundle. Every unit and chain name reads it. */
+export type UiNet = "fractal" | "bitcoin";
+let uiNet: UiNet = "fractal";
+export function setUiNet(n: string | undefined): void {
+  uiNet = n === "bitcoin" ? "bitcoin" : "fractal";
+}
+export function curNet(): UiNet {
+  return uiNet;
+}
+export function UNIT(): string {
+  return uiNet === "bitcoin" ? "BTC" : "FB";
+}
+export function CHAIN(): string {
+  return uiNet === "bitcoin" ? "Bitcoin" : "Fractal Bitcoin";
+}
+export function CHAIN_SHORT(): string {
+  return uiNet === "bitcoin" ? "Bitcoin" : "Fractal";
+}
+export function blockTimeText(): string {
+  return uiNet === "bitcoin" ? "Bitcoin makes a block about every 10 minutes." : "Fractal makes a block about every 30 seconds.";
+}
+export function txLink(txid: string, net: UiNet = uiNet): string {
+  return net === "bitcoin" ? `https://mempool.space/tx/${txid}` : `https://mempool.fractalbitcoin.io/tx/${txid}`;
+}
+
+export function NETLOGO(which: "fractal" | "btc" | "bitcoin" | "current" = "current", cls = ""): Safe {
+  const net = which === "current" ? (uiNet === "bitcoin" ? "btc" : "fractal") : which === "bitcoin" ? "btc" : which;
   return new Safe(
     `<img class="nlogo ${net === "btc" ? "btc" : "fb"} ${cls}" src="img/${net === "btc" ? "bitcoin" : "fractal"}.svg" alt="" width="18" height="18">`,
   );
 }
 
-export function ntag(text = "Fractal"): Safe {
-  return html`<span class="ntag">${NETLOGO("fractal")}${text}</span>`;
+export function ntag(text = CHAIN_SHORT()): Safe {
+  return html`<span class="ntag">${NETLOGO()}${text}</span>`;
 }
 
 /* ---------- formatting ---------- */
@@ -79,7 +105,7 @@ export function fb(v: bigint | string | number, o: { dp?: number; unit?: boolean
   if (o.trim) frac = frac.replace(/0+$/, "");
   const w = whole.toLocaleString("en-US");
   const sign = neg ? "\u2212" : o.sign && n > 0n ? "+" : "";
-  return `${sign}${w}${frac ? "." + frac : ""}${o.unit === false ? "" : NBSP + "FB"}`;
+  return `${sign}${w}${frac ? "." + frac : ""}${o.unit === false ? "" : NBSP + UNIT()}`;
 }
 
 /** Short form for lists: up to 4 decimals but never hides a non-zero amount. */
