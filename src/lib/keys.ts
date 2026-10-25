@@ -128,7 +128,7 @@ export function siteKeyFromHd(hd: HDKey, index: number, net: NetworkId): OneTime
   return taprootKeyAt(hd, sitePath(index, net), index);
 }
 
-export function accountFromVault(vault: UnlockedVault, extraLabels = 0, net: NetworkId = "fractal"): Account {
+export function accountFromVault(vault: Pick<UnlockedVault, "seed" | "birthday">, extraLabels = 0, net: NetworkId = "fractal"): Account {
   const hd = HDKey.fromMasterSeed(vault.seed);
   const paths = derivationPath(0, net);
   const spendNode = hd.derive(paths.spend);

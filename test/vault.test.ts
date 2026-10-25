@@ -73,7 +73,13 @@ describe("vault", () => {
     const unlocked = vaultFromMnemonic({ mnemonic, birthday: 1 });
     await persistVault(kv, lockVault(unlocked, "pw"));
     await saveSession(kv, unlocked);
-    expect((await loadSession(kv))?.mnemonic).toBe(mnemonic);
+    const open = await loadSession(kv);
+    expect(open?.seed).toEqual(unlocked.seed);
+    expect(open?.words).toBe(12);
+    // Security audit v1: the session holds neither the words nor the plain seed.
+    const raw = JSON.stringify(await kv.get(["privatebit.session"]));
+    expect(raw).not.toContain(mnemonic.split(" ")[0] + " ");
+    expect(raw).not.toContain(Buffer.from(unlocked.seed).toString("hex"));
     await clearSession(kv);
     expect(await loadSession(kv)).toBeNull();
   });

@@ -2,7 +2,9 @@ import { scrypt } from "@noble/hashes/scrypt";
 import { gcm } from "@noble/ciphers/aes";
 import { entropyToMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
+import { sha256 } from "@noble/hashes/sha2";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
+import { dropKey, open, seal, type SealedBox } from "./sessionkeys.ts";
 
 export const VAULT_VERSION = 1;
 /**
@@ -211,24 +213,65 @@ export async function restoreVaultBackup(kv: Kv, password: string): Promise<void
   await kv.set(next);
 }
 
-export async function saveSession(kv: Kv, vault: UnlockedVault): Promise<void> {
-  const body = {
-    mnemonic: vault.mnemonic,
-    passphrase: vault.passphrase,
+/**
+ * What an unlocked wallet keeps: the seed, sealed (see sessionkeys.ts), plus facts the screens
+ * show. Never the recovery words or the passphrase. Opened per operation by loadSession.
+ */
+export type SessionVault = {
+  seed: Uint8Array;
+  birthday: number;
+  words: number;
+  hasPassphrase: boolean;
+  /** Stable id of this seed for caches: a hash, not the seed. */
+  sig: string;
+};
+
+type SessionRecord = { v: 2; box: SealedBox; birthday: number; words: number; hasPassphrase: boolean; sig: string };
+const SESSION_AAD = "privatebit/session/v2";
+
+export function sessionSig(seed: Uint8Array): string {
+  return hex(sha256(new Uint8Array([...new TextEncoder().encode("privatebit/session-sig"), ...seed]))).slice(0, 32);
+}
+
+export async function saveSession(kv: Kv, vault: UnlockedVault | SessionVault): Promise<void> {
+  const words = "words" in vault ? vault.words : vault.mnemonic.trim().split(/\s+/).length;
+  const hasPassphrase = "hasPassphrase" in vault ? vault.hasPassphrase : vault.passphrase.length > 0;
+  const body: SessionRecord = {
+    v: 2,
+    box: await seal("session", vault.seed, SESSION_AAD),
     birthday: vault.birthday,
+    words,
+    hasPassphrase,
+    sig: sessionSig(vault.seed),
   };
   await kv.set({ [SESSION_KEY]: body });
 }
 
-export async function loadSession(kv: Kv): Promise<UnlockedVault | null> {
+/** The session with a freshly opened seed. The caller zeroes the seed when it is done. */
+export async function loadSession(kv: Kv): Promise<SessionVault | null> {
   const got = await kv.get([SESSION_KEY]);
-  const s = got[SESSION_KEY] as { mnemonic: string; passphrase: string; birthday: number } | undefined;
+  const s = got[SESSION_KEY] as Partial<SessionRecord> & { mnemonic?: string } | undefined;
   if (!s) return null;
-  return vaultFromMnemonic(s);
+  if (s.v !== 2 || s.mnemonic !== undefined) {
+    // An older build kept the words here. Delete on sight; the user unlocks again.
+    await kv.remove([SESSION_KEY]);
+    return null;
+  }
+  const seed = await open("session", s.box, SESSION_AAD);
+  if (!seed) return null;
+  return { seed, birthday: s.birthday ?? 0, words: s.words ?? 24, hasPassphrase: !!s.hasPassphrase, sig: s.sig ?? sessionSig(seed) };
+}
+
+/** Facts about the session without opening the seed. */
+export async function sessionInfo(kv: Kv): Promise<Omit<SessionVault, "seed"> | null> {
+  const s = (await kv.get([SESSION_KEY]))[SESSION_KEY] as Partial<SessionRecord> | undefined;
+  if (!s || s.v !== 2 || !s.box) return null;
+  return { birthday: s.birthday ?? 0, words: s.words ?? 24, hasPassphrase: !!s.hasPassphrase, sig: s.sig ?? "" };
 }
 
 export async function clearSession(kv: Kv): Promise<void> {
   await kv.remove([SESSION_KEY]);
+  await dropKey("session");
 }
 
 export async function saveScanGrant(kv: Kv, grant: ScanGrant): Promise<void> {

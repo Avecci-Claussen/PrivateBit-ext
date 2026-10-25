@@ -110,6 +110,7 @@ import {
   vaultFromMnemonic,
   type Kv,
   type UnlockedVault,
+  type SessionVault,
   type VaultBlob,
 } from "./vault.ts";
 import { createMnemonic } from "./vault.ts";
@@ -420,8 +421,6 @@ export class WalletCore {
     this.walletEpoch += 1;
     this.keyCache = undefined;
     this.grantCache = undefined;
-    this.sessionCache = undefined;
-    this.accountCache = undefined;
     this.scanHex = undefined;
   }
 
@@ -465,37 +464,33 @@ export class WalletCore {
   }
 
   /** Session words turned into a seed once (BIP39 PBKDF2 is slow), reused until the session changes. */
-  private sessionCache?: { raw: string; vault: UnlockedVault };
-
-  private async session(): Promise<UnlockedVault | null> {
-    const raw = (await this.kv.get(["privatebit.session"]))["privatebit.session"];
-    if (!raw) {
-      this.sessionCache = undefined;
-      return null;
-    }
-    const text = JSON.stringify(raw);
-    if (this.sessionCache?.raw === text) return this.sessionCache.vault;
+  /**
+   * The open session: the seed is opened from its sealed box for this call only (see
+   * sessionkeys.ts). Nothing here is cached; callers that are done with the seed zero it.
+   */
+  private async session(): Promise<SessionVault | null> {
     const vault = await loadSession(this.kv);
-    if (!vault) return null;
-    this.sessionCache = { raw: text, vault };
+    if (!vault) this.keyCache = undefined;
     return vault;
   }
 
-  /** Full account (spend key included) derived once per session. */
-  private accountCache?: { vault: UnlockedVault; account: Account };
-  private accountOf(vault: UnlockedVault): Account {
-    if (this.accountCache?.vault === vault) return this.accountCache.account;
+  /**
+   * Full account (spend key included) for one operation. Derived fresh each time and never
+   * cached, so the spend secret lives only as long as the operation that asked for it. The seed
+   * copy it came from is zeroed right away.
+   */
+  private accountOf(vault: SessionVault): Account {
     const account = accountFromVault(vault, 0, this.net);
-    this.accountCache = { vault, account };
     return account;
   }
 
-  private keysFor(session: UnlockedVault): NonNullable<WalletCore["keyCache"]> {
-    const sig = `${session.mnemonic}\n${session.passphrase}`;
+  private keysFor(session: SessionVault): NonNullable<WalletCore["keyCache"]> {
+    const sig = session.sig;
     const c = this.keyCache;
     if (c && c.sig === sig) return c;
     const account = this.accountOf(session);
     const next = { sig, key: deriveDataKey(session.seed), scanKey: deriveScanKey(session.seed), spendPub: hex(account.spendPub) };
+    account.spendSecret.fill(0);
     this.keyCache = next;
     return next;
   }
@@ -543,7 +538,7 @@ export class WalletCore {
   }
 
   /** Leave only what matching needs for after Lock. Never the words, seed or spend secret. */
-  private async writeGrant(unlocked: UnlockedVault): Promise<void> {
+  private async writeGrant(unlocked: { seed: Uint8Array; birthday: number }): Promise<void> {
     const account = accountFromVault(unlocked, 0, this.net);
     await saveScanGrant(this.kv, {
       v: 2,
@@ -721,7 +716,7 @@ export class WalletCore {
         total: total.toString(),
       };
     }
-    const words = session.mnemonic.trim().split(/\s+/).length;
+    const words = session.words;
     return {
       hasVault: true,
       hasBackup,
@@ -762,7 +757,7 @@ export class WalletCore {
       historyRebuilding: hist.rebuilding === true,
       hasHistory: Object.keys(hist.entries).length > 0,
       mnemonicWords: words,
-      hasPassphrase: session.passphrase.length > 0,
+      hasPassphrase: session.hasPassphrase,
     };
   }
 
@@ -1009,17 +1004,18 @@ export class WalletCore {
       if (dirty) await this.savePayjoinSessions(sessions);
     }
     this.keyCache = undefined;
-    this.sessionCache = undefined;
-    this.accountCache = undefined;
     await clearSession(this.kv);
     await this.clearHpkeSecrets();
     await this.kv.remove([PJ_SEND]);
   }
 
-  async requireAccount(): Promise<{ vault: UnlockedVault; account: Account; scan: ScanStore }> {
+  async requireAccount(): Promise<{ vault: Omit<SessionVault, "seed">; account: Account; scan: ScanStore }> {
     const vault = await this.session();
     if (!vault) throw new Error("locked");
-    return { vault, account: this.accountOf(vault), scan: await this.loadScan() };
+    const account = this.accountOf(vault);
+    vault.seed.fill(0);
+    const { seed: _gone, ...info } = vault;
+    return { vault: info, account, scan: await this.loadScan() };
   }
 
   async scanOnce(): Promise<ScanProgress> {

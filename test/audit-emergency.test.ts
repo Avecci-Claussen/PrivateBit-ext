@@ -12,7 +12,12 @@ describe("audit: emergency fixes", () => {
     const w = new PrivateBit(kv);
     const words = await w.create({ password: "password1", birthday: 100 });
     const account = accountFromVault(vaultFromMnemonic({ mnemonic: words, birthday: 100 }));
-    expect(kv.text()).toContain(words.split(" ")[0]!); // the session holds them while unlocked
+    // Security audit v1: not even while unlocked. Only the sealed seed is in session storage.
+    const seed = vaultFromMnemonic({ mnemonic: words, birthday: 100 }).seed;
+    expect(kv.text()).not.toContain(words);
+    expect(kv.text()).not.toContain(hex(seed));
+    expect(kv.text()).not.toContain(hex(account.spendSecret));
+    expect((await w.requireAccount()).account.spendPub).toEqual(account.spendPub);
     await w.lock();
     const text = kv.text();
     for (const word of new Set(words.split(" "))) {

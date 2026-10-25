@@ -3,6 +3,7 @@ import { installE2E } from "./e2e-hook.ts";
 import { jsonSafe } from "./lib/json.ts";
 import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, isNetworkId, netInfo, redactChain, type ChainConfig, type NetworkId } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
+import { dropKey } from "./lib/sessionkeys.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
 import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
 import { testPayjoinRoute } from "./lib/payjoin.ts";
@@ -181,6 +182,9 @@ chrome.runtime.onInstalled.addListener(() => {
   void pumpPayjoin();
 });
 chrome.runtime.onStartup.addListener(() => {
+  // A new browser session: session storage is empty, so the session keys left in IndexedDB open nothing. Delete them.
+  void dropKey("session");
+  void dropKey("pj");
   ensureAlarms();
   void pumpPayjoin();
 });
