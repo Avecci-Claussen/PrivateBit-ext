@@ -164,3 +164,27 @@ describe("M5: the mailbox keys are fetched once and kept", () => {
     }
   }, 30000);
 });
+
+describe("L6: labels match only P_k + L", () => {
+  it("an output at P_k - L is not taken as a labeled coin; P_k + L is, and its key signs", async () => {
+    const b352 = await import("../src/lib/bip352.ts");
+    const scanSecret = fromHex("11".repeat(32));
+    const spendSecretB = fromHex("22".repeat(32));
+    const spendPub = secp256k1.getPublicKey(spendSecretB, true);
+    const a = fromHex("33".repeat(32));
+    const vin = { txid: "44".repeat(32), vout: 0, pubkey: secp256k1.getPublicKey(a, true), taproot: false };
+    const shared = b352.senderSharedSecret([{ ...vin, secret: a }], secp256k1.getPublicKey(scanSecret, true));
+    const t = b352.outputTweak(shared, 0);
+    const Pk = secp256k1.ProjectivePoint.fromHex(spendPub).add(secp256k1.ProjectivePoint.BASE.multiply(BigInt("0x" + hex(t))));
+    const lt = b352.labelTweak(scanSecret, 3);
+    const L = secp256k1.ProjectivePoint.BASE.multiply(BigInt("0x" + hex(lt)));
+    const labels = b352.precomputeLabels(scanSecret, [3]);
+    const detect = (P: typeof Pk) => b352.detectOurUtxos({ vins: [vin], taprootOutputs: [{ xonly: P.toRawBytes(true).slice(1), vout: 0 }], scanSecret, spendPub, labels });
+    expect(detect(Pk.subtract(L))).toEqual([]);
+    const hit = detect(Pk.add(L));
+    expect(hit).toHaveLength(1);
+    expect(hit[0]!.label).toBe(3);
+    const d = b352.spendSecret({ spendSecret: spendSecretB, tweak: hit[0]!.tweak, label: 3, scanSecret });
+    expect(hex(schnorr.getPublicKey(d))).toBe(hex(Pk.add(L).toRawBytes(true).slice(1)));
+  });
+});

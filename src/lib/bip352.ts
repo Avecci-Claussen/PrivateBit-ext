@@ -272,8 +272,10 @@ export function addLabel(book: LabelBook, scanSecret: Uint8Array, m: number): vo
   const t = labelTweak(scanSecret, m);
   if (!isValidScalar(t)) return;
   const L = Point.fromPrivateKey(t);
+  // Audit L6 (independent): only L. The match compares x(P_k + L) with the x-only output, which
+  // already covers both parities (BIP352). A -L entry matched P_k - L, a key this wallet cannot sign
+  // for, so a crafted output showed as an unspendable coin.
   book.set(hex(serP(L)), m);
-  book.set(hex(serP(L.negate())), m);
 }
 
 /** Always includes change label m=0, plus each requested m. Does not fill 0..max. */
