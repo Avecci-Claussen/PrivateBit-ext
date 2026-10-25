@@ -195,7 +195,7 @@ export type WalletState = {
   /** Spendable: not spent and not frozen. */
   frozen?: string;
   coinCount?: number;
-  /** An open payment link or Payjoin send (auto lock waits for it). */
+  /** An open payment link or Payjoin send (it keeps going after Lock with scoped keys). */
   payjoin?: {
     role: "receive" | "send";
     status: string;

@@ -219,8 +219,22 @@ await settle(page, 1200);
 await click('[data-act="review"]');
 await settle(page, 900);
 ok("review screen shown", (await page.locator("h1, .hdr").first().innerText()).includes("Review"));
-// The coins change after the review: a larger coin arrives, so automatic selection picks it.
-await hook(() => self.__pbE2E.fundOpenWallet("900000"));
+// The coins change after the review: a new coin arrives and every coin the review could have
+// used is frozen in another window, so the payment can only go out from the new coin.
+const changeCoins = async (value) => {
+  const newTxid = await hook((v) => self.__pbE2E.fundOpenWallet(v), value);
+  const froze = [];
+  for (const c of await send({ type: "COINS" })) {
+    if (c.txid === newTxid || c.frozen) continue;
+    await send({ type: "SET_COIN_META", outpoint: c.outpoint, patch: { frozen: true } });
+    froze.push(c.outpoint);
+  }
+  return froze;
+};
+const unfreeze = async (list) => {
+  for (const outpoint of list) await send({ type: "SET_COIN_META", outpoint, patch: { frozen: false } });
+};
+const frozeForTest = await changeCoins("900000");
 await click('[data-act="sheet"][data-sheet="confirm"]');
 await click('[data-act="broadcast"]');
 await settle(page, 1500);
@@ -254,6 +268,7 @@ const reviewChanged = async (p, kind) => {
 };
 void fullUrl;
 await capture("review-changed", reviewChanged);
+await unfreeze(frozeForTest);
 // popup: run the same flow so the popup shows the changed banner too
 for (const theme of ["dark", "light"]) {
   await setTheme(theme, pop);
@@ -262,12 +277,13 @@ for (const theme of ["dark", "light"]) {
   await settle(pop, 1000);
   await click('[data-act="review"]', pop);
   await settle(pop, 800);
-  await hook((v) => self.__pbE2E.fundOpenWallet(v), theme === "dark" ? "950000" : "2000000");
+  const froze = await changeCoins(theme === "dark" ? "950000" : "2000000");
   await click('[data-act="sheet"][data-sheet="confirm"]', pop);
   await click('[data-act="broadcast"]', pop);
   await settle(pop, 1500);
   ok(`popup ${theme}: changed plan blocked`, (await pop.locator(".banner.warn").first().innerText().catch(() => "")).includes("Nothing was sent"));
   await shot(`popup-review-changed-${theme}`, pop, true);
+  await unfreeze(froze);
 }
 
 // ---------- 5. honest scan status while waiting ----------
