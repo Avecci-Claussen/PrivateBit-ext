@@ -23,6 +23,8 @@ export type Account = {
   birthday: number;
   /** Migration one-time address at m/86'/8228'/0'/0/index. Not linked to the sp1 code. */
   oneTime: (index: number) => OneTimeKey;
+  /** A connected website's own account at m/86'/coin'/index'/0/0 (sites.ts). */
+  site?: (index: number) => OneTimeKey;
 };
 
 /**
@@ -51,6 +53,9 @@ export type OneTimeKey = {
   address: string;
   /** Private key for Q with even Y, ready for BIP340 signing and BIP352 input hashing. */
   secret: Uint8Array;
+  /** Untweaked private key and its compressed public key (message signing, getPublicKey). */
+  internalSecret?: Uint8Array;
+  internalPub?: Uint8Array;
 };
 
 const N = secp256k1.CURVE.n;
@@ -64,6 +69,11 @@ export const ONE_TIME_ACCOUNT_PATH_BITCOIN = "m/86'/0'/352'/0";
 export function oneTimeKeyFromHd(hd: HDKey, index: number, net: NetworkId = "fractal"): OneTimeKey {
   if (!Number.isInteger(index) || index < 0 || index >= 0x80000000) throw new Error("bad one-time index");
   const path = `${net === "bitcoin" ? ONE_TIME_ACCOUNT_PATH_BITCOIN : ONE_TIME_ACCOUNT_PATH}/${index}`;
+  return taprootKeyAt(hd, path, index);
+}
+
+/** BIP86 key path key at any path. Same math as the one-time address. */
+export function taprootKeyAt(hd: HDKey, path: string, index: number): OneTimeKey {
   const node = hd.derive(path);
   if (!node.privateKey) throw new Error("one-time derive failed");
   const d0 = node.privateKey;
@@ -85,7 +95,7 @@ export function oneTimeKeyFromHd(hd: HDKey, index: number, net: NetworkId = "fra
     wif: FRACTAL.wif,
   };
   const address = btc.Address(addrNet).encode({ type: "tr", pubkey: output });
-  return { index, path, internal, output, scriptPubKey: "5120" + hex(output), address, secret };
+  return { index, path, internal, output, scriptPubKey: "5120" + hex(output), address, secret, internalSecret: d0, internalPub: pub };
 }
 
 export function oneTimeKey(seed: Uint8Array, index: number, net: NetworkId = "fractal"): OneTimeKey {
@@ -107,6 +117,15 @@ export function p2trAddressFromScriptHex(scriptPubKey: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A website's own account: m/86'/coin'/index'/0/0, index from sites.ts siteIndex (2^30 and up). */
+export function sitePath(index: number, net: NetworkId): string {
+  if (!Number.isInteger(index) || index < 0x40000000 || index >= 0x80000000) throw new Error("bad site index");
+  return `m/86'/${net === "bitcoin" ? 0 : FRACTAL.coinType}'/${index}'/0/0`;
+}
+export function siteKeyFromHd(hd: HDKey, index: number, net: NetworkId): OneTimeKey {
+  return taprootKeyAt(hd, sitePath(index, net), index);
 }
 
 export function accountFromVault(vault: UnlockedVault, extraLabels = 0, net: NetworkId = "fractal"): Account {
@@ -136,5 +155,6 @@ export function accountFromVault(vault: UnlockedVault, extraLabels = 0, net: Net
     labels,
     birthday: vault.birthday,
     oneTime: (index: number) => oneTimeKeyFromHd(hd, index, net),
+    site: (index: number) => siteKeyFromHd(hd, index, net),
   };
 }

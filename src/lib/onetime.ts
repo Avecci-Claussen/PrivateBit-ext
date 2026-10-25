@@ -43,7 +43,7 @@ export function visibleRecord(store: OneTimeStore): OneTimeRecord | undefined {
  * A later payment to the same address is still spendable and reopens it.
  */
 export function syncOneTimeWithScan(
-  scan: { utxos: { kind?: "sp" | "bip86"; index?: number; spent: boolean }[] },
+  scan: { utxos: { kind?: "sp" | "bip86" | "site"; index?: number; spent: boolean }[] },
   ot: OneTimeStore,
 ): { utxosSpent: boolean[]; records: OneTimeRecord[]; changedOt: boolean } {
   const utxosSpent = scan.utxos.map((u) => u.spent);

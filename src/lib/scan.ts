@@ -18,8 +18,11 @@ export type LabeledUtxo = {
   k: number;
   height: number;
   spent: boolean;
-  /** "bip86" for a migration one-time address coin (m/86'/8228'/0'/0/index). Absent means Silent Payment. */
-  kind?: "sp" | "bip86";
+  /**
+   * "bip86" for a migration one-time address coin (m/86'/8228'/0'/0/index). "site" for a coin of a
+   * connected website's own account (sites.ts), never part of the private balance. Absent means Silent Payment.
+   */
+  kind?: CoinKind;
   index?: number;
   /** Txid that spent this coin, when the scan saw it. Used to rebuild activity history. */
   spentBy?: string;
@@ -40,9 +43,16 @@ export type WatchedOutput = {
   tweak: string;
   label: number | null;
   k: number;
-  kind?: "sp" | "bip86";
+  kind?: CoinKind;
   index?: number;
 };
+
+export type CoinKind = "sp" | "bip86" | "site";
+
+/** The private wallet's view: a website's account coins are kept out of every balance, list and plan. */
+export function privateUtxos<T extends { kind?: CoinKind }>(utxos: T[]): T[] {
+  return utxos.filter((u) => u.kind !== "site");
+}
 
 export type ScanStore = {
   utxos: LabeledUtxo[];
@@ -337,7 +347,7 @@ export function noteWatchedOutput(
     k: w.k,
     height: hit.height,
     spent: false,
-    ...(w.kind === "bip86" ? { kind: "bip86" as const, index: w.index } : {}),
+    ...(w.kind === "bip86" || w.kind === "site" ? { kind: w.kind, index: w.index } : {}),
   });
   // A sweep used to mark every coin at this address spent, including one the indexer still lists.
   // A real spend names the transaction that spent it. An unnamed spend is that mistake, so take the coin back.
@@ -366,7 +376,7 @@ function applyWatch(store: ScanStore, txHex: string, height: number): void {
       k: w.k,
       height,
       spent: false,
-      ...(w.kind === "bip86" ? { kind: "bip86" as const, index: w.index } : {}),
+      ...(w.kind === "bip86" || w.kind === "site" ? { kind: w.kind, index: w.index } : {}),
     });
   }
 }
@@ -513,7 +523,7 @@ export function applySharedSlice(
         k: w.k,
         height: block.height,
         spent: false,
-        ...(w.kind === "bip86" ? { kind: "bip86" as const, index: w.index } : {}),
+        ...(w.kind === "bip86" || w.kind === "site" ? { kind: w.kind, index: w.index } : {}),
       });
     }
     if (tx.eligible.length > 0 && tx.taps.length > 0) {
@@ -811,9 +821,9 @@ export function pruneWatches(store: ScanStore, keep: ReadonlySet<string>, max = 
   const live = new Set(store.utxos.filter((u) => !u.spent).map((u) => u.scriptPubKey.toLowerCase()));
   const watch = (store.watch ?? []).filter((w) => {
     const spk = w.scriptPubKey.toLowerCase();
-    return w.kind === "bip86" || live.has(spk) || keep.has(spk);
+    return w.kind === "bip86" || w.kind === "site" || live.has(spk) || keep.has(spk);
   });
-  const bounded = watch.length > max ? [...watch.filter((w) => w.kind === "bip86"), ...watch.filter((w) => w.kind !== "bip86").slice(-max)] : watch;
+  const bounded = watch.length > max ? [...watch.filter((w) => w.kind === "bip86" || w.kind === "site"), ...watch.filter((w) => w.kind !== "bip86" && w.kind !== "site").slice(-max)] : watch;
   if (bounded.length === (store.watch ?? []).length) return store;
   return { ...store, watch: bounded };
 }

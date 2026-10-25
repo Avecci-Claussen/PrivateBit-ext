@@ -71,6 +71,7 @@ import { buildSend, buildSplit, destinationNeedsPayjoin, groupInputLabels, payme
 import { isPlanSeed, jitterFeeRate, newPlanSeed } from "./plan-random.ts";
 import type { SignableInput } from "./send.ts";
 import type { OwnedOutput } from "./scan.ts";
+import { privateUtxos } from "./scan.ts";
 import {
   clearSession,
   loadScanGrant,
@@ -1767,7 +1768,14 @@ export class WalletCore {
     }
   }
 
+  /** The private wallet's coins. A website account's coins never show up here (see loadScanAll, sites.ts). */
   async loadScan(): Promise<ScanStore> {
+    const all = await this.loadScanAll();
+    return all.utxos.some((u) => u.kind === "site") ? { ...all, utxos: privateUtxos(all.utxos) } : all;
+  }
+
+  /** Every coin the scan found, website accounts included. */
+  async loadScanAll(): Promise<ScanStore> {
     if (!(await this.scanKey())) {
       // No key at all (browser restarted while locked): nothing is readable, not even from memory.
       this.coins_.invalidate();

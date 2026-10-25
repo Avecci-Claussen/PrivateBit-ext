@@ -36,7 +36,7 @@ export type SignableInput = {
   label: number | null;
   value: string;
   scriptPubKey: string;
-  kind?: "sp" | "bip86";
+  kind?: "sp" | "bip86" | "site";
   index?: number;
 };
 
@@ -46,8 +46,14 @@ export type SignableInput = {
  */
 export function inputSecret(
   account: Account,
-  u: { tweak: string; label: number | null; kind?: "sp" | "bip86"; index?: number; scriptPubKey?: string },
+  u: { tweak: string; label: number | null; kind?: "sp" | "bip86" | "site"; index?: number; scriptPubKey?: string },
 ): Uint8Array {
+  if (u.kind === "site") {
+    if (u.index === undefined || !account.site) throw new Error("site coin without an index");
+    const k = account.site(u.index);
+    if (u.scriptPubKey && u.scriptPubKey !== k.scriptPubKey) throw new Error("site coin script mismatch");
+    return k.secret;
+  }
   if (u.kind === "bip86") {
     if (u.index === undefined) throw new Error("one-time coin without an index");
     const k = account.oneTime(u.index);
@@ -411,7 +417,7 @@ export async function buildSend(args: {
       label: u.label,
       value: u.value,
       scriptPubKey: u.scriptPubKey,
-      ...(u.kind === "bip86" ? { kind: "bip86" as const, index: u.index } : {}),
+      ...(u.kind === "bip86" || u.kind === "site" ? { kind: u.kind, index: u.index } : {}),
     })),
   };
 }
