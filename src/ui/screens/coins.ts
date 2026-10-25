@@ -18,7 +18,7 @@ export const coins = (): CoinView[] => (S.d.coins as CoinView[] | undefined) ?? 
 function badge(c: CoinView): Safe {
   switch (c.status) {
     case "reserved":
-      return html`<span class="badge">${I("lock-keyhole")}Reserved</span>`;
+      return c.held ? html`<span class="badge warn">${I("timer")}Waiting to send</span>` : html`<span class="badge">${I("lock-keyhole")}Reserved</span>`;
     case "frozen":
       return html`<span class="badge frozen">${I("snowflake")}Frozen</span>`;
     case "linked":
@@ -29,6 +29,7 @@ function badge(c: CoinView): Safe {
 }
 const name = (c: CoinView): string => c.label || (c.kind === "bip86" ? "One-time address" : "Not labeled");
 function sub(c: CoinView): string {
+  if (c.held) return "In a payment waiting to be sent";
   if (c.status === "reserved") return "For your payment link";
   if (c.reason) return c.reason;
   if (c.kind === "bip86") return "From your old wallet";
@@ -103,7 +104,7 @@ screens["coin-detail"] = () => {
     title: "Coin",
     header: hdr({ title: "Coin", net: true }),
     main: html`
-  <div class="hero-amt"><p class="cap">Coin</p><p class="a">${big}</p>${usd(v) ? html`<p class="fiat">${usd(v)}</p>` : ""}${linked ? html`<span class="badge warn">${I("triangle-alert")}Linked to a reused address</span>` : reserved ? html`<span class="badge">${I("lock-keyhole")}Reserved for a payment link</span>` : html`<span class="badge ok">${I("shield-check")}Private</span>`}</div>
+  <div class="hero-amt"><p class="cap">Coin</p><p class="a">${big}</p>${usd(v) ? html`<p class="fiat">${usd(v)}</p>` : ""}${linked ? html`<span class="badge warn">${I("triangle-alert")}Linked to a reused address</span>` : reserved ? (c.held ? html`<span class="badge warn">${I("timer")}In a payment waiting to be sent</span>` : html`<span class="badge">${I("lock-keyhole")}Reserved for a payment link</span>`) : html`<span class="badge ok">${I("shield-check")}Private</span>`}</div>
   <div class="field"><label class="label" for="who">Who knows about this coin</label><input class="input" id="who" data-f="who" maxlength="64" autocomplete="off" value="${fv("who")}" aria-describedby="who-h"><p class="help" id="who-h">Name people or services, not the reason. Such as a friend's name or "old wallet".</p></div>
   <div class="li" style="padding:0;min-height:auto;cursor:default"><span class="body"><label class="t" for="fz">Freeze this coin</label><span class="d" style="white-space:normal">Frozen coins are never picked for a payment, not even by Max.</span></span><input class="switch" type="checkbox" role="switch" id="fz" data-act="coin-freeze" data-v="1" ${reserved ? html`disabled` : ""}></div>
   ${c.kind === "bip86" ? "" : html`<div class="li" style="padding:0;min-height:auto;cursor:default"><span class="body"><label class="t" for="lk">Mark as linked</label><span class="d" style="white-space:normal">Turn on if this coin came from an address other people know. Spending it with private coins then shows a warning.</span></span><input class="switch" type="checkbox" role="switch" id="lk" data-act="coin-linked" ${c.linked ? html`checked` : ""}></div>`}

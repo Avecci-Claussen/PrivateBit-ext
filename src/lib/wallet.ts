@@ -203,6 +203,8 @@ export type CoinView = {
   frozen?: boolean;
   kind: "sp" | "bip86";
   pending: boolean;
+  /** In a signed payment that waits to be sent (delayed sending). */
+  held?: boolean;
 };
 
 export type PlanOptions = {
@@ -1876,6 +1878,8 @@ export class WalletCore {
     const { scan } = await this.requireAccount();
     const meta = await this.loadCoinMeta();
     const { reserved } = await this.blockedOutpoints();
+    const held = new Set<string>();
+    for (const d of await this.loadDelayed()) if (d.status === "waiting") for (const inp of d.signableInputs) held.add(`${inp.txid}:${inp.vout}`);
     return scan.utxos
       .filter((u) => !u.spent)
       .map((u) => {
@@ -1894,6 +1898,7 @@ export class WalletCore {
           frozen: m.frozen,
           kind: u.kind === "bip86" ? "bip86" : "sp",
           pending: u.height === 0,
+          held: held.has(op) || undefined,
         } satisfies CoinView;
       })
       .sort((a, b) => Number(BigInt(b.value) - BigInt(a.value)));
