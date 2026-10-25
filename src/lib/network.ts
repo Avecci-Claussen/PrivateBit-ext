@@ -131,6 +131,11 @@ export type ChainConfig = {
   payjoinDirectory?: string;
   ohttpRelay?: string;
   /**
+   * Allow fetching a mailbox's encryption keys straight from the mailbox, which shows it this IP.
+   * Off by default: the keys come through the relay (Android) or ship with the app (default mailbox).
+   */
+  directMailboxKeys?: boolean;
+  /**
    * Public mode only: "node" sends payments through the user's own node at sendNodeUrl, so the
    * public service never sees them. A node in "core" mode always sends through itself.
    */
@@ -173,6 +178,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
   const rawDir = cfg?.payjoinDirectory?.trim() || DEFAULT_PAYJOIN_DIRECTORY;
   const payjoinDirectory = /ntfy\.sh/i.test(rawDir) ? DEFAULT_PAYJOIN_DIRECTORY : rawDir;
   const ohttpRelay = cfg?.ohttpRelay?.trim() || DEFAULT_OHTTP_RELAY;
+  const direct = cfg?.directMailboxKeys === true ? { directMailboxKeys: true as const } : {};
   if (cfg?.kind === "core") {
     return {
       kind: "core",
@@ -181,6 +187,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
       rpcPassword: cfg.rpcPassword,
       payjoinDirectory,
       ohttpRelay,
+      ...direct,
     };
   }
   if (cfg?.kind === "esplora" || (cfg?.url && cfg.url.includes(MEMPOOL_HOST))) {
@@ -190,6 +197,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
       unisatToken: token,
       payjoinDirectory,
       ohttpRelay,
+      ...direct,
       ...sendRoute(cfg),
     };
   }
@@ -200,6 +208,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
     unisatToken: token,
     payjoinDirectory,
     ohttpRelay,
+    ...direct,
     ...sendRoute(cfg),
   };
 }

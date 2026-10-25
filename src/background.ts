@@ -375,7 +375,7 @@ type Msg =
   | { type: "LOAD_CHAIN" }
   | { type: "TEST_CHAIN"; chain: ChainConfig; sendNode?: boolean }
   | { type: "SET_NETWORK"; network: NetworkId }
-  | { type: "PJ_TEST"; directory: string; relay: string }
+  | { type: "PJ_TEST"; directory: string; relay: string; allowDirect?: boolean }
   | { type: "SET_BIRTHDAY"; birthday: number }
   | { type: "FOLLOW_TIP" }
   | { type: "OFFER_PAYJOIN"; amount: string }
@@ -755,7 +755,7 @@ async function handle(msg: Msg): Promise<unknown> {
       return { ...check, net, onChain };
     }
     case "PJ_TEST":
-      return testPayjoinRoute(msg.directory.trim(), msg.relay.trim());
+      return testPayjoinRoute(msg.directory.trim(), msg.relay.trim(), undefined, msg.allowDirect === true);
     case "SET_NETWORK": {
       await switchNetwork(msg.network);
       return bundle();

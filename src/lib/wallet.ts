@@ -12,6 +12,7 @@ import { accountFromVault, p2trAddressFromScriptHex, scanAccountFrom } from "./k
 import {
   DEFAULT_BIRTHDAY,
   DEFAULT_CHAIN,
+  DEFAULT_OHTTP_RELAY,
   DEFAULT_PAYJOIN_DIRECTORY,
   FRACTAL,
   isRedactedSecret,
@@ -2915,9 +2916,9 @@ export class WalletCore {
   }
 
   /**
-   * Audit M5 (independent): the mailbox's public encryption keys, fetched at most once a week and
-   * kept, so the mailbox does not see this IP each time a link is made. Browsers cannot send this
-   * one GET through the relay (BIP77 relays take it only as a CONNECT or WebSocket tunnel).
+   * Audit M5 (independent) and security audit v1 item 5: the mailbox's public encryption keys,
+   * kept a week, and never fetched straight from the mailbox unless the user allowed it (see
+   * fetchDirectoryOhttpBytes for the order).
    */
   private async directoryKeys(directory: string): Promise<OhttpKeyConfig> {
     const cached = (await this.kv.get([OHTTP_KEYS_KEY]))[OHTTP_KEYS_KEY] as { directory: string; raw: string; at: number } | undefined;
@@ -2928,7 +2929,10 @@ export class WalletCore {
         // Fetched again below.
       }
     }
-    const raw = await fetchDirectoryOhttpBytes(directory);
+    const raw = await fetchDirectoryOhttpBytes(directory, {
+      relay: this.chainCfg.ohttpRelay || DEFAULT_OHTTP_RELAY,
+      allowDirect: this.chainCfg.directMailboxKeys === true,
+    });
     await this.kv.set({ [OHTTP_KEYS_KEY]: { directory, raw: hex(raw), at: Date.now() } });
     return parseOhttpKeys(raw);
   }

@@ -494,6 +494,7 @@ actions["send-save"] = async () => {
 loaders["set-payjoin"] = () => {
   S.f.mb = chain().payjoinDirectory ?? DEFAULT_PAYJOIN_DIRECTORY;
   S.f.rl = chain().ohttpRelay ?? DEFAULT_OHTTP_RELAY;
+  S.f.mbDirect = chain().directMailboxKeys === true;
   S.d.pjTest = undefined;
 };
 function payjoinForm(): Safe {
@@ -504,6 +505,7 @@ function payjoinForm(): Safe {
   <div class="field"><label class="label" for="mb">Mailbox</label><input class="input mono" id="mb" data-f="mb" data-live autocomplete="off" value="${fv("mb")}" aria-describedby="mb-h"><p class="help" id="mb-h">Sees: an encrypted 7 KB blob and when it was posted.</p></div>
   <div class="field"><label class="label" for="rl">Relay</label><input class="input mono" id="rl" data-f="rl" data-live autocomplete="off" value="${fv("rl")}" aria-describedby="rl-h"><p class="help" id="rl-h">Sees: your IP, not the content.</p></div>
   <div class="banner ${same ? "warn" : ""}">${I(same ? "triangle-alert" : "info", "s16")}<div>Running both mailbox and relay yourself defeats the purpose of the relay. Use different operators.</div></div>
+  <label class="check"><input type="checkbox" data-f="mbDirect" ${S.f.mbDirect ? html`checked` : ""}> <span>Fetch mailbox keys directly<span class="help">Needed only for a mailbox other than payjo.in in the browser. The mailbox then sees your IP once a week. The Android app fetches them through the relay instead.</span></span></label>
   ${t ? (t.ok ? html`<div class="banner ok" role="status">${I("circle-check", "s16")}<div><span class="bt">Route works</span>The mailbox gave its keys and answered through the relay in ${Math.round(t.ms / 1000)} seconds. Nothing was posted.</div></div>` : html`<div class="banner danger" role="alert">${I("circle-x", "s16")}<div><span class="bt">${t.step === "keys" ? "Mailbox not usable" : t.step === "relay" ? "Relay not usable" : "Check the addresses"}</span>${t.message}</div></div>`) : ""}
   ${errP("pj")}`;
 }
@@ -531,7 +533,7 @@ actions["pj-test"] = async () => {
   delete S.err.pj;
   render();
   try {
-    S.d.pjTest = await call<PayjoinRouteCheck>({ type: "PJ_TEST", directory: mb, relay: rl });
+    S.d.pjTest = await call<PayjoinRouteCheck>({ type: "PJ_TEST", directory: mb, relay: rl, allowDirect: S.f.mbDirect === true });
   } catch (e) {
     S.d.pjTest = { ok: false, step: "relay", message: String((e as Error).message) };
   }
@@ -555,7 +557,7 @@ actions["pj-save"] = async () => {
   const ok = await run(
     "pj",
     async () => {
-      await call({ type: "SAVE_CHAIN", chain: { ...chain(), payjoinDirectory: mb, ohttpRelay: rl } });
+      await call({ type: "SAVE_CHAIN", chain: { ...chain(), payjoinDirectory: mb, ohttpRelay: rl, directMailboxKeys: S.f.mbDirect === true } });
       await refresh();
       return true;
     },

@@ -147,6 +147,7 @@ describe("M5: the mailbox keys are fetched once and kept", () => {
       const kv = memoryKv();
       const w = new PrivateBit(kv);
       await w.create({ password: "password1", birthday: 8 });
+      await w.saveChain({ ...(await w.loadChain()), payjoinDirectory: "https://mailbox.example", directMailboxKeys: true });
       const { account, scan } = await w.requireAccount();
       const t = sessionTweak("ab".repeat(32), 0);
       upsertUtxo(scan.utxos, { txid: "ab".repeat(32), vout: 0, value: "50000", scriptPubKey: hex(taprootScriptPubKey(tweakSpend(account.spendSecret, t).xonly)), tweak: hex(t), label: null, k: 0, height: 8, spent: false });
@@ -163,6 +164,40 @@ describe("M5: the mailbox keys are fetched once and kept", () => {
       globalThis.fetch = realFetch;
     }
   }, 30000);
+});
+
+describe("Audit v1 item 5: mailbox keys never come straight from the mailbox by default", () => {
+  it("default mailbox uses the shipped keys; another needs the relay hook or the opt-in", async () => {
+    const pj = await import("../src/lib/payjoin.ts");
+    const { encodeOhttpKeyConfig, genOhttpKeyPair } = await import("../src/lib/ohttp.ts");
+    const realFetch = globalThis.fetch;
+    const direct: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      direct.push(String(input instanceof Request ? input.url : input));
+      throw new TypeError("network disabled");
+    }) as typeof fetch;
+    const g = globalThis as { __pbFetchViaRelay?: (relay: string, url: string) => Promise<Uint8Array> };
+    try {
+      const shipped = await pj.fetchDirectoryOhttpBytes("https://payjo.in", { relay: "https://pj.bobspacebkk.com" });
+      expect(hex(shipped)).toBe(pj.BUNDLED_OHTTP_KEYS["https://payjo.in"]);
+      (await import("../src/lib/ohttp.ts")).parseOhttpKeys(shipped);
+      await expect(pj.fetchDirectoryOhttpBytes("https://mailbox.example", { relay: "https://relay.example" })).rejects.toThrow(/IP address/);
+      await expect(pj.fetchDirectoryOhttpBytes("https://mailbox.example", { relay: "https://relay.example", allowDirect: true })).rejects.toThrow(/network disabled/);
+      expect(direct).toEqual(["https://mailbox.example/.well-known/ohttp-gateway"]);
+      const body = encodeOhttpKeyConfig(genOhttpKeyPair());
+      const seen: string[] = [];
+      g.__pbFetchViaRelay = async (relay, url) => {
+        seen.push(`${relay} ${url}`);
+        return body;
+      };
+      expect(hex(await pj.fetchDirectoryOhttpBytes("https://mailbox.example", { relay: "https://relay.example" }))).toBe(hex(body));
+      expect(seen).toEqual(["https://relay.example https://mailbox.example/.well-known/ohttp-gateway"]);
+      expect(direct.length).toBe(1);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete g.__pbFetchViaRelay;
+    }
+  });
 });
 
 describe("L6: labels match only P_k + L", () => {

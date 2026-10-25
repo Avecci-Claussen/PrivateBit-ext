@@ -11,7 +11,7 @@ import {
   type HpkeKeyPair,
 } from "./bip77-hpke.ts";
 import { attachFragment, encodeFragment, mailboxIdFromRk, parseFragment, splitMailbox } from "./bip77-uri.ts";
-import { hex } from "./bytes.ts";
+import { fromHex, hex } from "./bytes.ts";
 import {
   MAILBOX_EMPTY,
   MAILBOX_OK,
@@ -410,8 +410,54 @@ export function bip78ValidateStub(proposal: string, original: string): string[] 
 }
 
 /** GET directory /.well-known/ohttp-gateway as RFC 9540 `application/ohttp-keys`, raw bytes. */
-export async function fetchDirectoryOhttpBytes(directory: string): Promise<Uint8Array> {
-  const res = await fetch(`${mailboxBase(directory)}/.well-known/ohttp-gateway`, {
+/**
+ * The default mailbox's key configuration, shipped with the app (BIP77 "trusted application
+ * binary" bootstrap). Read on 2026-10-25 through the relay with HTTP CONNECT, so it matches what
+ * every other client sees. Used when the keys cannot be fetched through the relay.
+ */
+export const BUNDLED_OHTTP_KEYS: Record<string, string> = {
+  "https://payjo.in": "0100160439c9604d9ef100a565ad34275b2bc3618c2426812bb6787bbf770cacf54d509729f6f4fa88b29f8a8b432a415cbd2a3209425cd96b24e3c8a11410352e38cf91000400010003",
+};
+
+/**
+ * Fetch the mailbox keys through the OHTTP relay with HTTP CONNECT (BIP77 bootstrap). Set by
+ * platforms that can open a tunnel (the Android app). A browser extension cannot.
+ */
+type RelayFetch = (relay: string, url: string) => Promise<Uint8Array>;
+export function relayKeyFetcher(): RelayFetch | undefined {
+  return (globalThis as { __pbFetchViaRelay?: RelayFetch }).__pbFetchViaRelay;
+}
+
+export class MailboxKeysUnavailable extends Error {
+  constructor(directory: string) {
+    super(
+      `PrivateBit has no encryption keys for the mailbox ${mailboxBase(directory)}, and fetching them directly would show the mailbox your IP address. Turn on "Fetch mailbox keys directly" in Settings, Payjoin, or use the default mailbox.`,
+    );
+    this.name = "MailboxKeysUnavailable";
+  }
+}
+
+/**
+ * Security audit v1 (item 5): the mailbox keys never come straight from the mailbox unless the
+ * user allowed it. Order: through the relay (Android, HTTP CONNECT), the keys shipped with the
+ * app for the default mailbox, then directly only with allowDirect.
+ */
+export async function fetchDirectoryOhttpBytes(directory: string, opts: { relay?: string; allowDirect?: boolean; skipBundled?: boolean } = {}): Promise<Uint8Array> {
+  const url = `${mailboxBase(directory)}/.well-known/ohttp-gateway`;
+  const viaRelay = relayKeyFetcher();
+  if (viaRelay && opts.relay) {
+    try {
+      const raw = await viaRelay(opts.relay, url);
+      parseOhttpKeys(raw);
+      return raw;
+    } catch {
+      /* the shipped keys below, or the direct fetch the user allowed */
+    }
+  }
+  const shipped = opts.skipBundled ? undefined : BUNDLED_OHTTP_KEYS[mailboxBase(directory)];
+  if (shipped) return fromHex(shipped);
+  if (!opts.allowDirect) throw new MailboxKeysUnavailable(directory);
+  const res = await fetch(url, {
     headers: { Accept: "application/ohttp-keys" },
     signal: AbortSignal.timeout(15_000),
   });
@@ -421,8 +467,8 @@ export async function fetchDirectoryOhttpBytes(directory: string): Promise<Uint8
   return raw;
 }
 
-export async function fetchDirectoryOhttp(directory: string): Promise<OhttpKeyConfig> {
-  return parseOhttpKeys(await fetchDirectoryOhttpBytes(directory));
+export async function fetchDirectoryOhttp(directory: string, opts: { relay?: string; allowDirect?: boolean } = {}): Promise<OhttpKeyConfig> {
+  return parseOhttpKeys(await fetchDirectoryOhttpBytes(directory, opts));
 }
 
 export type PayjoinRouteCheck = { ok: true; ms: number } | { ok: false; step: "url" | "same" | "keys" | "relay"; message: string };
@@ -445,13 +491,13 @@ export function checkPayjoinUrls(directory: string, relay: string): PayjoinRoute
  * Proves the route works: the mailbox hands out its encryption keys, and an encrypted
  * request for an empty, random mailbox comes back through the relay. Nothing is posted.
  */
-export async function testPayjoinRoute(directory: string, relay: string, now = () => Date.now()): Promise<PayjoinRouteCheck> {
+export async function testPayjoinRoute(directory: string, relay: string, now = () => Date.now(), allowDirect = false): Promise<PayjoinRouteCheck> {
   const bad = checkPayjoinUrls(directory, relay);
   if (bad) return bad;
   const t0 = now();
   let keys: OhttpKeyConfig;
   try {
-    keys = await fetchDirectoryOhttp(directory);
+    keys = await fetchDirectoryOhttp(directory, { relay, allowDirect });
   } catch (e) {
     return { ok: false, step: "keys", message: `The mailbox did not give its encryption keys (${e instanceof Error ? e.message : String(e)}).` };
   }

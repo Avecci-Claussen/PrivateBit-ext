@@ -13,7 +13,13 @@ Full report: SECURITY-AUDIT-v1.md. Highlights:
 - New passwords need at least 12 characters; vaults move to scrypt 2^17 on the next unlock.
 - Explorer blocks are checked against their merkle root, hash and proof of work.
 - An unfinished Payjoin link sends the payer's original payment after its deadline.
-- Auto lock waits at most 2 hours past its usual time for a waiting Payjoin.
+- Auto lock never waits. A Payjoin keeps going after Lock with keys for its own coins only.
+- While unlocked no recovery words, seed or spend key stay in memory; the seed is sealed with a
+  key the browser cannot export and opened only for each operation.
+- Wrong passwords wait longer each time (3 free tries, then from 30 seconds up to 1 hour).
+- Fee and price checks run on random timers, not when you open a screen.
+- Mailbox encryption keys never come straight from the mailbox: through the relay on Android,
+  shipped with the app for payjo.in, or directly only if you turn that on.
 - Sites can only relay transactions that spend their own account and wait after repeated rejections.
 
 ### Wallet
