@@ -445,7 +445,7 @@ screens.review = () => {
     : "";
   const main = html`
   ${changed?.length ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">Nothing was sent. The payment changed since you reviewed it</span>${changed.join(" ")} Check it again below before you confirm.</div></div>` : ""}
-  <div class="hero-amt"><p class="cap">${pj ? "You pay" : "You send"}</p><p class="a">${fbShort(amt, { unit: false })}<span class="unit"> ${UNIT()}</span></p>${usd(amt) || (lbl && !legacy) ? html`<p class="fiat">${usd(amt)}${lbl && !legacy ? ` to ${lbl}` : ""}${pj ? " with a PrivateBit payment link" : ""}</p>` : ""}</div>
+  <div class="hero-amt"><p class="cap">${pj ? "You pay" : "You send"}</p><p class="a">${fb(amt, { unit: false, trim: true })}<span class="unit"> ${UNIT()}</span></p>${usd(amt) || (lbl && !legacy) ? html`<p class="fiat">${usd(amt)}${lbl && !legacy ? ` to ${lbl}` : ""}${pj ? " with a PrivateBit payment link" : ""}</p>` : ""}</div>
   ${pathPreview(fromLeg(), toLeg(to, lbl))}
   <div class="card"><div class="kv">
     ${toRow}${privRow}
