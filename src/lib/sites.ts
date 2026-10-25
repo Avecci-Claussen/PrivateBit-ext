@@ -159,7 +159,12 @@ export type ToSignInput = {
 };
 export type SignPsbtOptions = { autoFinalized?: boolean; toSignInputs?: ToSignInput[] };
 
-const SIGHASH_OK = new Set([0x00, 0x01, 0x03, 0x81, 0x83]);
+/**
+ * Audit H3: only signature types that commit to every output. SINGLE and NONE (with or without
+ * ANYONECANPAY) let the site change or drop outputs after you sign, so the review could not
+ * show what really leaves. ALL|ANYONECANPAY is allowed with a warning: others can add inputs.
+ */
+const SIGHASH_OK = new Set([0x00, 0x01, 0x81]);
 const SIGHASH_NAMES: Record<number, string> = {
   0x00: "DEFAULT",
   0x01: "ALL",
@@ -269,8 +274,8 @@ export function reviewPsbt(tx: btc.Transaction, key: Pick<SiteKey, "scriptPubKey
     if (sign) {
       if (!prev) refuse ??= `input ${i} has no amount or script, so it cannot be checked`;
       else if (owner !== "site") refuse ??= `input ${i} is not paid to this site's account`;
-      if (!SIGHASH_OK.has(sighash)) refuse ??= `input ${i} asks for signature type ${sighashName(sighash)}, which lets anyone change where the coins go`;
-      else if (sighash !== 0 && sighash !== 1) warnings.push(`Input ${i} uses signature type ${sighashName(sighash)}. Others can add inputs or outputs after you sign.`);
+      if (!SIGHASH_OK.has(sighash)) refuse ??= `Input ${i} asks for signature type ${sighashName(sighash)}. It would let the site change or remove outputs after you sign, so PrivateBit does not sign it.`;
+      else if (sighash === 0x81) warnings.push(`Input ${i} uses signature type ALL|ANYONECANPAY. Others can add their own inputs after you sign. The outputs stay exactly as shown.`);
       if (prev) spent += prev.amount;
     } else if (owner === "unknown") {
       warnings.push(`Input ${i} is not yours. You are not signing it.`);

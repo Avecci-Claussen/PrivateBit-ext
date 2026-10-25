@@ -231,12 +231,21 @@ const p3 = (() => {
   tx.addOutput({ script: fromHex(otherScript), amount: 46000n });
   return hex(tx.toPSBT());
 })();
-await start("signPsbt", p3, { toSignInputs: [{ index: 0, address: addr, sighashTypes: [0x83] }] });
+await start("signPsbt", p3, { toSignInputs: [{ index: 0, address: addr, sighashTypes: [0x81] }] });
 w = await approvalWindow();
 t = await w.locator("body").innerText();
 ok("warns about inputs that are not yours", /Input 1 is not yours/.test(t) || /Not yours/.test(t));
-ok("warns about SINGLE|ANYONECANPAY", /SINGLE\|ANYONECANPAY/.test(t));
+ok("warns about ALL|ANYONECANPAY", /ALL\|ANYONECANPAY/.test(t));
 await shotPopup(w, "sign-warnings");
+await w.click("[data-act=dapp-reject]");
+await result();
+
+// Audit H3: SINGLE|ANYONECANPAY is refused, there is nothing to approve.
+await start("signPsbt", p3, { toSignInputs: [{ index: 0, address: addr, sighashTypes: [0x83] }] });
+w = await approvalWindow();
+t = await w.locator("body").innerText();
+ok("refuses SINGLE|ANYONECANPAY", /does not sign it/.test(t), t.slice(0, 300));
+ok("no approve button on a refused request", (await w.locator("[data-act=dapp-approve]:not([disabled]):not([aria-disabled=true])").count()) === 0);
 await w.click("[data-act=dapp-reject]");
 await result();
 

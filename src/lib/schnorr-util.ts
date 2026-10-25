@@ -1,7 +1,7 @@
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
 import { CURVE_N } from "./bip352.ts";
-import { concatBytes, fromHex, ser32 } from "./bytes.ts";
+import { concatBytes, fromHex, hex, ser32 } from "./bytes.ts";
 
 const n = CURVE_N;
 
@@ -32,6 +32,16 @@ export function sessionTweak(sessionIdHex: string, index: number): Uint8Array {
   return sha256(
     concatBytes(new TextEncoder().encode("privatebit/pj-out/v1"), fromHex(sessionIdHex), ser32(index)),
   );
+}
+
+/**
+ * Session id of Payjoin link number `index` (audit H2). Derived from the scan key, so a restore
+ * from the recovery words finds every link's payment and change output again. Links made before
+ * this change used a random id; their tweaks stay stored with the coin and keep working.
+ */
+export function pjSessionId(scanSecret: Uint8Array, index: number): string {
+  if (!Number.isInteger(index) || index < 0) throw new Error("bad link index");
+  return hex(sha256(concatBytes(new TextEncoder().encode("privatebit/pj-session/v1"), scanSecret, ser32(index))));
 }
 
 /** Q = P + t·G. Secret = even(d+t). Used for a BIP77 session P2TR (not an sp1). */

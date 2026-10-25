@@ -1,5 +1,5 @@
 import * as btc from "@scure/btc-signer";
-import { schnorr } from "@noble/curves/secp256k1";
+import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 import {
   createSilentOutputs,
   decodeSilentAddress,
@@ -7,7 +7,7 @@ import {
   spendSecret,
   taprootScriptPubKey,
 } from "./bip352.ts";
-import { evenPriv } from "./schnorr-util.ts";
+import { evenPriv, tweakSpend } from "./schnorr-util.ts";
 import { concatBytes, fromHex, hex } from "./bytes.ts";
 import { sha256 } from "@noble/hashes/sha256";
 import { coinSelect, estimateVbytes, maxSendable } from "./coinselect.ts";
@@ -60,12 +60,23 @@ export function inputSecret(
     if (u.scriptPubKey && u.scriptPubKey !== k.scriptPubKey) throw new Error("one-time coin script mismatch");
     return k.secret;
   }
-  return spendSecret({
+  const d = spendSecret({
     spendSecret: account.spendSecret,
     tweak: fromHex(u.tweak),
     label: u.label,
     scanSecret: account.scanSecret,
   });
+  // Audit H1: a Payjoin link output is even(spend key) + tweak (tweakSpend), not the BIP352
+  // spend key + tweak. They differ when the spend key has an odd Y. Pick the secret whose key is
+  // the coin's output key, so coins already received this way can be spent.
+  if (u.label === null && u.tweak.length === 64 && u.scriptPubKey && u.scriptPubKey.length === 68) {
+    const want = u.scriptPubKey.slice(4).toLowerCase();
+    if (hex(secp256k1.getPublicKey(d, true).slice(1)) !== want) {
+      const pj = tweakSpend(account.spendSecret, fromHex(u.tweak));
+      if (hex(pj.xonly) === want) return pj.secret;
+    }
+  }
+  return d;
 }
 
 export type BuiltSend = {

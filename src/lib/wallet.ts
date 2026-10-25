@@ -66,8 +66,8 @@ import {
   type ScanProgress,
   type ScanStore,
 } from "./scan.ts";
-import { evenPriv, sessionTweak, tweakSpend } from "./schnorr-util.ts";
-import { buildSend, buildSplit, destinationNeedsPayjoin, groupInputLabels, paymentOutputAddress, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
+import { evenPriv, pjSessionId, sessionTweak, tweakSpend } from "./schnorr-util.ts";
+import { buildSend, buildSplit, inputSecret, destinationNeedsPayjoin, groupInputLabels, paymentOutputAddress, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
 import { isPlanSeed, jitterFeeRate, newPlanSeed } from "./plan-random.ts";
 import type { SignableInput } from "./send.ts";
 import type { OwnedOutput } from "./scan.ts";
@@ -808,6 +808,8 @@ export class WalletCore {
       scan = addWatch(scan, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index: i });
       ot = setOneTimeStatus(issueRecord(ot, k.address, Date.now(), i), i, "swept");
     }
+    // Audit H2: links are derived by index, so watch the first ones right away.
+    for (const w of pjWatchesFor(account, 0, PJ_GAP)) scan = addWatch(scan, w);
     return { scan, ot: { ...ot, restoredWindow: ONE_TIME_RESTORE_WINDOW } };
   }
 
@@ -1223,6 +1225,14 @@ export class WalletCore {
       let store = snap.store;
       if (full && ot) store = this.withOneTimeWatches(full, store, ot);
       if (full && sites) store = this.withSiteWatches(full, store, sites);
+      if (full && ot) {
+        // Audit H2: keep every derived link output watched, plus a gap past the last one used.
+        const pj = pjWatchesFor(full, 0, pjNextIndex(full, store, await this.loadOneTime()) + PJ_GAP);
+        for (const w of pj) {
+          store = addWatch(store, w);
+          keep?.add(w.scriptPubKey);
+        }
+      }
       // Deferred holes are transactions of blocks we scanned, not ours; refetching them reveals nothing about us.
       store = await retryDeferred(account, source, store);
       if (keep) store = pruneWatches(store, keep);
@@ -1906,6 +1916,16 @@ export class WalletCore {
     // Address status is decided in saveScan. A restored wallet watches further indexes
     // once a coin is actually sitting at one of the earlier ones.
     const ot = await this.loadOneTime();
+    // Audit H2: a coin at a link output moves the watched gap of link outputs on at once.
+    {
+      const session = await this.session();
+      if (session) {
+        const account = this.accountOf(session);
+        const have = new Set((scan.watch ?? []).map((w) => w.scriptPubKey.toLowerCase()));
+        const missing = pjWatchesFor(account, 0, pjNextIndex(account, scan, ot) + PJ_GAP).filter((w) => !have.has(w.scriptPubKey));
+        if (missing.length) void this.coins_.update((cur) => missing.reduce((acc, w) => addWatch(acc, w), cur)).catch(() => undefined);
+      }
+    }
     const windowMax = ot.restoredWindow;
     if (windowMax !== undefined) {
       const withCoin = ot.records.filter((r) => scan.utxos.some((u) => u.kind === "bip86" && u.index === r.index && !u.spent));
@@ -2564,6 +2584,7 @@ export class WalletCore {
         (u) =>
           !u.spent &&
           u.kind !== "bip86" &&
+          u.kind !== "site" &&
           !reservedOut.has(`${u.txid}:${u.vout}`) &&
           !frozenOut.has(`${u.txid}:${u.vout}`),
       )
@@ -2572,8 +2593,12 @@ export class WalletCore {
     if (spendable.length === 0) {
       throw new PolicyError("Receive coins first, then you can create a payment link.");
     }
-    const coin = spendable[0]!;
-    const sessionId = hex(randomBytes(32));
+    // Audit M4: a random eligible coin, not always the largest one.
+    const coin = spendable[Number(BigInt("0x" + hex(randomBytes(4))) % BigInt(spendable.length))]!;
+    // Audit H2: the link's outputs come from the scan key and the next link index.
+    const ot = await this.loadOneTime();
+    const pjIndex = pjNextIndex(account, scan, ot);
+    const sessionId = pjSessionId(account.scanSecret, pjIndex);
     const payTweak = sessionTweak(sessionId, 0);
     const extraTweak = sessionTweak(sessionId, 1);
     const pay = tweakSpend(account.spendSecret, payTweak);
@@ -2614,6 +2639,7 @@ export class WalletCore {
     const sessions = await this.loadPayjoinSessions();
     sessions.push(session);
     await this.savePayjoinSessions(sessions);
+    await this.saveOneTime({ ...(await this.loadOneTime()), pjNext: pjIndex + 1 });
     return session;
   }
 
@@ -2738,14 +2764,8 @@ export class WalletCore {
         const built = buildPayjoinProposal({
           originalB64: original,
           receiverInput: { ...s.reserved, spent: false },
-          receiverSecret: evenPriv(
-            spendSecret({
-              spendSecret: account.spendSecret,
-              tweak: fromHex(s.reserved.tweak),
-              label: s.reserved.label,
-              scanSecret: account.scanSecret,
-            }),
-          ),
+          // Audit H1: same key choice as every other spend (a coin from an earlier link included).
+          receiverSecret: evenPriv(inputSecret(account, s.reserved)),
           extraScript: fromHex(s.extraScriptPubKey),
           extraTweak: s.extraTweak,
         });
@@ -2870,6 +2890,40 @@ export class WalletCore {
 
 
 /** Every storage key PrivateBit may write: per-wallet names (before scoping) and shared ones. */
+/** Payjoin link indexes watched past the last one used (audit H2). */
+export const PJ_GAP = 10;
+const pjCache = new Map<string, WatchedOutput[]>();
+
+/** The payment and extra outputs of link `index`, as watch entries. */
+export function pjOutputs(account: Account, index: number): WatchedOutput[] {
+  const key = `${hex(account.spendPub)}:${hex(account.scanPub)}:${index}`;
+  let got = pjCache.get(key);
+  if (!got) {
+    const id = pjSessionId(account.scanSecret, index);
+    got = [0, 1].map((i) => {
+      const t = sessionTweak(id, i);
+      return { scriptPubKey: hex(taprootScriptPubKey(tweakSpend(account.spendSecret, t).xonly)), tweak: hex(t), label: null, k: 0 };
+    });
+    if (pjCache.size > 5000) pjCache.clear();
+    pjCache.set(key, got);
+  }
+  return got.map((w) => ({ ...w }));
+}
+
+export function pjWatchesFor(account: Account, from: number, to: number): WatchedOutput[] {
+  const out: WatchedOutput[] = [];
+  for (let i = from; i < to; i++) out.push(...pjOutputs(account, i));
+  return out;
+}
+
+/** First link index not used yet: after the stored counter and after any coin found at a link output. */
+export function pjNextIndex(account: Account, store: ScanStore, ot: { pjNext?: number }): number {
+  const seen = new Set(store.utxos.map((u) => u.scriptPubKey.toLowerCase()));
+  let next = ot.pjNext ?? 0;
+  for (let i = 0; i < next + PJ_GAP; i++) if (pjOutputs(account, i).some((w) => seen.has(w.scriptPubKey))) next = Math.max(next, i + 1);
+  return next;
+}
+
 export const ALL_KEYS: string[] = [...WALLET_SCOPED, ...GLOBAL_KEYS];
 
 /**

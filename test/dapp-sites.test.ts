@@ -184,15 +184,16 @@ describe("PSBT review and signing", () => {
     expect(reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 9 }] }).refuse).toMatch(/does not exist/);
     expect(reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 1, publicKey: k.publicKey }] }).refuse).toBeUndefined();
   });
-  it("sighash: SINGLE|ANYONECANPAY warns and signs with the type byte; NONE refused", () => {
-    const tx = parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], [{ script: other, amount: 9_000n }]));
-    const r = reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x83] }] });
+  it("sighash (audit H3): SINGLE and NONE refused in every form; ALL|ANYONECANPAY warns and signs with the type byte", () => {
+    const mk = () => parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], [{ script: other, amount: 9_000n }]));
+    for (const t of [0x02, 0x03, 0x82, 0x83]) expect(reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [t] }] }).refuse).toMatch(/does not sign it/);
+    const tx = mk();
+    const r = reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x81] }] });
     expect(r.refuse).toBeUndefined();
-    expect(r.warnings.join(" ")).toMatch(/SINGLE\|ANYONECANPAY/);
+    expect(r.warnings.join(" ")).toMatch(/ALL\|ANYONECANPAY/);
     const out = parsePsbt(signReviewedPsbt(tx, r, k, false));
     expect(out.getInput(0).tapKeySig?.length).toBe(65);
-    const none = reviewPsbt(parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], [{ script: other, amount: 9_000n }])), k, owner, { toSignInputs: [{ index: 0, sighashTypes: [2] }] });
-    expect(none.refuse).toMatch(/NONE/);
+    expect(() => signReviewedPsbt(mk(), reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, sighashTypes: [0x83] }] }), k)).toThrow();
   });
   it("nothing to sign is refused", () => {
     const tx = parsePsbt(psbtFor([{ script: other, amount: 5_000n }], [{ script: other, amount: 4_000n }]));

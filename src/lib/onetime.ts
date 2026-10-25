@@ -12,6 +12,8 @@ export type OneTimeStore = {
   migration?: { startedAt: number; known: string[]; fromHeight: number };
   /** Set after a restore: indexes below this were watched without being shown. */
   restoredWindow?: number;
+  /** Next Payjoin link index (audit H2). Links are derived from the scan key by index. */
+  pjNext?: number;
 };
 
 export function emptyOneTime(): OneTimeStore {
