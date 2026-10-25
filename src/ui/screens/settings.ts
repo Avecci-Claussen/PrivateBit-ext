@@ -304,8 +304,33 @@ function privacyList(): Safe {
   return html`<div class="list">
   ${toggle("Hide balance when PrivateBit opens", "Amounts show as dots until you use the eye button.", pr.hideBalance, "t1", "hideBalance")}
   ${row("circle-dollar-sign", "USD price", priceSummary(), "set-price")}
-  ${toggle("Ask before opening an explorer", "Explorers see your IP and which transaction you looked up.", pr.askExplorer, "t4", "askExplorer")}</div>`;
+  ${toggle("Ask before opening an explorer", "Explorers see your IP and which transaction you looked up.", pr.askExplorer, "t4", "askExplorer")}
+  ${visibilityToggle()}</div>`;
 }
+
+/* Audit M7 (independent): which websites can tell PrivateBit is installed. */
+function visibilityToggle(): Safe {
+  const v = S.d.visibility as { all: boolean; origins: string[] } | undefined;
+  if (!v || !(globalThis as { chrome?: { tabs?: unknown } }).chrome?.tabs) return html``;
+  return html`<label class="li swrow" for="t5"><span class="body"><span class="t">Every website can see PrivateBit</span><span class="d">${v.all ? "Any site, tracker or ad can tell PrivateBit is installed." : `Off: only sites you allow can see it (${v.origins.length}). Allow a site from the wallet while it is open in the tab.`}</span></span><input class="switch" type="checkbox" role="switch" id="t5" data-act="vis-all" ${v.all ? html`checked` : ""}></label>`;
+}
+actions["vis-all"] = async (_el, ev) => {
+  ev.preventDefault();
+  const v = S.d.visibility as { all: boolean } | undefined;
+  const got = await run("pref", () => call<{ all: boolean; origins: string[] }>({ type: "DAPP_SET_VISIBILITY", all: !v?.all }));
+  if (got) S.d.visibility = got;
+  render();
+};
+async function loadVisibilityView(): Promise<void> {
+  try {
+    S.d.visibility = await call({ type: "DAPP_VISIBILITY" });
+    render();
+  } catch {
+    /* not available */
+  }
+}
+loaders["set-privacy"] = loadVisibilityView;
+loaders.settings = loadVisibilityView;
 screens["set-privacy"] = () => ({ title: "Privacy", header: hdr({ title: "Privacy" }), main: privacyList() });
 
 screens["set-price"] = () => ({ title: "USD price", header: hdr({ title: "USD price" }), main: priceForm() });
@@ -554,7 +579,7 @@ screens["set-security"] = () => {
     header: hdr({ title: "Security and lock" }),
     main: waiting
       ? html`
-  <div class="banner warn" role="status">${I("hourglass", "s16")}<div><span class="bt">Auto lock is waiting</span>${pj?.role === "send" ? "A Payjoin payment" : "A payment link"}${pj?.amount && pj.amount !== "0" ? ` of ${Number(pj.amount) / 1e8} ${UNIT()}` : ""} is in progress. Locking now would delete its keys. PrivateBit locks ${prefs().lockMinutes} minutes after it ends.</div></div>
+  <div class="banner warn" role="status">${I("hourglass", "s16")}<div><span class="bt">Auto lock is waiting</span>${pj?.role === "send" ? "A Payjoin payment" : "A payment link"}${pj?.amount && pj.amount !== "0" ? ` of ${Number(pj.amount) / 1e8} ${UNIT()}` : ""} is in progress. Locking now would delete its keys. PrivateBit locks ${prefs().lockMinutes} minutes after it ends, or 2 hours after the usual time without use, which ends the payment.</div></div>
   <div class="field"><p class="label" id="al2">Lock after no use for</p>${lockSeg("al2")}</div>
   <div class="card flat pad-sm"><div class="kv">
     ${last ? html`<div class="r"><span class="k">Last used</span><span class="v">${hm(last)}</span></div><div class="r"><span class="k">Would have locked</span><span class="v">${hm(last + prefs().lockMinutes * 60_000)}</span></div>` : ""}

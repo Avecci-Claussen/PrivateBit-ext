@@ -50,6 +50,52 @@ export type PendingView = {
 };
 
 const UNLOCK_WAIT_MS = 5 * 60_000;
+
+/**
+ * Audit M7 (independent): which websites can see PrivateBit at all. The page provider is added
+ * only to these origins (or to every site when the user chose that), so other sites, trackers and
+ * ads cannot tell PrivateBit is installed. Kept outside the sealed data so it works while locked.
+ */
+export const VISIBLE_KEY = "privatebit.dapp.visible";
+export type Visibility = { all: boolean; origins: string[] };
+
+export async function loadVisibility(): Promise<Visibility> {
+  const got = (await chrome.storage.local.get([VISIBLE_KEY]))[VISIBLE_KEY] as Partial<Visibility> | undefined;
+  return { all: got?.all === true, origins: Array.isArray(got?.origins) ? got!.origins.filter((o) => typeof o === "string") : [] };
+}
+
+export async function saveVisibility(v: Visibility): Promise<void> {
+  await chrome.storage.local.set({ [VISIBLE_KEY]: { all: v.all, origins: [...new Set(v.origins)].sort() } });
+}
+
+export async function showToOrigins(origins: string[]): Promise<void> {
+  const v = await loadVisibility();
+  const next = [...new Set([...v.origins, ...origins.map((o) => normalizeOrigin(o))])];
+  if (next.length !== v.origins.length) await saveVisibility({ ...v, origins: next });
+}
+
+export async function hideFromOrigin(origin: string): Promise<void> {
+  const v = await loadVisibility();
+  const o = normalizeOrigin(origin);
+  if (v.origins.includes(o)) await saveVisibility({ ...v, origins: v.origins.filter((x) => x !== o) });
+}
+
+/** Add the page provider to one document. No-op where the browser has no scripting API (the phone app). */
+export async function injectProvider(target: { tabId: number; documentId?: string }): Promise<boolean> {
+  const scripting = (chrome as { scripting?: typeof chrome.scripting }).scripting;
+  if (!scripting?.executeScript) return false;
+  try {
+    await scripting.executeScript({
+      target: target.documentId ? { tabId: target.tabId, documentIds: [target.documentId] } : { tabId: target.tabId, frameIds: [0] },
+      world: "MAIN" as chrome.scripting.ExecutionWorld,
+      files: ["inpage.js"],
+      injectImmediately: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 const chainName = (n: NetworkId): string => chainInfo(n).name.replace(" Mainnet", "");
 
 export function installDapp(deps: DappDeps) {
@@ -230,6 +276,11 @@ export function installDapp(deps: DappDeps) {
     }
     const st: { origin: string; last?: string; lastChain?: string } = { origin };
     ports.set(port, st);
+    const tabId = s.tab.id;
+    const documentId = (s as { documentId?: string }).documentId;
+    if (tabId !== undefined) {
+      void loadVisibility().then((v) => (v.all || v.origins.includes(origin) ? injectProvider({ tabId, documentId }) : false));
+    }
     void accountsFor(origin)
       .catch(() => [])
       .then((a) => {
@@ -330,6 +381,7 @@ export function installDapp(deps: DappDeps) {
       switch (r.method) {
         case "requestAccounts":
           await wallet.connectSite(p.origin);
+          await showToOrigins([p.origin]).catch(() => undefined);
           value = true;
           break;
         case "signMessage":

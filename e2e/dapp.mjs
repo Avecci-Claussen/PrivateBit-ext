@@ -38,7 +38,15 @@ const before = (await send({ type: "STATE" }));
 
 const site = await ctx.newPage();
 await site.goto(A.url);
+// Audit M7 (independent): a site the user has not allowed cannot see PrivateBit at all.
+await new Promise((r) => setTimeout(r, 1500));
+ok("a new site cannot see PrivateBit", await site.evaluate(() => !("privatebit" in window) && !("unisat" in window)));
+await site.bringToFront();
+await send({ type: "DAPP_SHOW", origin: originA });
 await site.waitForFunction(() => !!window.privatebit, null, { timeout: 10000 });
+await site.reload();
+await site.waitForFunction(() => !!window.privatebit, null, { timeout: 10000 });
+ok("after the user allows it, the site sees PrivateBit, also after a reload", true);
 const call = (method, ...params) => site.evaluate(async ([m, p]) => { try { return { ok: true, v: await window.privatebit[m](...p) }; } catch (e) { return { ok: false, code: e.code, msg: e.message }; } }, [method, params]);
 const start = (method, ...params) => site.evaluate(([m, p]) => { window.__r = window.privatebit[m](...p).then((v) => ({ ok: true, v }), (e) => ({ ok: false, code: e.code, msg: e.message })); }, [method, params]);
 const result = () => site.evaluate(() => window.__r);
@@ -277,9 +285,12 @@ ok("private balance still unchanged", after2.balance === before.balance);
 await hook(() => self.__pbE2E.acceptBroadcasts(false));
 
 // Second site: separate account, sees nothing of the first.
+// The "every website" switch shows PrivateBit to a site that was never allowed.
+await send({ type: "DAPP_SET_VISIBILITY", all: true });
 const siteB = await ctx.newPage();
 await siteB.goto(B.url);
 await siteB.waitForFunction(() => !!window.privatebit);
+await send({ type: "DAPP_SET_VISIBILITY", all: false });
 await siteB.evaluate(() => { window.__r = window.privatebit.requestAccounts().then((v) => ({ ok: true, v }), (e) => ({ ok: false, code: e.code })); });
 w = await approvalWindow();
 await w.click("[data-act=dapp-approve]");

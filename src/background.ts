@@ -13,7 +13,8 @@ import { checkNode, nodeFollows, openChain, watchEndpoint } from "./lib/chain.ts
 import { clearSharedChain, formatBlockStats, onBlockStats } from "./lib/blockshare.ts";
 import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
-import { installDapp } from "./dapp/background-dapp.ts";
+import { hideFromOrigin, injectProvider, installDapp, loadVisibility, saveVisibility, showToOrigins } from "./dapp/background-dapp.ts";
+import { normalizeOrigin } from "./lib/sites.ts";
 
 const kv = chromeKv();
 const wallet = new PrivateBit(kv, DEFAULT_CHAIN);
@@ -294,6 +295,10 @@ type Msg =
   | { type: "DAPP_DISCONNECT"; origin: string }
   | { type: "DAPP_FORGET"; origin: string }
   | { type: "DAPP_FIND_SITE"; origin: string }
+  | { type: "DAPP_VISIBILITY" }
+  | { type: "DAPP_SET_VISIBILITY"; all: boolean }
+  | { type: "DAPP_SHOW"; origin: string }
+  | { type: "DAPP_HIDE"; origin: string }
   | { type: "SITE_MOVE_PLAN"; origin: string; feeRate: number }
   | { type: "SITE_MOVE"; origin: string; feeRate: number }
   | { type: "SWEEP_ONETIME"; index: number; feeRate: number }
@@ -525,6 +530,8 @@ async function handle(msg: Msg): Promise<unknown> {
       return bundle();
     case "UNLOCK":
       await wallet.unlock(msg.password);
+      // Sites connected before this version stay visible to their pages (audit M7, independent).
+      void wallet.loadSites().then((st) => showToOrigins(st.sites.map((x) => x.origin))).catch(() => undefined);
       await bumpLegacyBirthday();
       await kv.remove([LOCKINFO_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
@@ -708,10 +715,35 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.sitesView();
     case "DAPP_FORGET":
       await wallet.forgetSite(msg.origin);
+      await hideFromOrigin(msg.origin);
       return wallet.sitesView();
     case "DAPP_FIND_SITE":
       await wallet.findSite(msg.origin);
       return wallet.sitesView();
+    case "DAPP_VISIBILITY":
+      return loadVisibility();
+    case "DAPP_SET_VISIBILITY": {
+      const v = await loadVisibility();
+      await saveVisibility({ ...v, all: msg.all });
+      return loadVisibility();
+    }
+    case "DAPP_SHOW": {
+      // From the popup, on the tab the user is looking at: let this site see PrivateBit now.
+      const tab = (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+      let origin = "";
+      try {
+        origin = normalizeOrigin(new URL(tab?.url ?? "").origin);
+      } catch {
+        throw new Error("Open the website in this window first.");
+      }
+      if (origin !== normalizeOrigin(msg.origin)) throw new Error("The website in this window changed. Try again.");
+      await showToOrigins([origin]);
+      if (tab?.id !== undefined) await injectProvider({ tabId: tab.id });
+      return loadVisibility();
+    }
+    case "DAPP_HIDE":
+      await hideFromOrigin(msg.origin);
+      return loadVisibility();
     case "SITE_MOVE_PLAN": {
       const b = await wallet.planSiteMoveBack(msg.origin, msg.feeRate);
       return { fee: b.fee.toString(), amount: b.amount.toString(), vbytes: b.vbytes, count: b.signableInputs.length };

@@ -1,7 +1,9 @@
 /**
  * Auto lock timing (FLOWS.md section 11). Pure so it can be unit tested.
  * - Counts from the last click or key press in the popup or full page.
- * - Never locks while a payment link or Payjoin send is waiting, because locking deletes its keys.
+ * - Waits while a payment link or Payjoin send is in progress, because locking deletes its keys,
+ *   but at most MAX_HOLD_MS past the normal lock time (audit M6, independent): the unlocked
+ *   words do not sit in memory for a whole day because a link is open.
  * - After the payment ends, the timer counts from the end.
  */
 export type ActivityState = {
@@ -19,6 +21,9 @@ export type AutoLockDecision = {
   wouldHaveLockedAt?: number;
 };
 
+/** Longest the auto lock waits for an open payment past its normal time. */
+export const MAX_HOLD_MS = 2 * 60 * 60_000;
+
 export function autoLockDecision(
   state: ActivityState,
   now: number,
@@ -26,6 +31,9 @@ export function autoLockDecision(
   waiting: boolean,
 ): AutoLockDecision {
   const span = minutes * 60_000;
+  if (waiting && now >= state.last + span + MAX_HOLD_MS) {
+    return { lock: true, next: { last: state.last }, dueAt: state.last + span + MAX_HOLD_MS };
+  }
   if (waiting) {
     const next: ActivityState = { last: state.last, waitingSince: state.waitingSince ?? now };
     return { lock: false, next, wouldHaveLockedAt: state.last + span };

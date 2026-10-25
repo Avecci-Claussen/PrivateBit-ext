@@ -165,19 +165,19 @@ screens.home = () => {
   const p = price();
   let body: Safe;
   if (sc.on) {
-    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}
+    body = html`${healthBanner()}${siteCard()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}
   <div class="card" role="status" aria-live="polite"><div class="row between"><span class="strong row">${I("refresh-cw", "s16 spin")}Finding your coins…</span><span class="cap num">${sc.pct}%</span></div>
     <div class="progress" role="progressbar" aria-label="Finding your coins" aria-valuenow="${sc.pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${sc.pct}%"></i></div>
     <p class="small muted">${sc.reading ? (sc.reading.count > 0 ? html`Reading block ${num(sc.reading.height)}, transaction ${num(sc.reading.index + 1)} of ${num(sc.reading.count)}. ` : html`Downloading block ${num(sc.reading.height)}. `) : ""}Checked through block ${num(sc.at)} of ${num(sc.tip)}. Closing this window keeps going. Locking hides the wallet, and finding coins continues until you quit the browser or switch wallets. Only this wallet moves; another wallet continues from its own block the next time you open it. ${S.b!.state.chain.kind === "core" ? "Blocks come from your node." : "Blocks already saved on this computer are reused."}</p></div>
   ${actionsRow()}
   ${h.entries.length ? html`<div class="sec-h"><h2>Recent</h2><button class="link small" type="button" data-act="tab" data-to="activity">See all</button></div>${recent()}` : ""}`;
   } else if (empty) {
-    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${actionsRow()}
+    body = html`${healthBanner()}${siteCard()}${backupBanner()}${balanceSec()}${actionsRow()}
   <div class="card"><div class="stack"><h2 class="strong">Get your first coins</h2><p class="small muted">Share your receive code, or move coins from another wallet.</p></div>
     <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="go" data-to="receive">${I("arrow-down-left", "s16")}Show my receive code</button><button class="btn btn-secondary btn-block" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div></div>
   ${p.kind !== "off" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD prices come from a price service</span><p>It sees your IP and that someone asked for the ${UNIT()} price, never your coins. <button class="link" type="button" data-act="go" data-to="set-privacy">Turn off in Privacy</button></p></div></div>` : ""}`;
   } else {
-    body = html`${healthBanner()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}${actionsRow()}
+    body = html`${healthBanner()}${siteCard()}${backupBanner()}${balanceSec()}${oneTimeCard()}${payjoinCard()}${heldCards()}${actionsRow()}
   ${p.kind === "na" ? html`<div class="banner">${I("circle-dollar-sign", "s16")}<div><span class="bt">USD price unavailable</span><p>The price service did not answer. Amounts in ${UNIT()} are exact and not affected. Trying again in 10 minutes.</p></div></div>` : ""}
   <div class="sec-h"><h2>Recent</h2>${h.entries.length ? html`<button class="link small" type="button" data-act="tab" data-to="activity">See all</button>` : ""}</div>${h.entries.length ? recent() : html`<p class="small muted">No payments yet.</p>`}`;
   }
@@ -251,6 +251,46 @@ function coinSummary(): string {
 loaders.home = async () => {
   await loadHistory();
   if (S.mode === "full") await loadCoins();
+  else await loadTabSite();
+};
+
+/* ---------- the website in the current tab (audit M7, independent) ---------- */
+type TabSite = { origin: string; host: string; visible: boolean };
+async function loadTabSite(): Promise<void> {
+  const tabs = (globalThis as { chrome?: { tabs?: typeof chrome.tabs } }).chrome?.tabs;
+  if (!tabs?.query) return;
+  try {
+    const tab = (await tabs.query({ active: true, lastFocusedWindow: true }))[0];
+    const u = new URL(tab?.url ?? "");
+    if (u.protocol !== "https:" && u.protocol !== "http:") {
+      S.d.tabSite = undefined;
+      return;
+    }
+    const v = await call<{ all: boolean; origins: string[] }>({ type: "DAPP_VISIBILITY" });
+    S.d.tabSite = { origin: u.origin, host: u.host, visible: v.all || v.origins.includes(u.origin) } satisfies TabSite;
+    render();
+  } catch {
+    S.d.tabSite = undefined;
+  }
+}
+
+function siteCard(): Safe {
+  const t = S.d.tabSite as TabSite | undefined;
+  if (!t || t.visible) return html``;
+  return html`<div class="banner" role="note">${I("eye-off", "s16")}<div><span class="bt">${t.host} cannot see PrivateBit</span><p>Websites only see PrivateBit after you allow them, so other sites cannot tell it is installed. <button class="link" type="button" data-act="site-show">Let ${t.host} see PrivateBit</button></p></div></div>`;
+}
+
+actions["site-show"] = async () => {
+  const t = S.d.tabSite as TabSite | undefined;
+  if (!t) return;
+  try {
+    await call({ type: "DAPP_SHOW", origin: t.origin });
+    S.d.tabSite = { ...t, visible: true };
+    toast(`${t.host} can now ask to connect. Nothing is shared until you approve.`);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : "Could not reach the website.");
+  }
+  render();
 };
 
 void mid;

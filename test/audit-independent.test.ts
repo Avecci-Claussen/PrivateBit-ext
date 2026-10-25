@@ -141,7 +141,7 @@ describe("M5: the mailbox keys are fetched once and kept", () => {
       const url = String(input instanceof Request ? input.url : input);
       if (!url.includes("/.well-known/ohttp-gateway")) throw new TypeError("network disabled");
       calls++;
-      return new Response(body, { status: 200 });
+      return new Response(body.slice().buffer as ArrayBuffer, { status: 200 });
     }) as typeof fetch;
     try {
       const kv = memoryKv();
