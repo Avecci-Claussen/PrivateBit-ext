@@ -1,4 +1,4 @@
-import { parseBlockTransactions, type LightTx } from "./blockparse.ts";
+import { BlockCheckError, blockKind, headerPrev, parseBlockTransactions, type LightTx } from "./blockparse.ts";
 import { fromHex, hex } from "./bytes.ts";
 import type { ChainSource } from "./chain.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
@@ -477,8 +477,45 @@ export async function buildSharedBlock(
 }
 
 async function fetchRaw(source: ChainSource, height: number): Promise<Uint8Array> {
-  if (source.getBlockRaw) return source.getBlockRaw(height);
-  return mempoolBlockRaw(height, source.net === "bitcoin" ? MEMPOOL_BITCOIN : undefined);
+  const raw = source.getBlockRaw ? await source.getBlockRaw(height) : await mempoolBlockRaw(height, source.net === "bitcoin" ? MEMPOOL_BITCOIN : undefined);
+  if (source.kind !== "core" && source.net !== "bitcoin") noteExplorerHeader(height, raw.subarray(0, 80));
+  return raw;
+}
+
+/**
+ * Item 4: public explorers strip Fractal's merge-mined and indexer proofs, so those headers cannot
+ * be checked for work. A linked run of more than this many such blocks in a row is refused: in
+ * 1050 recent mainnet blocks the longest run was 12, so a forged chain must still include real
+ * normally mined work (at least 2^58 hashes) every 41 blocks. An own node verifies every proof.
+ */
+export const MAX_UNPROVEN_RUN = 40;
+const explorerHeaders = new Map<number, { hash: string; prev: string; legacy: boolean }>();
+
+export function noteExplorerHeader(height: number, header: Uint8Array): void {
+  const hash = hex(sha256(sha256(header)).reverse());
+  const legacy = blockKind(header, "fractal") === "legacy";
+  explorerHeaders.set(height, { hash, prev: headerPrev(header), legacy });
+  if (explorerHeaders.size > 4 * MAX_UNPROVEN_RUN + 64) {
+    const keep = [...explorerHeaders.keys()].sort((a, b) => b - a).slice(0, 2 * MAX_UNPROVEN_RUN + 32);
+    for (const k of [...explorerHeaders.keys()]) if (!keep.includes(k)) explorerHeaders.delete(k);
+  }
+  if (legacy) return;
+  let run = 1;
+  let at = explorerHeaders.get(height)!;
+  for (let h = height - 1; ; h--) {
+    const below = explorerHeaders.get(h);
+    if (!below || below.hash !== at.prev || below.legacy) break;
+    run += 1;
+    at = below;
+  }
+  if (run > MAX_UNPROVEN_RUN) {
+    explorerHeaders.delete(height);
+    throw new BlockCheckError(`${run} blocks in a row without checkable work from the public explorer; use your own node`);
+  }
+}
+
+export function resetExplorerHeadersForTests(): void {
+  explorerHeaders.clear();
 }
 
 async function fetchParent(source: ChainSource, txid: string): Promise<string | undefined> {

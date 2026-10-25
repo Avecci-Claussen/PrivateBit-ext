@@ -4,6 +4,8 @@ import { rejectAddressUtxoAsSot } from "./policy.ts";
 import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
 import { FRACTAL, migrateChainConfig, netInfo, type ChainConfig, type ChainKind, type NetworkId } from "./network.ts";
 import { effectiveUnisatToken } from "./builtin-key.ts";
+import { checkRawBlock } from "./blockparse.ts";
+import { verifyHeaderWithProof } from "./headerproof.ts";
 import { mempoolBlockHash, mempoolBlockPrevouts, mempoolBlockRaw, mempoolBlockTxids, mempoolBroadcast, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
 
 export type Tip = { height: number; hash: string };
@@ -268,7 +270,7 @@ export async function checkNode(cfg: { url: string; rpcUser?: string; rpcPasswor
   return { height: blocks, blocks, headers: Number(info?.headers ?? blocks), chain: String(info?.chain ?? "unknown"), txindex };
 }
 
-export function coreSource(cfg: ChainConfig): ChainSource {
+export function coreSource(cfg: ChainConfig, net: NetworkId = "fractal"): ChainSource {
   const auth = { user: cfg.rpcUser, password: cfg.rpcPassword };
   return {
     kind: "core",
@@ -282,7 +284,15 @@ export function coreSource(cfg: ChainConfig): ChainSource {
     },
     async getBlockRaw(height) {
       const hash = String(await rpc(cfg.url, auth, "getblockhash", [height]));
-      return fromHex(String(await rpc(cfg.url, auth, "getblock", [hash, 0])));
+      const raw = fromHex(String(await rpc(cfg.url, auth, "getblock", [hash, 0])));
+      // Item 4: the block must be the one asked for and match its merkle root. On Fractal a
+      // merge-mined or indexer block's proof is read from the node and verified in full here.
+      const kind = checkRawBlock(raw, hash, undefined, net, { ownNode: true });
+      if (net === "fractal" && kind && kind !== "legacy") {
+        const withProof = fromHex(String(await rpc(cfg.url, auth, "getblockheader", [hash, false, true])));
+        verifyHeaderWithProof(withProof, hash);
+      }
+      return raw;
     },
     async getBlockTxids(height) {
       const hash = String(await rpc(cfg.url, auth, "getblockhash", [height]));
@@ -487,7 +497,7 @@ export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): Ch
 
 export function openChain(cfg: ChainConfig, net: NetworkId = "fractal"): ChainSource {
   const migrated = migrateChainConfig(cfg);
-  if (migrated.kind === "core") return { ...coreSource(migrated), net };
+  if (migrated.kind === "core") return { ...coreSource(migrated, net), net };
   const pub = net === "bitcoin" ? explorerSource(netInfo("bitcoin").explorer, "bitcoin") : { ...withExplorerBlocks(unisatSource(migrated)), net };
   return withSendRoute(pub, migrated);
 }

@@ -31,7 +31,7 @@ export async function mempoolBlockRaw(height: number, base = MEMPOOL_FRACTAL): P
   const hash = await mempoolBlockHash(height, base);
   const res = await mempoolFetch(`/api/block/${hash}/raw`, base);
   const raw = new Uint8Array(await res.arrayBuffer());
-  checkRawBlock(raw, hash);
+  checkRawBlock(raw, hash, undefined, base === MEMPOOL_BITCOIN ? "bitcoin" : "fractal");
   return raw;
 }
 

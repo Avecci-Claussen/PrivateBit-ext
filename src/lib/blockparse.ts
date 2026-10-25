@@ -18,7 +18,7 @@ function readU32(b: Uint8Array, i: number): number {
   return (b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16) | (b[i + 3]! << 24)) >>> 0;
 }
 
-function readVarint(b: Uint8Array, i: number): { n: number; i: number } {
+export function readVarint(b: Uint8Array, i: number): { n: number; i: number } {
   if (i >= b.length) throw new Error("varint");
   const v = b[i]!;
   if (v < 0xfd) return { n: v, i: i + 1 };
@@ -38,7 +38,7 @@ function txidOf(body: Uint8Array): string {
   return hex(hash.reverse());
 }
 
-function readTx(raw: Uint8Array, offset: number): { tx: LightTx; i: number } {
+export function readTx(raw: Uint8Array, offset: number): { tx: LightTx; i: number } {
   if (offset + 4 > raw.length) throw new Error("tx");
   let i = offset;
   const version = raw.subarray(i, i + 4);
@@ -158,32 +158,99 @@ export class BlockCheckError extends Error {
   }
 }
 
-/** Least work a header must show: 2^56 hashes (Fractal's own blocks are about 2^62 today). */
-const MIN_WORK_BITS = 56;
+/** Fractal block types (FIP-101): the version's upper 16 bits are the chain ID when bit 8 is set. */
+export const VERSION_AUXPOW = 0x100;
+export const FRACTAL_AUXPOW_CHAIN_ID = 0x2024;
+export const FRACTAL_INDEXER_CHAIN_ID = 0x2026;
+/** Fractal powLimit in compact form; indexer blocks must carry exactly this. */
+export const FRACTAL_POW_LIMIT_BITS = 0x1d00ffff;
+
+export type BlockKind = "legacy" | "auxpow" | "indexer";
+
+export function headerVersion(header: Uint8Array): number {
+  return (header[0]! | (header[1]! << 8) | (header[2]! << 16) | (header[3]! << 24)) | 0;
+}
+export function headerBits(header: Uint8Array): number {
+  return (header[72]! | (header[73]! << 8) | (header[74]! << 16) | (header[75]! << 24)) >>> 0;
+}
+export function headerTime(header: Uint8Array): number {
+  return (header[68]! | (header[69]! << 8) | (header[70]! << 16) | (header[71]! << 24)) >>> 0;
+}
+/** Display-order hex of the previous block hash in a header. */
+export function headerPrev(header: Uint8Array): string {
+  return hex(header.slice(4, 36).reverse());
+}
+
+/**
+ * Which proof a header carries. Bitcoin has one kind (version bit 8 there is only BIP9 signalling,
+ * never a reason to skip proof of work). Fractal: no bit 8 is a normal mined block; bit 8 with
+ * chain ID 0x2024 is merge-mined; with 0x2026 an indexer block. Any other chain ID is refused.
+ */
+export function blockKind(header: Uint8Array, net: "fractal" | "bitcoin" = "fractal"): BlockKind {
+  const version = headerVersion(header);
+  if (net === "bitcoin" || !(version & VERSION_AUXPOW)) return "legacy";
+  const chainId = (version >>> 16) & 0xffff;
+  if (chainId === FRACTAL_AUXPOW_CHAIN_ID) return "auxpow";
+  if (chainId === FRACTAL_INDEXER_CHAIN_ID) return "indexer";
+  throw new BlockCheckError(`unknown block type (chain ID ${chainId.toString(16)})`);
+}
+
+/** Least work a header must show: 2^MIN bits of hashes. */
+const MIN_WORK_BITS = { fractal: 58, bitcoin: 70 } as const;
+/** Least work a merge-mined Fractal header must claim (its parent chain work is about 2^75 today). */
+const MIN_AUX_CLAIM_BITS = 66;
+
+function hashBig(hashLE: Uint8Array): bigint {
+  let h = 0n;
+  for (let i = 31; i >= 0; i--) h = (h << 8n) | BigInt(hashLE[i]!);
+  return h;
+}
+
+/** A target at least as hard as 2^minBits hashes. */
+export function assertTargetHard(target: bigint, minBits: number, what: string): void {
+  if (target <= 0n || target >= 1n << BigInt(256 - minBits)) throw new BlockCheckError(`${what} target is too easy`);
+}
+
+/** Proof of work of an 80-byte header against its own bits. */
+export function assertHeaderWork(header: Uint8Array, hashLE: Uint8Array, net: "fractal" | "bitcoin"): void {
+  const target = bitsTarget(headerBits(header));
+  assertTargetHard(target, MIN_WORK_BITS[net], "header");
+  if (hashBig(hashLE) > target) throw new BlockCheckError("header has no valid proof of work");
+}
 
 /**
  * Audit M2 (independent): check a raw block from a public explorer before matching payments in it.
- * The transactions must hash to the header's merkle root, the header must hash to the block hash
- * asked for, and the header must carry proof of work. Fractal merge-mined blocks (version bit 8)
- * have their work in the parent chain header, which explorers leave out, so for those only the
- * merkle root and hash are checked.
+ * The transactions must hash to the header's merkle root and the header must hash to the block hash
+ * asked for. Proof of work:
+ *  - Bitcoin, and Fractal blocks without bit 8: the header's own work is checked against its bits,
+ *    and the bits must be at least 2^70 (Bitcoin) or 2^58 (Fractal) hashes.
+ *  - Fractal merge-mined (chain ID 0x2024): the work is in the Bitcoin parent header, which public
+ *    explorers strip. The bits must claim at least 2^66 hashes; the parent proof itself is verified
+ *    only with an own node (see headerproof.ts).
+ *  - Fractal indexer blocks (chain ID 0x2026): bits must be the powLimit; their signed proof is
+ *    stripped by explorers too and verified only with an own node.
  */
-export function checkRawBlock(raw: Uint8Array, expectedHash?: string, txs?: { txid: string }[] | null): void {
+export function checkRawBlock(
+  raw: Uint8Array,
+  expectedHash?: string,
+  txs?: { txid: string }[] | null,
+  net: "fractal" | "bitcoin" = "fractal",
+  opts: { ownNode?: boolean } = {},
+): BlockKind | undefined {
   if (raw.length < 81) throw new BlockCheckError("too short");
   const header = raw.subarray(0, 80);
   const hashLE = sha256(sha256(header));
   const hashHex = hex(hashLE.slice().reverse());
   if (expectedHash && hashHex !== expectedHash.toLowerCase()) throw new BlockCheckError("hash does not match the block asked for");
   const list = txs === undefined ? parseBlockTransactions(raw) : txs;
-  if (!list) return; // Not a layout we read; the caller refuses it as unsupported.
+  if (!list) return undefined; // Not a layout we read; the caller refuses it as unsupported.
   const root = merkleRoot(list.map((t) => t.txid));
   if (hex(root) !== hex(header.subarray(36, 68))) throw new BlockCheckError("transactions do not match the merkle root");
-  const version = header[0]! | (header[1]! << 8) | (header[2]! << 16) | (header[3]! << 24);
-  if (version & 0x100) return;
-  const bits = header[72]! | (header[73]! << 8) | (header[74]! << 16) | (header[75]! << 24);
-  const target = bitsTarget(bits >>> 0);
-  let h = 0n;
-  for (let i = 31; i >= 0; i--) h = (h << 8n) | BigInt(hashLE[i]!);
-  if (target <= 0n || target >= 1n << BigInt(256 - MIN_WORK_BITS)) throw new BlockCheckError("header target is too easy");
-  if (h > target) throw new BlockCheckError("header has no valid proof of work");
+  const kind = blockKind(header, net);
+  // An own node has already checked the work (and its proofs are verified separately).
+  if (opts.ownNode) return kind;
+  if (kind === "legacy") assertHeaderWork(header, hashLE, net);
+  else if (kind === "auxpow") assertTargetHard(bitsTarget(headerBits(header)), MIN_AUX_CLAIM_BITS, "merge-mined header");
+  else if (headerBits(header) !== FRACTAL_POW_LIMIT_BITS) throw new BlockCheckError("indexer block bits are not the powLimit");
+  return kind;
 }
