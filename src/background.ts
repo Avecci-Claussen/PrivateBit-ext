@@ -13,6 +13,7 @@ import { checkNode, nodeFollows, openChain } from "./lib/chain.ts";
 import { clearSharedChain, formatBlockStats, onBlockStats } from "./lib/blockshare.ts";
 import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
+import { installDapp } from "./dapp/background-dapp.ts";
 
 const kv = chromeKv();
 const wallet = new PrivateBit(kv, DEFAULT_CHAIN);
@@ -286,6 +287,13 @@ type Msg =
   | { type: "ONETIME_REPLACE" }
   | { type: "ONETIME_VIEW" }
   | { type: "SWEEP_PLAN"; index: number; feeRate: number }
+  | { type: "DAPP_VIEW"; id: string }
+  | { type: "DAPP_DECIDE"; id: string; approve: boolean }
+  | { type: "DAPP_SITES" }
+  | { type: "DAPP_DISCONNECT"; origin: string }
+  | { type: "DAPP_FORGET"; origin: string }
+  | { type: "SITE_MOVE_PLAN"; origin: string; feeRate: number }
+  | { type: "SITE_MOVE"; origin: string; feeRate: number }
   | { type: "SWEEP_ONETIME"; index: number; feeRate: number }
   | { type: "DELAYED_SEND_NOW"; id: string }
   | { type: "DELAYED_CANCEL"; id: string }
@@ -407,6 +415,31 @@ async function pumpDelayed(): Promise<void> {
   }
 }
 
+
+async function switchNetwork(network: NetworkId): Promise<void> {
+  if (!isNetworkId(network)) throw new Error("Unknown network");
+  const prev = await getPrefs();
+  await kv.set({ [PREFS_KEY]: normalizePrefs({ ...prev, network }) });
+  await kv.remove([FEES_KEY, HEALTH_KEY]);
+  await wallet.setNetwork(network);
+  void refreshPrice(true);
+  void pumpDelayed();
+  void pumpPayjoin();
+  kickCatchup(0);
+}
+
+// Website connections: content script ports, approval popups, events.
+const dapp = installDapp({ wallet, switchNetwork: async (n) => {
+  await networkReady;
+  await switchNetwork(n);
+} });
+// Lock, unlock, wallet switch and chain switch all write one of these keys: tell connected pages.
+chrome.storage.onChanged.addListener((changes) => {
+  const keys = Object.keys(changes);
+  if (keys.some((k) => k === LOCKINFO_KEY || k === PREFS_KEY || k.endsWith(".session") || k.endsWith(".sites") || k === "privatebit.wallets")) {
+    void dapp.refreshEvents().catch(() => undefined);
+  }
+});
 
 async function handle(msg: Msg): Promise<unknown> {
   await networkReady;
@@ -644,17 +677,27 @@ async function handle(msg: Msg): Promise<unknown> {
     case "PJ_TEST":
       return testPayjoinRoute(msg.directory.trim(), msg.relay.trim());
     case "SET_NETWORK": {
-      if (!isNetworkId(msg.network)) throw new Error("Unknown network");
-      const prev = await getPrefs();
-      await kv.set({ [PREFS_KEY]: normalizePrefs({ ...prev, network: msg.network }) });
-      await kv.remove([FEES_KEY, HEALTH_KEY]);
-      await wallet.setNetwork(msg.network);
-      void refreshPrice(true);
-      void pumpDelayed();
-      void pumpPayjoin();
-      kickCatchup(0);
+      await switchNetwork(msg.network);
       return bundle();
     }
+    case "DAPP_VIEW":
+      return dapp.view(msg.id);
+    case "DAPP_DECIDE":
+      return dapp.decide(msg.id, msg.approve);
+    case "DAPP_SITES":
+      return wallet.sitesView();
+    case "DAPP_DISCONNECT":
+      await dapp.disconnect(msg.origin);
+      return wallet.sitesView();
+    case "DAPP_FORGET":
+      await wallet.forgetSite(msg.origin);
+      return wallet.sitesView();
+    case "SITE_MOVE_PLAN": {
+      const b = await wallet.planSiteMoveBack(msg.origin, msg.feeRate);
+      return { fee: b.fee.toString(), amount: b.amount.toString(), vbytes: b.vbytes, count: b.signableInputs.length };
+    }
+    case "SITE_MOVE":
+      return wallet.siteMoveBack(msg.origin, msg.feeRate);
     case "SET_BIRTHDAY":
       await wallet.setBirthday(msg.birthday);
       return bundle();
@@ -709,7 +752,8 @@ chrome.runtime.onMessage.addListener((msg: Msg, sender, send) => {
   };
   void (async () => {
     try {
-      if (sender.id !== chrome.runtime.id) {
+      // Extension pages only. Content scripts share our id, so the sender URL decides.
+      if (sender.id !== chrome.runtime.id || !(sender.url ?? "").startsWith(chrome.runtime.getURL(""))) {
         reply({ ok: false, error: "forbidden" });
         return;
       }

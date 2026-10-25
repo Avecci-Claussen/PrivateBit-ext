@@ -748,6 +748,8 @@ export type OwnedOutput = {
   tweak: string;
   label: number | null;
   k: number;
+  kind?: CoinKind;
+  index?: number;
 };
 
 /** Debit spent inputs and credit our change/self-pay from the tx we just built. */
@@ -766,6 +768,7 @@ export function applyBuiltSend(store: ScanStore, txHex: string, ours: OwnedOutpu
       k: o.k,
       height: 0,
       spent: false,
+      ...(o.kind === "site" ? { kind: "site" as const, index: o.index } : {}),
     });
   }
   return next;

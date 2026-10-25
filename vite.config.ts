@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { buildSync } from "esbuild";
 
 export default defineConfig(({ mode }) => {
   // Private test build only: the key is read from the environment here and never written to the tree.
@@ -22,6 +23,18 @@ export default defineConfig(({ mode }) => {
         },
         closeBundle() {
           copyFileSync(resolve(__dirname, "manifest.json"), resolve(outDir, "manifest.json"));
+          // Page provider and content script: classic scripts with fixed names, no imports.
+          for (const name of ["inpage", "content"]) {
+            buildSync({
+              entryPoints: [resolve(__dirname, `src/dapp/${name}.ts`)],
+              outfile: resolve(outDir, `${name}.js`),
+              bundle: true,
+              format: "iife",
+              target: "chrome111",
+              minify: true,
+              legalComments: "none",
+            });
+          }
           if (mode === "private") {
             // Make the private build easy to tell apart in chrome://extensions.
             const m = JSON.parse(readFileSync(resolve(outDir, "manifest.json"), "utf8"));

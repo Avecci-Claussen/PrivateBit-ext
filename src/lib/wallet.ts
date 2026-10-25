@@ -73,6 +73,25 @@ import type { SignableInput } from "./send.ts";
 import type { OwnedOutput } from "./scan.ts";
 import { privateUtxos } from "./scan.ts";
 import {
+  buildSiteSend,
+  emptySites,
+  normalizeOrigin,
+  parsePsbt,
+  reviewPsbt,
+  signMessageBip322,
+  signMessageEcdsa,
+  signReviewedPsbt,
+  siteHost,
+  upsertSite,
+  type OwnerOf,
+  type PsbtReview,
+  type SignPsbtOptions,
+  type SiteKey,
+  type SiteRecord,
+  type SiteSendPlan,
+  type SiteStore,
+} from "./sites.ts";
+import {
   clearSession,
   loadScanGrant,
   loadSession,
@@ -288,6 +307,7 @@ const CHAIN_SECRETS_KEY = "privatebit.chain.secrets";
 const HISTORY_KEY = "privatebit.history";
 const COINMETA_KEY = "privatebit.coinmeta";
 const ONETIME_KEY = "privatebit.onetime";
+const SITES_KEY = "privatebit.sites";
 /** Sealed with the scan key, which block matching keeps after Lock. Everything else uses the data key. */
 /** Held payments are sealed with the scan key so the worker can still send them after Lock. */
 const DELAYED_KEY = "privatebit.delayed";
@@ -1194,10 +1214,12 @@ export class WalletCore {
   private async sideWork(full: Account | undefined, account: ScanAccount, source: ChainSource, mark: ScanMark): Promise<void> {
     const keep = full ? await this.watchesToKeep() : null;
     const ot = full ? await this.oneTimeIndexes() : null;
+    const sites = full ? (await this.loadSites().catch(() => emptySites())).sites.map((x) => x.index) : null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const snap = await this.coins_.read();
       let store = snap.store;
       if (full && ot) store = this.withOneTimeWatches(full, store, ot);
+      if (full && sites) store = this.withSiteWatches(full, store, sites);
       // Deferred holes are transactions of blocks we scanned, not ours; refetching them reveals nothing about us.
       store = await retryDeferred(account, source, store);
       if (keep) store = pruneWatches(store, keep);
@@ -1243,6 +1265,16 @@ export class WalletCore {
       const k = account.oneTime(index);
       if ((next.watch ?? []).some((w) => w.scriptPubKey === k.scriptPubKey)) continue;
       next = addWatch(next, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "bip86", index });
+    }
+    return next;
+  }
+
+  private withSiteWatches(account: Account, store: ScanStore, indexes: number[]): ScanStore {
+    let next = store;
+    for (const index of indexes) {
+      const k = account.site!(index);
+      if ((next.watch ?? []).some((w) => w.scriptPubKey === k.scriptPubKey)) continue;
+      next = addWatch(next, { scriptPubKey: k.scriptPubKey, tweak: "", label: null, k: 0, kind: "site", index });
     }
     return next;
   }
@@ -1459,7 +1491,7 @@ export class WalletCore {
     const spent = built.signableInputs.map((u) => `${u.txid}:${u.vout}`);
     const change = built.ourOutputs.map((o) => `${txid}:${o.vout}`);
     let meta = await this.loadCoinMeta();
-    const linked = spent.some((op) => meta[op]?.linked) || built.signableInputs.some((u) => u.kind === "bip86");
+    const linked = spent.some((op) => meta[op]?.linked) || built.signableInputs.some((u) => u.kind === "bip86" || u.kind === "site");
     if (kind === "self" || kind === "split") {
       meta = carryCoinMeta(meta, spent, change);
       if (linked) for (const op of change) meta = setCoinMeta(meta, op, { linked: true });
@@ -2009,6 +2041,196 @@ export class WalletCore {
   }
 
   /** Preview a user-chosen split. Amounts are the user's; we only check and build. */
+  // ---------- Connected websites (sites.ts) ----------
+
+  async loadSites(): Promise<SiteStore> {
+    const got = await this.loadSealed<SiteStore>(SITES_KEY, emptySites);
+    return got.value?.v === 1 ? got.value : emptySites();
+  }
+
+  private async saveSites(s: SiteStore): Promise<void> {
+    await this.saveSealed(SITES_KEY, s);
+  }
+
+  /** Record for an origin, connected or not. Needs the wallet unlocked. */
+  async siteRecord(origin: string): Promise<SiteRecord | undefined> {
+    if (!(await this.dataKey())) return undefined;
+    const o = normalizeOrigin(origin);
+    return (await this.loadSites()).sites.find((x) => x.origin === o);
+  }
+
+  private siteKeyOf(account: Account, index: number): SiteKey {
+    const k = account.site!(index);
+    return {
+      index,
+      path: k.path,
+      scriptPubKey: k.scriptPubKey,
+      address: k.address,
+      publicKey: hex(k.internalPub!),
+      output: hex(k.output),
+      secret: k.secret,
+      internalSecret: k.internalSecret!,
+    };
+  }
+
+  /** Approve a website: its own account (same one again on reconnect), watched by the block scan. */
+  async connectSite(origin: string): Promise<SiteRecord> {
+    const { account } = await this.requireAccount();
+    const { store, site } = upsertSite(await this.loadSites(), origin, Date.now());
+    await this.saveSites(store);
+    await this.coins_.update((cur) => this.withSiteWatches(account, cur, [site.index]), { flush: true });
+    return site;
+  }
+
+  /** The website loses access. Its account and coins stay, so they can still be moved back. */
+  async disconnectSite(origin: string): Promise<void> {
+    const o = normalizeOrigin(origin);
+    const s = await this.loadSites();
+    await this.saveSites({ v: 1, sites: s.sites.map((x) => (x.origin === o ? { ...x, connected: false } : x)) });
+  }
+
+  async forgetSite(origin: string): Promise<void> {
+    const o = normalizeOrigin(origin);
+    const site = await this.siteRecord(o);
+    if (!site) return;
+    if ((await this.siteCoins(site.index)).length) throw new Error("move the coins out of this site's account first");
+    const s = await this.loadSites();
+    await this.saveSites({ v: 1, sites: s.sites.filter((x) => x.origin !== o) });
+  }
+
+  /** The connected site's key on the open chain. Throws when not connected or locked. */
+  async siteKey(origin: string): Promise<{ site: SiteRecord; key: SiteKey }> {
+    const { account } = await this.requireAccount();
+    const site = await this.siteRecord(origin);
+    if (!site?.connected) throw new Error("not connected");
+    return { site, key: this.siteKeyOf(account, site.index) };
+  }
+
+  async siteCoins(index: number): Promise<LabeledUtxo[]> {
+    const all = await this.loadScanAll();
+    return all.utxos.filter((u) => u.kind === "site" && u.index === index && !u.spent);
+  }
+
+  async siteBalance(index: number): Promise<{ confirmed: number; unconfirmed: number; total: number }> {
+    const coins = await this.siteCoins(index);
+    const sum = (l: LabeledUtxo[]) => Number(l.reduce((a, u) => a + BigInt(u.value), 0n));
+    const confirmed = sum(coins.filter((u) => u.height > 0));
+    const unconfirmed = sum(coins.filter((u) => u.height === 0));
+    return { confirmed, unconfirmed, total: confirmed + unconfirmed };
+  }
+
+  async sitesView(): Promise<{ origin: string; connected: boolean; connectedAt: number; lastUsed?: number; address: string; path: string; balance: number; coins: number }[]> {
+    const { account } = await this.requireAccount();
+    const out = [];
+    for (const s of (await this.loadSites()).sites) {
+      const k = account.site!(s.index);
+      const coins = await this.siteCoins(s.index);
+      out.push({
+        origin: s.origin,
+        connected: s.connected,
+        connectedAt: s.connectedAt,
+        lastUsed: s.lastUsed,
+        address: k.address,
+        path: k.path,
+        balance: Number(coins.reduce((a, u) => a + BigInt(u.value), 0n)),
+        coins: coins.length,
+      });
+    }
+    return out.sort((a, b) => Number(b.connected) - Number(a.connected) || (b.lastUsed ?? 0) - (a.lastUsed ?? 0));
+  }
+
+  /** Who owns a script or outpoint, for a site's PSBT review. Nothing leaves the extension. */
+  private async ownerLookup(origin: string): Promise<OwnerOf> {
+    const { account } = await this.requireAccount();
+    const o = normalizeOrigin(origin);
+    const all = await this.loadScanAll();
+    const otherSite = new Set<string>();
+    for (const s of (await this.loadSites()).sites) if (s.origin !== o) otherSite.add(account.site!(s.index).scriptPubKey);
+    const privScripts = new Set<string>();
+    const privOutpoints = new Set<string>();
+    for (const u of all.utxos) {
+      if (u.kind === "site") continue;
+      privScripts.add(u.scriptPubKey);
+      privOutpoints.add(`${u.txid}:${u.vout}`);
+    }
+    for (const w of all.watch ?? []) if (w.kind !== "site") privScripts.add(w.scriptPubKey);
+    return (script, outpoint) => {
+      if (otherSite.has(script)) return "other-site";
+      if (privScripts.has(script) || (outpoint && privOutpoints.has(outpoint))) return "private";
+      return "unknown";
+    };
+  }
+
+  async siteReviewPsbt(origin: string, psbt: string, opts: SignPsbtOptions): Promise<PsbtReview> {
+    const { key } = await this.siteKey(origin);
+    return reviewPsbt(parsePsbt(psbt), key, await this.ownerLookup(origin), opts);
+  }
+
+  async siteSignPsbt(origin: string, psbt: string, opts: SignPsbtOptions & { autoFinalized: boolean }): Promise<string> {
+    const { key } = await this.siteKey(origin);
+    const tx = parsePsbt(psbt);
+    const review = reviewPsbt(tx, key, await this.ownerLookup(origin), opts);
+    await this.touchSite(origin);
+    return signReviewedPsbt(tx, review, key, opts.autoFinalized);
+  }
+
+  async siteSignMessage(origin: string, text: string, type: "ecdsa" | "bip322-simple"): Promise<string> {
+    const { key } = await this.siteKey(origin);
+    await this.touchSite(origin);
+    return type === "bip322-simple" ? signMessageBip322(text, key) : signMessageEcdsa(text, key.internalSecret);
+  }
+
+  async sitePlanSend(origin: string, to: string, sats: number, feeRate: number, memos: string[]): Promise<SiteSendPlan> {
+    const { key } = await this.siteKey(origin);
+    if (/^sp1/i.test(to.trim())) throw new Error("a website account cannot pay a private code; use Move back to private in Settings");
+    return buildSiteSend({ coins: await this.siteCoins(key.index), key, to: to.trim(), amount: BigInt(sats), feeRate, memos });
+  }
+
+  /** Broadcast a transaction a website account made, and note its own outputs and spends. */
+  async siteBroadcast(origin: string, txHex: string): Promise<string> {
+    const { key } = await this.siteKey(origin);
+    const parsed = btc.Transaction.fromRaw(fromHex(txHex), { allowUnknownOutputs: true, allowUnknownInputs: true, disableScriptCheck: true });
+    const ours: OwnedOutput[] = [];
+    for (let i = 0; i < parsed.outputsLength; i++) {
+      const o = parsed.getOutput(i);
+      if (o.script && hex(o.script) === key.scriptPubKey) ours.push({ vout: i, value: String(o.amount ?? 0n), scriptPubKey: key.scriptPubKey, tweak: "", label: null, k: 0, kind: "site", index: key.index });
+    }
+    const txid = await this.source().broadcast(txHex);
+    await this.coins_.update((fresh) => applyBuiltSend(fresh, txHex, ours), { flush: true });
+    await this.touchSite(origin);
+    return txid;
+  }
+
+  private async touchSite(origin: string): Promise<void> {
+    const o = normalizeOrigin(origin);
+    const s = await this.loadSites();
+    await this.saveSites({ v: 1, sites: s.sites.map((x) => (x.origin === o ? { ...x, lastUsed: Date.now() } : x)) });
+  }
+
+  /** Sweep a website account into this wallet's own receive code. Allowed while disconnected. */
+  async planSiteMoveBack(origin: string, feeRate: number): Promise<ReturnType<typeof buildSend>> {
+    const { account } = await this.requireAccount();
+    const site = await this.siteRecord(origin);
+    if (!site) throw new Error("unknown site");
+    const coins = await this.siteCoins(site.index);
+    if (!coins.length) throw new Error("nothing in this site's account");
+    return buildSend({
+      account,
+      utxos: coins,
+      destination: account.receive,
+      amount: 0n,
+      feeRate,
+      source: this.source(),
+      include: coins.map((c) => outpointOf(c)),
+      max: true,
+    });
+  }
+
+  async siteMoveBack(origin: string, feeRate: number): Promise<BroadcastResult> {
+    const built = await this.planSiteMoveBack(origin, feeRate);
+    return this.broadcast(INTENT_SIMPLE_SEND, built, { kind: "self", feeRate, label: `Moved from site account ${siteHost(normalizeOrigin(origin))}` });
+  }
+
   async planSplit(
     outpoint: string,
     amounts: string[],
@@ -2991,6 +3213,21 @@ export class PrivateBit {
   issueOneTime = this.d("issueOneTime");
   oneTimeView = this.d("oneTimeView");
   planSweep = this.d("planSweep");
+  loadSites = this.d("loadSites");
+  siteRecord = this.d("siteRecord");
+  connectSite = this.d("connectSite");
+  disconnectSite = this.d("disconnectSite");
+  forgetSite = this.d("forgetSite");
+  siteKey = this.d("siteKey");
+  siteBalance = this.d("siteBalance");
+  sitesView = this.d("sitesView");
+  siteReviewPsbt = this.d("siteReviewPsbt");
+  siteSignPsbt = this.d("siteSignPsbt");
+  siteSignMessage = this.d("siteSignMessage");
+  sitePlanSend = this.d("sitePlanSend");
+  siteBroadcast = this.d("siteBroadcast");
+  planSiteMoveBack = this.d("planSiteMoveBack");
+  siteMoveBack = this.d("siteMoveBack");
   sweepOneTime = this.d("sweepOneTime");
   replaceOneTime = this.d("replaceOneTime");
   planSplit = this.d("planSplit");

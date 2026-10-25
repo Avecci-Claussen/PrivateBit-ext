@@ -134,7 +134,7 @@ describe("PSBT review and signing", () => {
   const k = key("https://app.example.com");
   const other = "5120" + hex(schnorr.getPublicKey(fromHex("11".repeat(32))));
   const priv = "5120" + hex(schnorr.getPublicKey(fromHex("22".repeat(32))));
-  const owner = (s: string) => (s === priv ? "private" : "unknown") as const;
+  const owner = (s: string): "private" | "unknown" => (s === priv ? "private" : "unknown");
 
   it("shows what leaves, what returns and the fee; signs and finalizes", () => {
     const p = psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], [{ script: other, amount: 6_000n }, { script: k.scriptPubKey, amount: 3_500n }]);

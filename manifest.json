@@ -17,6 +17,29 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "inpage.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
   "permissions": [
     "storage",
     "alarms",
@@ -49,5 +72,6 @@
   "options_ui": {
     "page": "full.html",
     "open_in_tab": true
-  }
+  },
+  "minimum_chrome_version": "111"
 }
