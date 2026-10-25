@@ -1,6 +1,6 @@
 {
   "name": "privatebit",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Private Bitcoin and Fractal Bitcoin wallet with a reusable receive code, Payjoin payment links and keys that stay on your computer.",
@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "directory": "node --experimental-strip-types directory/server.ts",
-    "release": "npm run build && node scripts/pack-release.mjs dist release/PrivateBit-v1.0.1.zip",
+    "release": "npm run build && node scripts/pack-release.mjs dist release/PrivateBit-v1.0.0.zip",
     "prerelease": "node -e \"require('fs').mkdirSync('release',{recursive:true})\""
   },
   "dependencies": {

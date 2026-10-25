@@ -1,17 +1,5 @@
 # Changelog
 
-## 1.0.1
-
-### Fixed
-- Payjoin change. When you paid a Payjoin link, the change from your own coins was sent back to you on chain but the wallet did not see it, so the balance showed too little. The receiver adds a coin of their own, and the wallet looked for your change using every coin in the payment instead of only yours. It now also checks with only your coins, right after sending and when finding coins again. Change missed by 1.0.0 comes back on its own at the next sync, and a restore from recovery words finds it too. Activity shows it as "Back to you".
-
-### Changed
-- Coins table on wide screens: 48 px touch area for the select box and the freeze switch.
-- Narrow screens and larger text: the header, rows, amounts and bottom tabs fit from 320 px wide and at 1.3 times the text size. Wallet names shorten with an ellipsis, the status and chain chips drop their labels to icons when space is short, amounts always stay whole, and long button labels wrap.
-- The type scale can grow as one (text, line heights and boxes together). The Android app uses it for the phone font size, up to 1.3 times.
-- Switch rows toggle from anywhere on the row.
-- Unlock shows the password field before the note about where keys are kept.
-
 ## 1.0.0
 
 First public release.
@@ -46,3 +34,13 @@ First public release.
 
 ### Full page
 - Expanded view with a sidebar; the main column is centered on wide screens.
+
+### Fixes since the first test build
+- Payjoin change. When you paid a Payjoin link, the change from your own coins was sent back to you on chain but the wallet did not see it, so the balance showed too little. The receiver adds a coin of their own, and the wallet looked for your change using every coin in the payment instead of only yours. It now also checks with only your coins, right after sending and when finding coins again. Change missed by the first test build comes back on its own at the next sync, and a restore from recovery words finds it too. Activity shows it as "Back to you".
+
+### Layout since the first test build
+- Coins table on wide screens: 48 px touch area for the select box and the freeze switch.
+- Narrow screens and larger text: the header, rows, amounts and bottom tabs fit from 320 px wide and at 1.3 times the text size. Wallet names shorten with an ellipsis, the status and chain chips drop their labels to icons when space is short, amounts always stay whole, and long button labels wrap.
+- The type scale can grow as one (text, line heights and boxes together). The Android app uses it for the phone font size, up to 1.3 times.
+- Switch rows toggle from anywhere on the row.
+- Unlock shows the password field before the note about where keys are kept.

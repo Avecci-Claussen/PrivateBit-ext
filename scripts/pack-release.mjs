@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { deflateRawSync, crc32 } from "node:zlib";
 
 const dist = process.argv[2] ?? "dist";
-const out = process.argv[3] ?? "PrivateBit-v1.0.1.zip";
+const out = process.argv[3] ?? "PrivateBit-v1.0.0.zip";
 const walk = (d) => readdirSync(d).sort().flatMap((n) => (statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]));
 const files = walk(dist).map((f) => relative(dist, f).split("\\").join("/")).sort();
 // 1980-01-01 00:00 in DOS time.

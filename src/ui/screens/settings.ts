@@ -87,7 +87,7 @@ function priceSummary(): string {
   return `${SOURCE_NAME[pr.priceSource]}, the other one if it fails`;
 }
 
-const VERSION = chrome.runtime.getManifest?.().version ?? "1.0.1";
+const VERSION = chrome.runtime.getManifest?.().version ?? "1.0.0";
 
 /* ---------- list (54) ---------- */
 screens.settings = () => {
