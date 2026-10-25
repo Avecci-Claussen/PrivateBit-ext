@@ -83,6 +83,7 @@ import {
   signReviewedPsbt,
   siteHost,
   upsertSite,
+  pickSiteIndex,
   type OwnerOf,
   type PsbtReview,
   type SignPsbtOptions,
@@ -2162,6 +2163,25 @@ export class WalletCore {
     return site;
   }
 
+  /**
+   * Audit M3 (independent): bring back a website's account by its address (after a restore, or a
+   * site you forgot). The account comes from the recovery words and the site's origin, so the same
+   * origin gives the same account. Added disconnected and watched; the site gets no access.
+   */
+  async findSite(origin: string): Promise<SiteRecord> {
+    const { account } = await this.requireAccount();
+    const o = normalizeOrigin(origin);
+    const store = await this.loadSites();
+    let site = store.sites.find((x) => x.origin === o);
+    if (!site) {
+      const now = Date.now();
+      site = { origin: o, index: pickSiteIndex(o, store.sites), connected: false, connectedAt: now, lastUsed: now };
+      await this.saveSites({ v: 1, sites: [...store.sites, site] });
+    }
+    await this.coins_.update((cur) => this.withSiteWatches(account, cur, [site!.index]), { flush: true });
+    return site;
+  }
+
   /** The website loses access. Its account and coins stay, so they can still be moved back. */
   async disconnectSite(origin: string): Promise<void> {
     const o = normalizeOrigin(origin);
@@ -3340,6 +3360,7 @@ export class PrivateBit {
   connectSite = this.d("connectSite");
   disconnectSite = this.d("disconnectSite");
   forgetSite = this.d("forgetSite");
+  findSite = this.d("findSite");
   siteKey = this.d("siteKey");
   siteBalance = this.d("siteBalance");
   sitesView = this.d("sitesView");

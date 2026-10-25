@@ -111,3 +111,21 @@ describe("H3: a site signature always covers every output", () => {
     expect(schnorr.verify(sig.slice(0, 64), pre, k.output)).toBe(false);
   });
 });
+
+describe("M3: a site's account can be found again from its address", () => {
+  it("same origin, same account, added disconnected and watched", async () => {
+    const mnemonic = createMnemonic(256);
+    const a = new PrivateBit(memoryKv());
+    await a.restore({ mnemonic, password: "password1", birthday: 10 });
+    const first = await a.connectSite("https://app.example.com");
+    const b = new PrivateBit(memoryKv());
+    await b.restore({ mnemonic, password: "password1", birthday: 10 });
+    const found = await b.findSite("https://app.example.com/");
+    expect(found.index).toBe(first.index);
+    expect(found.connected).toBe(false);
+    const view = (await b.sitesView())[0]!;
+    expect(view.address).toBe((await a.sitesView())[0]!.address);
+    const watched = ((await b.loadScan()).watch ?? []).some((w) => w.kind === "site" && w.index === found.index);
+    expect(watched).toBe(true);
+  }, 30000);
+});

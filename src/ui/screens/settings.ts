@@ -1,7 +1,7 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
 import { call, type ChainConfig, type Prefs } from "../api.ts";
 import { html, I, curNet, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
-import { sitesIntro, sitesList } from "./dapp.ts";
+import { findSiteForm, sitesIntro, sitesList } from "./dapp.ts";
 import { hdr, tabs, mailboxHost } from "../chrome.ts";
 import { netInfo, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
 const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
@@ -793,6 +793,6 @@ function fullSettings(): Safe {
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>
       <p class="cap">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p></section>
     <section class="sect" id="sites"><header><h2>Connected sites</h2><p>Websites you approved. Each has its own account on each chain.</p></header>
-      <div class="stack" style="max-width:560px">${sitesIntro()}${sitesList()}</div></section>
+      <div class="stack" style="max-width:560px">${sitesIntro()}${sitesList()}${findSiteForm()}</div></section>
   </div></div>`;
 }

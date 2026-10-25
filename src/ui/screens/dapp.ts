@@ -2,7 +2,7 @@
  * Connected websites: the approval popup a site opens (connect, sign, send, switch chain),
  * and the Connected sites list and detail in Settings.
  */
-import { S, screens, actions, loaders, go, render, run, refresh, busy, err, toast } from "../app.ts";
+import { S, screens, actions, loaders, go, render, run, refresh, busy, err, toast, fv } from "../app.ts";
 import { call, type Fees } from "../api.ts";
 import { html, I, MARK, UNIT, codeHi, fb, fbShort, sats, mid, ntag, when, type Safe, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { hdr } from "../chrome.ts";
@@ -271,8 +271,33 @@ export function sitesIntro(): Safe {
 screens["set-sites"] = () => ({
   title: "Connected sites",
   header: hdr({ title: "Connected sites" }),
-  main: html`${sitesIntro()}${sitesList()}${err("sites") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("sites")}</span></p>` : ""}`,
+  main: html`${sitesIntro()}${sitesList()}${err("sites") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("sites")}</span></p>` : ""}${findSiteForm()}`,
 });
+
+/** Audit M3 (independent): find a site's account again from its web address. */
+export function findSiteForm(): Safe {
+  return html`<div class="field"><label class="label" for="findsite">Find a site's account</label><div class="row"><input class="input mono" id="findsite" data-f="findsite" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://app.example.com" value="${fv("findsite")}" aria-describedby="findsite-h"><button class="btn btn-secondary btn-sm" type="button" data-act="site-find">${busy("sfind") ? I("loader-circle", "s16 spin") : "Find"}</button></div>${err("sfind") ? html`<p class="err" id="findsite-h" role="alert">${I("circle-alert", "s16")}<span>${err("sfind")}</span></p>` : html`<p class="help" id="findsite-h">After a restore, a site's account comes back when you connect to it again, or here with its exact address. The site gets no access. Coins it received before today show after a scan from an earlier start block.</p>`}</div>`;
+}
+
+actions["site-find"] = async () => {
+  const raw = fv("findsite").trim();
+  let origin = "";
+  try {
+    const u = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error();
+    origin = u.origin;
+  } catch {
+    S.err.sfind = "Enter a web address, such as https://app.example.com.";
+    render();
+    return;
+  }
+  const got = await run("sfind", () => call<SiteView[]>({ type: "DAPP_FIND_SITE", origin }), "sfind");
+  if (!got) return;
+  S.d.sites = got;
+  S.f.findsite = "";
+  toast(`Watching the account for ${hostOf(origin)}.`);
+  render();
+};
 
 const curSite = (): SiteView | undefined => sites().find((s) => s.origin === S.params.origin);
 

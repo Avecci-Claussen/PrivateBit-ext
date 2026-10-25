@@ -293,6 +293,7 @@ type Msg =
   | { type: "DAPP_SITES" }
   | { type: "DAPP_DISCONNECT"; origin: string }
   | { type: "DAPP_FORGET"; origin: string }
+  | { type: "DAPP_FIND_SITE"; origin: string }
   | { type: "SITE_MOVE_PLAN"; origin: string; feeRate: number }
   | { type: "SITE_MOVE"; origin: string; feeRate: number }
   | { type: "SWEEP_ONETIME"; index: number; feeRate: number }
@@ -707,6 +708,9 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.sitesView();
     case "DAPP_FORGET":
       await wallet.forgetSite(msg.origin);
+      return wallet.sitesView();
+    case "DAPP_FIND_SITE":
+      await wallet.findSite(msg.origin);
       return wallet.sitesView();
     case "SITE_MOVE_PLAN": {
       const b = await wallet.planSiteMoveBack(msg.origin, msg.feeRate);
