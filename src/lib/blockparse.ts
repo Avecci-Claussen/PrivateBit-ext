@@ -127,3 +127,63 @@ export function parseBlockTransactions(raw: Uint8Array): LightTx[] | null {
     return null;
   }
 }
+
+/** Merkle root of txids (display order hex), in header byte order. */
+export function merkleRoot(txids: string[]): Uint8Array {
+  if (!txids.length) throw new Error("no transactions");
+  let level: Uint8Array[] = txids.map((t) => {
+    const b = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) b[i] = parseInt(t.slice(62 - i * 2, 64 - i * 2), 16);
+    return b;
+  });
+  while (level.length > 1) {
+    const next: Uint8Array[] = [];
+    for (let i = 0; i < level.length; i += 2) next.push(sha256(sha256(concatBytes(level[i]!, level[i + 1] ?? level[i]!))));
+    level = next;
+  }
+  return level[0]!;
+}
+
+/** Header target from compact bits. */
+export function bitsTarget(bits: number): bigint {
+  const exp = bits >>> 24;
+  const mant = BigInt(bits & 0x7fffff);
+  return exp <= 3 ? mant >> BigInt(8 * (3 - exp)) : mant << BigInt(8 * (exp - 3));
+}
+
+export class BlockCheckError extends Error {
+  constructor(msg: string) {
+    super(`block data failed a check: ${msg}`);
+    this.name = "BlockCheckError";
+  }
+}
+
+/** Least work a header must show: 2^56 hashes (Fractal's own blocks are about 2^62 today). */
+const MIN_WORK_BITS = 56;
+
+/**
+ * Audit M2 (independent): check a raw block from a public explorer before matching payments in it.
+ * The transactions must hash to the header's merkle root, the header must hash to the block hash
+ * asked for, and the header must carry proof of work. Fractal merge-mined blocks (version bit 8)
+ * have their work in the parent chain header, which explorers leave out, so for those only the
+ * merkle root and hash are checked.
+ */
+export function checkRawBlock(raw: Uint8Array, expectedHash?: string, txs?: { txid: string }[] | null): void {
+  if (raw.length < 81) throw new BlockCheckError("too short");
+  const header = raw.subarray(0, 80);
+  const hashLE = sha256(sha256(header));
+  const hashHex = hex(hashLE.slice().reverse());
+  if (expectedHash && hashHex !== expectedHash.toLowerCase()) throw new BlockCheckError("hash does not match the block asked for");
+  const list = txs === undefined ? parseBlockTransactions(raw) : txs;
+  if (!list) return; // Not a layout we read; the caller refuses it as unsupported.
+  const root = merkleRoot(list.map((t) => t.txid));
+  if (hex(root) !== hex(header.subarray(36, 68))) throw new BlockCheckError("transactions do not match the merkle root");
+  const version = header[0]! | (header[1]! << 8) | (header[2]! << 16) | (header[3]! << 24);
+  if (version & 0x100) return;
+  const bits = header[72]! | (header[73]! << 8) | (header[74]! << 16) | (header[75]! << 24);
+  const target = bitsTarget(bits >>> 0);
+  let h = 0n;
+  for (let i = 31; i >= 0; i--) h = (h << 8n) | BigInt(hashLE[i]!);
+  if (target <= 0n || target >= 1n << BigInt(256 - MIN_WORK_BITS)) throw new BlockCheckError("header target is too easy");
+  if (h > target) throw new BlockCheckError("header has no valid proof of work");
+}

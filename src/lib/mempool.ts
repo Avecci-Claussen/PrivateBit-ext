@@ -1,4 +1,5 @@
 import { fromHex } from "./bytes.ts";
+import { checkRawBlock } from "./blockparse.ts";
 import { RateLimitedError } from "./requests.ts";
 import { netFetch } from "./net.ts";
 
@@ -29,7 +30,9 @@ async function mempoolFetch(path: string, base = MEMPOOL_FRACTAL, init: RequestI
 export async function mempoolBlockRaw(height: number, base = MEMPOOL_FRACTAL): Promise<Uint8Array> {
   const hash = await mempoolBlockHash(height, base);
   const res = await mempoolFetch(`/api/block/${hash}/raw`, base);
-  return new Uint8Array(await res.arrayBuffer());
+  const raw = new Uint8Array(await res.arrayBuffer());
+  checkRawBlock(raw, hash);
+  return raw;
 }
 
 export async function mempoolTxHex(txid: string, base = MEMPOOL_FRACTAL): Promise<string | undefined> {

@@ -482,8 +482,18 @@ async function fetchRaw(source: ChainSource, height: number): Promise<Uint8Array
 }
 
 async function fetchParent(source: ChainSource, txid: string): Promise<string | undefined> {
-  if (source.kind === "core" || source.net === "bitcoin") return source.getTxHex(txid).catch(() => undefined);
-  return mempoolTxHex(txid);
+  const got = source.kind === "core" || source.net === "bitcoin" ? await source.getTxHex(txid).catch(() => undefined) : await mempoolTxHex(txid);
+  // Audit M2 (independent): a parent transaction must hash to the txid asked for.
+  if (got !== undefined) {
+    let id = "";
+    try {
+      id = parseTxHex(got).txid.toLowerCase();
+    } catch {
+      return undefined;
+    }
+    if (id !== txid.toLowerCase()) return undefined;
+  }
+  return got;
 }
 
 /** Bitcoin: fill the script cache for this block's taproot transactions from block pages. */
