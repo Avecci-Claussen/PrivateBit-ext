@@ -82,10 +82,44 @@ async function noteHealth(e?: unknown, retryInMs?: number): Promise<void> {
   await kv.set({ [HEALTH_KEY]: { state: code, since, at: now, ...(retryAt ? { retryAt } : {}) } satisfies Health });
 }
 
+/** Uniform random wait in [lo, hi) ms, from the system CSPRNG. */
+function jitterMs(lo: number, hi: number): number {
+  return lo + (crypto.getRandomValues(new Uint32Array(1))[0]! % Math.max(1, hi - lo));
+}
+
+/**
+ * Security audit v1 (I8): price and fee requests run on their own random schedule, whether the
+ * wallet is locked or not, so the price and fee services cannot tell when someone unlocks,
+ * opens Send or is using the wallet. Each run picks the next one 0.7x to 1.3x the period away.
+ */
+function schedulePrice(): void {
+  const base = PRICE_PERIOD_MIN * 60_000 * 2;
+  chrome.alarms.create(PRICE_ALARM, { when: Date.now() + jitterMs(base * 0.7, base * 1.3) });
+}
+const FEE_ALARM = "privatebit.fees.poll";
+const FEE_PERIOD_MS = 8 * 60_000;
+function scheduleFees(): void {
+  chrome.alarms.create(FEE_ALARM, { when: Date.now() + jitterMs(FEE_PERIOD_MS * 0.7, FEE_PERIOD_MS * 1.3) });
+}
+async function refreshFees(): Promise<(FeeRates & { fetchedAt: number }) | undefined> {
+  try {
+    await wallet.loadChain();
+    const r = await wallet.feeRates();
+    const next = { ...r, fetchedAt: Date.now() };
+    await kv.set({ [FEES_KEY]: next });
+    await noteHealth();
+    return next;
+  } catch (e) {
+    await noteHealth(e);
+    return undefined;
+  }
+}
+
 function ensureAlarms(): void {
   chrome.alarms.create(FOLLOW_ALARM, { periodInMinutes: 1, delayInMinutes: 1 });
   chrome.alarms.create(LOCK_ALARM, { periodInMinutes: 1, delayInMinutes: 1 });
-  chrome.alarms.create(PRICE_ALARM, { periodInMinutes: PRICE_PERIOD_MIN, delayInMinutes: PRICE_PERIOD_MIN });
+  void chrome.alarms.get(PRICE_ALARM).then((a) => (a ? undefined : schedulePrice()));
+  void chrome.alarms.get(FEE_ALARM).then((a) => (a ? undefined : scheduleFees()));
 }
 
 function schedulePayjoinWake(): void {
@@ -121,7 +155,7 @@ async function pumpPayjoin(): Promise<void> {
   }
   if (again) {
     schedulePayjoinWake();
-    pjTimer = setTimeout(() => void pumpPayjoin(), PJ_POLL_MS);
+    pjTimer = setTimeout(() => void pumpPayjoin(), jitterMs(PJ_POLL_MS * 0.6, PJ_POLL_MS * 1.4));
   } else {
     await chrome.alarms.clear(PJ_ALARM);
     await chrome.alarms.clear(PJ_SOON);
@@ -142,7 +176,7 @@ async function checkAutoLock(): Promise<void> {
   const d = autoLockDecision(state, now, prefs.lockMinutes);
   if (d.lock) {
     await wallet.lock();
-    await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+    await kv.remove([ACTIVITY_KEY]);
     await kv.set({ [LOCKINFO_KEY]: { by: "auto", minutes: prefs.lockMinutes, at: now } satisfies LockInfo });
     kickCatchup(0);
     return;
@@ -150,10 +184,17 @@ async function checkAutoLock(): Promise<void> {
   await kv.set({ [ACTIVITY_KEY]: d.next });
 }
 
+/** First run only: no price yet. Fetched after a random wait, not at the moment of the click. */
+async function priceIfMissing(): Promise<void> {
+  const prev = (await kv.get([PRICE_KEY]))[PRICE_KEY] as PriceCache | undefined;
+  if (prev?.usd) return;
+  setTimeout(() => void refreshPrice(true), jitterMs(5_000, 60_000));
+}
+
 async function refreshPrice(force = false): Promise<PriceCache> {
   const prev = ((await kv.get([PRICE_KEY]))[PRICE_KEY] as PriceCache | undefined) ?? {};
   const prefs = await getPrefs();
-  if (prefs.priceSource === "off" || !(await isUnlocked())) return prev;
+  if (prefs.priceSource === "off") return prev;
   const asset = netInfo(prefs.network).price;
   // A cached price for the other coin is not shown, and not reused.
   const sameAsset = prev.asset === asset.coingecko || prev.asset === asset.mexc;
@@ -252,7 +293,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     return;
   }
   if (alarm.name === PRICE_ALARM) {
-    void refreshPrice();
+    schedulePrice();
+    void refreshPrice(true);
+    return;
+  }
+  if (alarm.name === FEE_ALARM) {
+    scheduleFees();
+    void refreshFees();
     return;
   }
   if (alarm.name === DELAY_ALARM) {
@@ -447,9 +494,9 @@ async function switchNetwork(network: NetworkId): Promise<void> {
   if (!isNetworkId(network)) throw new Error("Unknown network");
   const prev = await getPrefs();
   await kv.set({ [PREFS_KEY]: normalizePrefs({ ...prev, network }) });
-  await kv.remove([FEES_KEY, HEALTH_KEY]);
+  await kv.remove([FEES_KEY, HEALTH_KEY, PRICE_KEY]);
   await wallet.setNetwork(network);
-  void refreshPrice(true);
+  setTimeout(() => void refreshPrice(true), jitterMs(2_000, 30_000));
   void pumpDelayed();
   void pumpPayjoin();
   kickCatchup(0);
@@ -507,7 +554,7 @@ async function handle(msg: Msg): Promise<unknown> {
         if (tip && tip.height > 0) await wallet.setBirthday(tip.height).catch(() => undefined);
       }
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
-      void refreshPrice(true);
+      void priceIfMissing();
       kickCatchup(0);
       return bundle();
     }
@@ -525,17 +572,17 @@ async function handle(msg: Msg): Promise<unknown> {
         resetPassword: msg.forgot === true,
       });
       if (onBitcoin && imported.result === "added" && msg.birthday > 0) await wallet.setBirthday(msg.birthday);
-      await kv.remove([LOCKINFO_KEY, FEES_KEY]);
+      await kv.remove([LOCKINFO_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void pumpPayjoin();
-      void refreshPrice(true);
+      void priceIfMissing();
       kickCatchup(0);
       return { ...(await bundle()), imported };
     }
     case "SWITCH_WALLET":
       await wallet.openWallet(msg.id);
       void pumpDelayed();
-      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.remove([ACTIVITY_KEY]);
       await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       return bundle();
     case "UNLOCK":
@@ -547,12 +594,13 @@ async function handle(msg: Msg): Promise<unknown> {
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void pumpPayjoin();
       void pumpDelayed();
-      void refreshPrice();
-      kickCatchup(0);
+      void priceIfMissing();
+      // I8: coins are found while locked, so there is no need to hit the server the moment of unlock.
+      kickCatchup(jitterMs(3_000, 30_000));
       return bundle();
     case "RESTORE_BACKUP":
       await wallet.restoreBackup(msg.password);
-      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.remove([ACTIVITY_KEY]);
       await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       return bundle();
     case "LOCK":
@@ -599,20 +647,18 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.maxAmount(msg.feeRate, msg.coins);
     case "FEE_RATES": {
       const cached = (await kv.get([FEES_KEY]))[FEES_KEY] as (FeeRates & { fetchedAt: number }) | undefined;
-      if (cached && !msg.force && Date.now() - cached.fetchedAt < 60_000) return cached;
-      try {
-        const r = await wallet.feeRates();
-        const next = { ...r, fetchedAt: Date.now() };
-        await kv.set({ [FEES_KEY]: next });
-        await noteHealth();
-        return next;
-      } catch (e) {
-        await noteHealth(e);
-        throw e;
-      }
+      // I8: opening Send reads the fees fetched on the random schedule. Only a tap on refresh,
+      // or no usable rates at all, asks the server now.
+      if (cached && !msg.force && Date.now() - cached.fetchedAt < 3 * FEE_PERIOD_MS) return cached;
+      const next = await refreshFees();
+      if (!next) throw new Error("Could not read fee rates. Check the connection and try again.");
+      scheduleFees();
+      return next;
     }
     case "PRICE":
-      return refreshPrice(!!msg.force);
+      // I8: the popup shows the price from the random schedule; only an explicit refresh fetches.
+      if (msg.force) return refreshPrice(true);
+      return ((await kv.get([PRICE_KEY]))[PRICE_KEY] as PriceCache | undefined) ?? {};
     case "PREFS_SET": {
       const prev = await getPrefs();
       const patch: Partial<Prefs> = { ...msg.prefs };
@@ -791,7 +837,7 @@ async function handle(msg: Msg): Promise<unknown> {
       stopPayjoinTimer();
       await chrome.alarms.clear(PJ_ALARM);
       await chrome.alarms.clear(PJ_SOON);
-      await kv.remove([ACTIVITY_KEY, FEES_KEY]);
+      await kv.remove([ACTIVITY_KEY]);
       if (!wiped) {
         await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
         return { wiped: false, left: (await wallet.state()).wallets?.length ?? 0 };
