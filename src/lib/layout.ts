@@ -114,6 +114,8 @@ export const GLOBAL_KEYS = [
   "privatebit.onboard",
   "privatebit.fees",
   "privatebit.theme",
+  // Public encryption keys of the Payjoin mailbox, cached a week (audit M5, independent).
+  "privatebit.pj.ohttpkeys",
 ] as const;
 
 /** Version 1 names, kept only so migration and a full wipe can find them. */

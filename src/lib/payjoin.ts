@@ -409,14 +409,20 @@ export function bip78ValidateStub(proposal: string, original: string): string[] 
   return validatePayjoinProposal(proposal, original);
 }
 
-/** GET directory /.well-known/ohttp-gateway as RFC 9540 `application/ohttp-keys`. */
-export async function fetchDirectoryOhttp(directory: string): Promise<OhttpKeyConfig> {
+/** GET directory /.well-known/ohttp-gateway as RFC 9540 `application/ohttp-keys`, raw bytes. */
+export async function fetchDirectoryOhttpBytes(directory: string): Promise<Uint8Array> {
   const res = await fetch(`${mailboxBase(directory)}/.well-known/ohttp-gateway`, {
     headers: { Accept: "application/ohttp-keys" },
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`OHTTP keys HTTP ${res.status}`);
-  return parseOhttpKeys(new Uint8Array(await res.arrayBuffer()));
+  const raw = new Uint8Array(await res.arrayBuffer());
+  parseOhttpKeys(raw);
+  return raw;
+}
+
+export async function fetchDirectoryOhttp(directory: string): Promise<OhttpKeyConfig> {
+  return parseOhttpKeys(await fetchDirectoryOhttpBytes(directory));
 }
 
 export type PayjoinRouteCheck = { ok: true; ms: number } | { ok: false; step: "url" | "same" | "keys" | "relay"; message: string };

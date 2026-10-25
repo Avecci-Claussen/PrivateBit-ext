@@ -129,3 +129,38 @@ describe("M3: a site's account can be found again from its address", () => {
     expect(watched).toBe(true);
   }, 30000);
 });
+
+describe("M5: the mailbox keys are fetched once and kept", () => {
+  it("a second link, even from a new background, does not ask the mailbox again", async () => {
+    const { encodeOhttpKeyConfig, genOhttpKeyPair } = await import("../src/lib/ohttp.ts");
+    const { upsertUtxo } = await import("../src/lib/scan.ts");
+    const body = encodeOhttpKeyConfig(genOhttpKeyPair());
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.includes("/.well-known/ohttp-gateway")) throw new TypeError("network disabled");
+      calls++;
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+    try {
+      const kv = memoryKv();
+      const w = new PrivateBit(kv);
+      await w.create({ password: "password1", birthday: 8 });
+      const { account, scan } = await w.requireAccount();
+      const t = sessionTweak("ab".repeat(32), 0);
+      upsertUtxo(scan.utxos, { txid: "ab".repeat(32), vout: 0, value: "50000", scriptPubKey: hex(taprootScriptPubKey(tweakSpend(account.spendSecret, t).xonly)), tweak: hex(t), label: null, k: 0, height: 8, spent: false });
+      const t2 = sessionTweak("cd".repeat(32), 0);
+      upsertUtxo(scan.utxos, { txid: "cd".repeat(32), vout: 0, value: "60000", scriptPubKey: hex(taprootScriptPubKey(tweakSpend(account.spendSecret, t2).xonly)), tweak: hex(t2), label: null, k: 0, height: 8, spent: false });
+      await w.saveScan(scan);
+      await w.offerPayjoin(1000n);
+      const again = new PrivateBit(kv);
+      await again.unlock("password1");
+      await again.offerPayjoin(2000n);
+      expect((await again.loadPayjoinSessions()).length).toBe(2);
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }, 30000);
+});

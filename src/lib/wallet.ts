@@ -26,7 +26,7 @@ import {
 } from "./policy.ts";
 import {
   createReceiverSession,
-  fetchDirectoryOhttp,
+  fetchDirectoryOhttpBytes,
   postOriginalV2,
   receiverPostProposal,
   receiverTakeOriginal,
@@ -40,7 +40,7 @@ import { RateLimitedError } from "./requests.ts";
 import { buildPayjoinProposal, checkOriginal, proposalTxid, validatePayjoinProposal } from "./payjoin-proposal.ts";
 import { CoinStore, StaleWriteError } from "./coinstore.ts";
 import { mailboxUrls, type MailboxTransport } from "./mailbox.ts";
-import type { OhttpKeyConfig } from "./ohttp.ts";
+import { parseOhttpKeys, type OhttpKeyConfig } from "./ohttp.ts";
 import {
   addWatch,
   noteWatchedOutput,
@@ -320,6 +320,8 @@ const PJ_SEND = "privatebit.pj.send";
 const PJ_HPKE = "privatebit.pj.hpke";
 const SEND_HPKE_PREFIX = "send:";
 const ORIGINAL_PREFIX = "orig:";
+const OHTTP_KEYS_KEY = "privatebit.pj.ohttpkeys";
+const OHTTP_KEYS_TTL_MS = 7 * 24 * 60 * 60_000;
 /** After we post a proposal, the payer has this long to broadcast it. Then the link ends as "not sent". */
 export const PROPOSAL_DEADLINE_MS = 60 * 60 * 1000;
 /** A closed link may still be paid late (the payer broadcasts after all); we look for it this long. */
@@ -2626,7 +2628,7 @@ export class WalletCore {
     const extra = tweakSpend(account.spendSecret, extraTweak);
     const payScript = taprootScriptPubKey(pay.xonly);
     const extraScript = taprootScriptPubKey(extra.xonly);
-    if (!this.ohttpConfig) this.ohttpConfig = await fetchDirectoryOhttp(directory);
+    if (!this.ohttpConfig) this.ohttpConfig = await this.directoryKeys(directory);
     const ohttp = this.ohttpConfig;
     const { session, hpke } = createReceiverSession({
       directory,
@@ -2710,6 +2712,25 @@ export class WalletCore {
     }
     if (sendDirty) await this.savePayjoinSends(sends);
     if (gone.length) await this.forgetPayjoinSecrets(gone);
+  }
+
+  /**
+   * Audit M5 (independent): the mailbox's public encryption keys, fetched at most once a week and
+   * kept, so the mailbox does not see this IP each time a link is made. Browsers cannot send this
+   * one GET through the relay (BIP77 relays take it only as a CONNECT or WebSocket tunnel).
+   */
+  private async directoryKeys(directory: string): Promise<OhttpKeyConfig> {
+    const cached = (await this.kv.get([OHTTP_KEYS_KEY]))[OHTTP_KEYS_KEY] as { directory: string; raw: string; at: number } | undefined;
+    if (cached && cached.directory === directory && Date.now() - cached.at < OHTTP_KEYS_TTL_MS && Date.now() >= cached.at) {
+      try {
+        return parseOhttpKeys(fromHex(cached.raw));
+      } catch {
+        // Fetched again below.
+      }
+    }
+    const raw = await fetchDirectoryOhttpBytes(directory);
+    await this.kv.set({ [OHTTP_KEYS_KEY]: { directory, raw: hex(raw), at: Date.now() } });
+    return parseOhttpKeys(raw);
   }
 
   /** The payer's signed original for a link, broadcast. Undefined when there is none or it was refused. */
