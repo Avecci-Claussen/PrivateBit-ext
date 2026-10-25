@@ -31,7 +31,8 @@ function row(ic: string, t: string, d: string, to: string): Safe {
   return html`<a class="li" href="#" data-act="go" data-to="${to}"><span class="ico">${I(ic)}</span><span class="body"><span class="t">${t}</span><span class="d">${d}</span></span>${I("chevron-right", "s16 chev")}</a>`;
 }
 function toggle(t: string, d: string, on: boolean, id: string, pref: keyof Prefs, extra?: Safe): Safe {
-  return html`<div class="li" style="cursor:default;align-items:flex-start"><span class="body"><label class="t" for="${id}" style="white-space:normal">${t}</label><span class="d" style="white-space:normal">${d}</span>${extra ?? ""}</span><input class="switch" type="checkbox" role="switch" id="${id}" data-act="pref-toggle" data-pref="${pref}" ${on ? html`checked` : ""}></div>`;
+  // The whole row is the switch's label, so the touch target is the row, not the 52 x 32 switch.
+  return html`<label class="li swrow" for="${id}"><span class="body"><span class="t">${t}</span><span class="d">${d}</span>${extra ?? ""}</span><input class="switch" type="checkbox" role="switch" id="${id}" data-act="pref-toggle" data-pref="${pref}" ${on ? html`checked` : ""}></label>`;
 }
 actions["pref-toggle"] = async (el, ev) => {
   ev.preventDefault();
@@ -86,7 +87,7 @@ function priceSummary(): string {
   return `${SOURCE_NAME[pr.priceSource]}, the other one if it fails`;
 }
 
-const VERSION = chrome.runtime.getManifest?.().version ?? "1.0.0";
+const VERSION = chrome.runtime.getManifest?.().version ?? "1.0.1";
 
 /* ---------- list (54) ---------- */
 screens.settings = () => {

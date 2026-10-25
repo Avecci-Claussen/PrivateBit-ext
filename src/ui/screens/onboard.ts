@@ -400,8 +400,8 @@ screens.unlock = () => {
   <div class="unlock-hero"><h1>${active && wallets.length > 1 ? `Unlock ${active.name}` : "Unlock your wallet"}</h1><p class="muted">Your balance, codes and payment links stay sealed until you do. The password is the one for this computer, not the extra passphrase.</p></div>
   ${wallets.length > 1 ? html`<div class="stack" style="gap:var(--s-2)"><p class="label" id="wl-h">Wallet to unlock</p><ul class="opt-list ulist" aria-labelledby="wl-h">${wallets.map((w) => html`<li><button class="opt" type="button" data-act="wallet-pick" data-id="${w.id}" ${w.active ? html`aria-current="true"` : ""} aria-label="${w.name}${w.active ? ", selected" : ", select"}"><span class="body"><span class="t">${w.name}</span><span class="d">${w.words ? `${w.words} words` : "Recovery words"}${w.hasPassphrase ? ", extra passphrase" : ""}, from block ${num(w.birthday)}</span></span>${w.active ? I("check") : I("chevron-right", "s16")}</button></li>`)}</ul></div>` : ""}
   ${li?.by === "auto" ? html`<p class="small row" role="status" style="gap:6px">${I("timer", "s16")}Locked itself after ${li.minutes ?? 15} minutes without use.</p>` : ""}
-  <div class="vault">${I("hard-drive", "s16")}<span class="grow"><span class="strong" style="display:block">Keys on this computer only</span><span class="k">Encrypted with your password. Nothing is sent anywhere.</span></span>${NETLOGO()}</div>
   <div data-enter="unlock">${pwField("pw", "Password", "current-password")}</div>
+  <div class="vault">${I("hard-drive", "s16")}<span class="grow"><span class="strong" style="display:block">Keys on this computer only</span><span class="k">Encrypted with your password. Nothing is sent anywhere.</span></span>${NETLOGO()}</div>
 `,
     foot: {
       cls: "plain",

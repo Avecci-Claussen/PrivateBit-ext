@@ -8,6 +8,8 @@
 @font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:500;font-display:swap;src:url(fonts/jetbrains-mono-latin-500-normal.woff2) format("woff2")}
 :root{
   color-scheme: dark;
+  /* Text scale. 1 in the extension; the phone app sets it from the system font size (max 1.3). */
+  --fs: 1;
   --c-bg: oklch(0.178 0.052 289);
   --c-surface: oklch(0.217 0.074 285);
   --c-surface2: oklch(0.249 0.084 285);
@@ -41,14 +43,14 @@
   --c-danger-fg: oklch(0.161 0.035 20);
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-  --t-display: 600 34px/38px var(--font-sans); --track-tight: -0.02em;
-  --t-title: 600 18px/24px var(--font-sans);
-  --t-body: 400 14px/20px var(--font-sans);
-  --t-body-strong: 500 14px/20px var(--font-sans);
-  --t-small: 400 13px/18px var(--font-sans);
-  --t-caption: 500 12px/16px var(--font-sans);
-  --t-mono: 400 12.5px/20px var(--font-mono);
-  --t-mono-strong: 500 14px/20px var(--font-mono);
+  --t-display: 600 calc(34px * var(--fs))/calc(38px * var(--fs)) var(--font-sans); --track-tight: -0.02em;
+  --t-title: 600 calc(18px * var(--fs))/calc(24px * var(--fs)) var(--font-sans);
+  --t-body: 400 calc(14px * var(--fs))/calc(20px * var(--fs)) var(--font-sans);
+  --t-body-strong: 500 calc(14px * var(--fs))/calc(20px * var(--fs)) var(--font-sans);
+  --t-small: 400 calc(13px * var(--fs))/calc(18px * var(--fs)) var(--font-sans);
+  --t-caption: 500 calc(12px * var(--fs))/calc(16px * var(--fs)) var(--font-sans);
+  --t-mono: 400 calc(12.5px * var(--fs))/calc(20px * var(--fs)) var(--font-mono);
+  --t-mono-strong: 500 calc(14px * var(--fs))/calc(20px * var(--fs)) var(--font-mono);
   --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px; --s-8:32px; --s-10:40px; --s-12:48px; --s-16:64px;
   --r-sm:6px; --r-md:10px; --r-lg:14px; --r-xl:18px; --r-full:999px;
   --control-h:44px; --control-h-sm:32px;

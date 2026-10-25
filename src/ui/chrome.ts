@@ -4,7 +4,7 @@ import { status } from "./derive.ts";
 
 /** The chain on screen. Opens the chain picker. */
 export function netChip(compact = false): Safe {
-  return html`<button class="net ${compact ? "compact" : ""}" type="button" data-act="sheet" data-sheet="network" aria-haspopup="dialog" aria-label="Network: ${CHAIN()}. Change network">${NETLOGO()}${compact ? "" : html`<span>${CHAIN_SHORT()}</span>`}${I("chevron-down", "s16")}</button>`;
+  return html`<button class="net ${compact ? "compact" : ""}" type="button" data-act="sheet" data-sheet="network" aria-haspopup="dialog" aria-label="Network: ${CHAIN()}. Change network">${NETLOGO()}${compact ? "" : html`<span class="lbl">${CHAIN_SHORT()}</span>`}${I("chevron-down", "s16")}</button>`;
 }
 
 type WalletRow = NonNullable<NonNullable<typeof S.b>["state"]["wallets"]>[number];
@@ -36,7 +36,7 @@ const PSTAT: Record<string, [string, string, string]> = {
 };
 export function pstat(kind = status()): Safe {
   const m = PSTAT[kind] ?? PSTAT.private!;
-  return html`<button class="pstat ${m[2]}" type="button" data-act="sheet" data-sheet="privacy" aria-haspopup="dialog" aria-label="Privacy status: ${m[1]}. Show details">${I(m[0], "s16")}${m[1]}</button>`;
+  return html`<button class="pstat ${m[2]}" type="button" data-act="sheet" data-sheet="privacy" aria-haspopup="dialog" aria-label="Privacy status: ${m[1]}. Show details">${I(m[0], "s16")}<span class="lbl">${m[1]}</span></button>`;
 }
 
 export function hdr(o: { title?: string; back?: boolean; net?: boolean; right?: Safe; close?: boolean } = {}): Safe {
@@ -53,7 +53,7 @@ export function tabs(active: string): Safe {
     ["coins", "coins", "Coins"],
     ["settings", "settings", "Settings"],
   ];
-  return html`<nav class="tabs" aria-label="Main">${t.map(([k, ic, l]) => html`<a class="tab" href="#" data-act="tab" data-to="${k}" ${k === active ? raw('aria-current="page"') : ""}>${I(ic)}${l}</a>`)}</nav>`;
+  return html`<nav class="tabs" aria-label="Main">${t.map(([k, ic, l]) => html`<a class="tab" href="#" data-act="tab" data-to="${k}" ${k === active ? raw('aria-current="page"') : ""}>${I(ic)}<span class="tl">${l}</span></a>`)}</nav>`;
 }
 
 function footHtml(f?: Foot): string {

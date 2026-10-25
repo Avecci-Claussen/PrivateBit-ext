@@ -214,7 +214,7 @@ function balPanel(): Safe {
   <p class="bigbal">${hide ? "\u2022\u2022\u2022\u2022\u2022\u2022" : fbShort(conf, { unit: false })}<span class="unit">${UNIT()}</span></p>
   ${hide || p.kind === "off" ? "" : p.kind === "na" ? html`<p class="fiat">USD price unavailable</p>` : p.kind === "stale" ? html`<p class="fiat stale">${usd(conf)} <span class="muted">price from ${hm(p.at!)}, not updated</span></p>` : html`<p class="fiat">${usd(conf)} <span class="muted">at $${p.usd!.toFixed(4)}, ${hm(p.at!)}</span></p>`}
   <div class="bal-sub">${!hide && pend > 0n ? html`<span>${I("clock", "s16")} ${fbShort(pend)} incoming</span>` : ""}<span>${syncLine()}</span></div>
-  <hr class="divider"><div class="row between"><span class="small strong">Your receive code</span><span class="ntag">${NETLOGO()}${CHAIN_SHORT()}</span></div><p class="code" style="font-size:12px;line-height:18px">${codeHi(st.receive ?? "")}</p>
+  <hr class="divider"><div class="row between"><span class="small strong">Your receive code</span><span class="ntag">${NETLOGO()}${CHAIN_SHORT()}</span></div><p class="code" style="font-size:calc(12px * var(--fs));line-height:calc(18px * var(--fs))">${codeHi(st.receive ?? "")}</p>
   <div class="row"><button class="btn btn-secondary btn-sm" type="button" data-act="copy-code">${I("copy", "s16")}Copy code</button><button class="btn btn-ghost btn-sm" type="button" data-act="go" data-to="receive">${I("qr-code", "s16")}Show QR</button></div></section>`;
 }
 

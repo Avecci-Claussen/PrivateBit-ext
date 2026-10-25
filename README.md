@@ -2,11 +2,11 @@
 
 A private wallet for Bitcoin and Fractal Bitcoin, as a Chrome extension. You get one reusable receive code (Silent Payments, BIP352), payment links that Payjoin with other PrivateBit users, and keys that never leave your computer. Websites can connect to it, and each one gets its own separate account.
 
-Version 1.0.0. Chrome 111 or newer (or any Chromium browser of that version).
+Version 1.0.1. Chrome 111 or newer (or any Chromium browser of that version).
 
 ## Install from a release zip
 
-1. Download `PrivateBit-v1.0.0.zip` from the release page and check its SHA-256 against the one in the release notes.
+1. Download `PrivateBit-v1.0.1.zip` from the release page and check its SHA-256 against the one in the release notes.
 2. Unzip it into a folder you will keep.
 3. Open `chrome://extensions`, turn on **Developer mode**, select **Load unpacked** and pick the folder.
 4. Pin PrivateBit, open it and choose **Create a new wallet** (or **Restore** with your recovery words).
@@ -70,7 +70,7 @@ Load `dist/` as an unpacked extension. Nothing from the environment is compiled 
 `npm run release` packs `dist/` with sorted files, fixed timestamps and fixed permissions, and prints the SHA-256 of the zip. With the same commit, the same `package-lock.json` and the same Node major version you get the same zip, byte for byte:
 
 ```bash
-git checkout v1.0.0
+git checkout v1.0.1
 npm ci
 npm run release       # compare the printed sha256 with the release notes
 ```
