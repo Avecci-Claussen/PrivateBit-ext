@@ -116,7 +116,7 @@ export function fullHtml(v: View): string {
   <div class="foot-s">${pstat()}<button class="btn btn-secondary btn-sm" type="button" data-act="lock">${I("lock", "s16")}Lock</button></div></aside>`;
   const mbar = html`<div class="mobilebar">${MARK(24, false)}${walletChip()}${netChip(true)}<span class="spacer"></span>${pstat()}<button class="icon-btn" type="button" data-act="sheet" data-sheet="menu" aria-label="Open menu" aria-haspopup="dialog">${I("menu")}</button></div>`;
   const ov = overlayFor(v);
-  const app = `<div class="app">${side.s}<div style="min-width:0">${mbar.s}<main class="content" id="main">${inner}</main></div></div>`;
+  const app = `<div class="app">${side.s}<div style="min-width:0">${mbar.s}<main class="content${v.page ? "" : " flow"}" id="main">${inner}</main></div></div>`;
   return `${ov ? `<div inert>${app}</div><div class="fp-overlay">${ov}</div>` : app}${toastHtml() ? `<div class="fp-toast">${toastHtml()}</div>` : ""}`;
 }
 
