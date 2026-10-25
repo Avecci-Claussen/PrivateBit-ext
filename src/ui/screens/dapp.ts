@@ -7,6 +7,7 @@ import { call, type Fees } from "../api.ts";
 import { html, I, MARK, UNIT, codeHi, fb, fbShort, sats, mid, ntag, when, type Safe, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { hdr } from "../chrome.ts";
 import { copyText } from "../copy.ts";
+import { messageRisks, visibleMessage } from "../../lib/message-check.ts";
 
 type Owner = "site" | "private" | "other-site" | "unknown";
 type Review = {
@@ -37,6 +38,7 @@ type PendingView = {
 };
 export type SiteView = { origin: string; connected: boolean; connectedAt: number; lastUsed?: number; address: string; path: string; balance: number; coins: number };
 
+export const ARM_MS = 800;
 const pv = (): PendingView | undefined => S.d.dappView as PendingView | undefined;
 const hostOf = (origin: string): string => {
   try {
@@ -50,6 +52,13 @@ loaders.dapp = async () => {
   S.err.dapp = "";
   try {
     S.d.dappView = await call<PendingView>({ type: "DAPP_VIEW", id: S.dappId });
+    // Audit F-05: the approve button arms a moment after the review appears, so a click or tap
+    // meant for the site cannot land on it when the window opens under the pointer.
+    S.d.dappArmed = false;
+    setTimeout(() => {
+      S.d.dappArmed = true;
+      render();
+    }, ARM_MS);
   } catch (e) {
     S.d.dappView = undefined;
     S.err.dapp = String((e as Error).message);
@@ -120,7 +129,7 @@ screens.dapp = () => {
   }
   const pending = busy("dapp");
   const buttons = (label: string, ok = true): Safe =>
-    html`<button class="btn btn-secondary" type="button" data-act="dapp-reject" ${pending ? html`aria-disabled="true"` : ""}>Reject</button><button class="btn btn-primary" type="button" data-act="dapp-approve" ${ok && !pending ? "" : html`disabled aria-disabled="true"`}>${pending ? html`${I("loader-circle", "s16 spin")}Working…` : label}</button>`;
+    html`<button class="btn btn-secondary" type="button" data-act="dapp-reject" ${pending ? html`aria-disabled="true"` : ""}>Reject</button><button class="btn btn-primary" type="button" data-act="dapp-approve" ${ok && !pending && S.d.dappArmed === true ? "" : html`disabled aria-disabled="true"`}>${pending ? html`${I("loader-circle", "s16 spin")}Working…` : label}</button>`;
   const errBox = err("dappAct") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("dappAct")}</span></p>` : "";
 
   if (v.method === "requestAccounts") {
@@ -143,7 +152,8 @@ screens.dapp = () => {
       title: "Sign message",
       header: siteHeader(v, "Sign a message"),
       main: html`${originCard(v)}
-  <div class="field"><p class="label">Message, exactly as signed</p><pre class="msgbox" tabindex="0" aria-label="Message to sign">${v.message.text}</pre></div>
+  <div class="field"><p class="label">Message, exactly as signed</p><pre class="msgbox" tabindex="0" aria-label="Message to sign">${visibleMessage(v.message.text)}</pre></div>
+  ${messageRisks(v.message.text).length ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">Check before signing</span>${messageRisks(v.message.text).join(" ")}</div></div>` : ""}
   <div class="card"><div class="kv">${accountRow(v)}<div class="r"><span class="k">Signature type</span><span class="v">${v.message.type === "bip322-simple" ? "BIP322" : "Standard message signature"}</span></div></div></div>
   <p class="small muted">Signing proves you control this site's account. It moves no coins. Only sign text you understand.</p>${errBox}`,
       foot: { cls: "row", html: buttons("Sign") },

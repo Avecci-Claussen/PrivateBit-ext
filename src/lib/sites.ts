@@ -461,3 +461,4 @@ export function signMessageBip322(message: string, key: Pick<SiteKey, "scriptPub
   const w = concatBytes(new Uint8Array([1, 64]), sig);
   return btoa(String.fromCharCode(...w));
 }
+

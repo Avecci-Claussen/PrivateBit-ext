@@ -104,6 +104,7 @@ import {
   saveScanGrant,
   saveSession,
   unlockVault,
+  vaultNeedsStrongerKdf,
   vaultFromMnemonic,
   type Kv,
   type UnlockedVault,
@@ -864,6 +865,8 @@ export class WalletCore {
     const blob = await loadVaultBlob(this.kv);
     if (!blob) throw new Error("no vault");
     const unlocked = unlockVault(blob, password);
+    // Audit L9: re-save an older vault with the current scrypt cost. Same words, same password.
+    if (vaultNeedsStrongerKdf(blob)) await persistVault(this.kv, lockVault(unlocked, password)).catch(() => undefined);
     await saveSession(this.kv, unlocked);
     await this.writeGrant(unlocked);
     await this.retireStaleBackup(unlocked, password);

@@ -8,16 +8,13 @@ describe("watchEndpoint (Android confirmation check source)", () => {
     expect(w.url).toBe("http://192.168.1.20:8332");
     expect(w.headers.authorization).toBe(`Basic ${btoa("u:p")}`);
   });
-  it("uses the UniSat root with the user's token on Fractal", () => {
-    const w = watchEndpoint({ kind: "unisat", url: "https://open-api-fractal.unisat.io/", unisatToken: "tok" } as never, "fractal");
-    expect(w.kind).toBe("unisat");
-    expect(w.url.endsWith("/")).toBe(false);
-    expect(w.headers.authorization).toBe("Bearer tok");
-  });
-  it("uses the public explorer on Bitcoin in public mode, without any token", () => {
-    const w = watchEndpoint({ kind: "unisat", url: "", unisatToken: "tok" } as never, "bitcoin");
-    expect(w.kind).toBe("esplora");
-    expect(w.url).toMatch(/^https:\/\//);
-    expect(JSON.stringify(w.headers)).not.toContain("tok");
-  });
+  for (const net of ["fractal", "bitcoin"] as const) {
+    it(`public mode on ${net}: block lists from the explorer, never the data service token`, () => {
+      const w = watchEndpoint({ kind: "unisat", url: "https://open-api-fractal.unisat.io", unisatToken: "secret-token-value" } as never, net);
+      expect(w.kind).toBe("esplora");
+      expect(w.url).toMatch(/^https:\/\/mempool\./);
+      expect(JSON.stringify(w)).not.toContain("secret-token-value");
+      expect(JSON.stringify(w)).not.toMatch(/unisat/i);
+    });
+  }
 });

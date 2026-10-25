@@ -5,7 +5,14 @@ import { wordlist } from "@scure/bip39/wordlists/english";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
 
 export const VAULT_VERSION = 1;
-const SCRYPT_N = 1 << 15;
+/**
+ * scrypt cost for new and re-saved vaults: 2^16 (64 MiB, about 0.2 s on a desktop). 2^17 would
+ * need 128 MiB, which is too close to the memory a phone WebView may get. Older vaults (2^15) are
+ * re-saved with this cost after the next successful unlock.
+ */
+export const SCRYPT_N = 1 << 16;
+const MIN_N = 1 << 14;
+const MAX_N = 1 << 18;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const KEY_LEN = 32;
@@ -44,6 +51,8 @@ export function assertMnemonic(mnemonic: string): void {
 
 function kdf(password: string, salt: Uint8Array, params: VaultBlob["kdf"]): Uint8Array {
   if (params.name !== "scrypt") throw new Error("unknown kdf");
+  // Refuse edited parameters: too weak to be ours, or so large that unlocking would hang.
+  if (!Number.isInteger(params.N) || params.N < MIN_N || params.N > MAX_N || (params.N & (params.N - 1)) !== 0 || params.r !== 8 || params.p !== 1) throw new Error("unsupported vault settings");
   const pw = new TextEncoder().encode(password);
   return scrypt(pw, salt, { N: params.N, r: params.r, p: params.p, dkLen: KEY_LEN });
 }
@@ -73,6 +82,11 @@ export function lockVault(
     ct: hex(ct),
     birthday: vault.birthday,
   };
+}
+
+/** True when the vault was saved with a lower scrypt cost than new vaults use. */
+export function vaultNeedsStrongerKdf(blob: VaultBlob): boolean {
+  return blob.kdf.name === "scrypt" && blob.kdf.N < SCRYPT_N;
 }
 
 export function unlockVault(blob: VaultBlob, password: string): UnlockedVault {

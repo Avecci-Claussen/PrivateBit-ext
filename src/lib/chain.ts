@@ -631,13 +631,14 @@ export function cancellable(source: ChainSource, signal: AbortSignal): ChainSour
 }
 
 /** Where a background check asks whether a transaction is in a block (the app's notifications). */
-export type WatchEndpoint = { kind: "core" | "unisat" | "esplora"; url: string; headers: Record<string, string> };
+export type WatchEndpoint = { kind: "core" | "esplora"; url: string; headers: Record<string, string> };
 
 /**
- * The same block data source the wallet reads from, reduced to what a confirmation check needs:
- * Core RPC (getrawtransaction verbose), UniSat /v1/indexer/tx, or an Esplora explorer
- * (/api/tx/<txid>/status) for public mode on Bitcoin. Never a key; may hold the RPC login or the
- * UniSat token the user set, because the check must reach the same source.
+ * The block source a background confirmation check uses, reduced to what it needs.
+ * Own node: Core RPC with its login (the node is yours, so asking it about a txid leaks nothing).
+ * Public mode: the same block explorer the scanner reads blocks from. The check downloads the
+ * txid list of each new block and looks for the payment on the phone, so the public service never
+ * learns which transaction this wallet waits for (audit F-07). The UniSat token is never included.
  */
 export function watchEndpoint(cfg: ChainConfig, net: NetworkId = "fractal"): WatchEndpoint {
   const m = migrateChainConfig(cfg);
@@ -646,7 +647,5 @@ export function watchEndpoint(cfg: ChainConfig, net: NetworkId = "fractal"): Wat
     if (m.rpcUser) headers.authorization = `Basic ${btoa(`${m.rpcUser}:${m.rpcPassword ?? ""}`)}`;
     return { kind: "core", url: m.url, headers };
   }
-  if (net === "bitcoin") return { kind: "esplora", url: netInfo("bitcoin").explorer.replace(/\/$/, ""), headers: { accept: "application/json" } };
-  const root = (m.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
-  return { kind: "unisat", url: root, headers: unisatHeaders(effectiveUnisatToken(m.unisatToken, root, FRACTAL.defaultUnisat)) };
+  return { kind: "esplora", url: netInfo(net).explorer.replace(/\/$/, ""), headers: { accept: "application/json" } };
 }

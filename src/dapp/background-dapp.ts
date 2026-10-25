@@ -26,6 +26,9 @@ type Pending = {
   reject: (e: DappError) => void;
   windowId?: number;
   createdAt: number;
+  /** The exact payment shown in the review. Approve broadcasts this one, never a new plan. */
+  sendTx?: string;
+  sendView?: PendingView["send"];
 };
 
 export type PendingView = {
@@ -292,13 +295,20 @@ export function installDapp(deps: DappDeps) {
     if (r.method === "signPsbts") base.psbts = await Promise.all(r.psbts.map((x, i) => wallet.siteReviewPsbt(p.origin, x, r.options[i]!)));
     if (r.method === "switchChain") base.switchTo = { id: r.chain, name: chainName(r.chain) };
     if (r.method === "sendBitcoin") {
-      const feeRate = await feeRateFor(r);
-      try {
-        const plan = await wallet.sitePlanSend(p.origin, r.to, r.sats, feeRate, r.memos);
-        base.send = { to: r.to, amount: plan.amount, fee: plan.fee, change: plan.change, memos: r.memos, feeRate };
-      } catch (e) {
-        base.send = { to: r.to, amount: String(r.sats), fee: "0", change: "0", memos: r.memos, feeRate, error: e instanceof Error ? e.message : String(e) };
+      // Planned once per request, so every look at the review shows the payment approve sends.
+      if (!p.sendView) {
+        const feeRate = await feeRateFor(r);
+        try {
+          const plan = await wallet.sitePlanSend(p.origin, r.to, r.sats, feeRate, r.memos);
+          p.sendTx = plan.txHex;
+          p.sendView = { to: r.to, amount: plan.amount, fee: plan.fee, change: plan.change, memos: r.memos, feeRate };
+        } catch (e) {
+          p.sendTx = undefined;
+          base.send = { to: r.to, amount: String(r.sats), fee: "0", change: "0", memos: r.memos, feeRate, error: e instanceof Error ? e.message : String(e) };
+          return base;
+        }
       }
+      base.send = p.sendView;
     }
     return base;
   }
@@ -332,8 +342,9 @@ export function installDapp(deps: DappDeps) {
           break;
         }
         case "sendBitcoin": {
-          const plan = await wallet.sitePlanSend(p.origin, r.to, r.sats, await feeRateFor(r), r.memos);
-          value = await wallet.siteBroadcast(p.origin, plan.txHex);
+          // Audit F-03: send exactly what the review showed (same coins, fee and outputs).
+          if (!p.sendTx) throw new Error("Nothing was sent. Review the payment first.");
+          value = await wallet.siteBroadcast(p.origin, p.sendTx);
           break;
         }
         case "switchChain":
