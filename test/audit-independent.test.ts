@@ -199,3 +199,26 @@ describe("L7: payment links", () => {
     expect(() => parseBip21("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")).toThrow(/test network/);
   });
 });
+
+describe("L1, L2, L11: site limits", () => {
+  it("a site cannot relay a transaction that does not spend its account", async () => {
+    const w = new PrivateBit(memoryKv());
+    await w.create({ password: "password1", birthday: 10 });
+    await w.connectSite("https://app.example.com");
+    const raw = "02000000" + "01" + "11".repeat(32) + "00000000" + "00" + "ffffffff" + "01" + "e803000000000000" + "16" + "0014" + "22".repeat(20) + "00000000";
+    await expect(w.siteBroadcast("https://app.example.com", raw)).rejects.toThrow(/does not spend this site's account/);
+  }, 30000);
+
+  it("plain http only for this computer or the local network", async () => {
+    const { cleartextAllowed } = await import("../src/lib/sites.ts");
+    for (const h of ["localhost", "127.0.0.1", "[::1]", "192.168.1.20", "10.0.0.2", "172.20.1.1", "fd12:3456::1"]) expect(cleartextAllowed(h)).toBe(true);
+    for (const h of ["example.com", "app.localhost.example", "8.8.8.8", "172.32.0.1", "2001:db8::1"]) expect(cleartextAllowed(h)).toBe(false);
+  });
+
+  it("a high site fee is called out", async () => {
+    const { highFee } = await import("../src/ui/screens/dapp.ts");
+    expect(highFee(100_000n, 20_000n, 50)).toBe(true);
+    expect(highFee(100_000n, 2_000n, 250)).toBe(true);
+    expect(highFee(100_000n, 2_000n, 10)).toBe(false);
+  });
+});

@@ -54,6 +54,22 @@ export function normalizeOrigin(raw: string): string {
   return u.origin.toLowerCase();
 }
 
+/**
+ * Plain http is allowed only for loopback and private IP literals (a node or app on
+ * this computer or the home network). Names other than localhost are refused because
+ * anyone on the path can answer for them.
+ */
+export function cleartextAllowed(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1") return true;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+  }
+  return /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h);
+}
+
 /** Host part shown to the user ("app.example.com", port kept when not default). */
 export function siteHost(origin: string): string {
   try {

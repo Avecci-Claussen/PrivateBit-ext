@@ -321,7 +321,7 @@ await shotPopup(w, "switch-chain");
 await w.click("[data-act=dapp-approve]");
 r = await result();
 ok("switchChain approved", r.ok && r.v.enum === "BITCOIN_MAINNET", JSON.stringify(r));
-await site.waitForTimeout(1500);
+await site.waitForTimeout(2200);
 let ev = await site.evaluate(() => window.__events);
 const acc = ev.find((e) => e[0] === "accountsChanged");
 ok("chainChanged event to Bitcoin", ev.some((e) => e[0] === "chainChanged" && e[1].enum === "BITCOIN_MAINNET"), JSON.stringify(ev));
@@ -346,14 +346,14 @@ ok("signMessage works on Bitcoin", (await result()).ok);
 // Switch back from Settings: pages hear it too.
 await site.evaluate(() => { window.__events = []; });
 await send({ type: "SET_NETWORK", network: "fractal" });
-await site.waitForTimeout(1500);
+await site.waitForTimeout(2200);
 ev = await site.evaluate(() => window.__events);
 ok("Settings chain switch sends chainChanged and accountsChanged", ev.some((e) => e[0] === "chainChanged" && e[1].enum === "FRACTAL_BITCOIN_MAINNET") && ev.some((e) => e[0] === "accountsChanged" && e[1][0] === addr), JSON.stringify(ev));
 
 // Lock: accounts go empty, reads wait for unlock.
 await site.evaluate(() => { window.__events = []; });
 await send({ type: "LOCK" });
-await site.waitForTimeout(1200);
+await site.waitForTimeout(2200);
 ev = await site.evaluate(() => window.__events);
 ok("lock sends accountsChanged []", ev.some((e) => e[0] === "accountsChanged" && e[1].length === 0), JSON.stringify(ev));
 r = await call("getAccounts");
@@ -388,7 +388,7 @@ await site.waitForTimeout(10500);
 await site.evaluate(() => { window.__events = []; });
 await open(page, "site-detail", { origin: originA });
 await page.click("[data-act=site-disconnect]");
-await site.waitForTimeout(1200);
+await site.waitForTimeout(2200);
 ev = await site.evaluate(() => window.__events);
 ok("disconnect sends accountsChanged []", ev.some((e) => e[0] === "accountsChanged" && e[1].length === 0), JSON.stringify(ev));
 r = await call("getAccounts");

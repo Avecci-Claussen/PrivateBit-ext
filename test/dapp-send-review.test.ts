@@ -10,6 +10,7 @@ function setup() {
   (globalThis as any).chrome = {
     runtime: { id: "pbid", getURL: (p: string) => `chrome-extension://pbid/${p}`, onConnect: { addListener: (f: L) => (onConnect = f) } },
     windows: { create: async (o: { url: string }) => (created.push(o.url), { id: created.length }), remove: async () => undefined, onRemoved: { addListener: () => undefined } },
+    storage: { local: { get: async () => ({}), set: async () => undefined } },
   };
   let plans = 0;
   const sent: string[] = [];
@@ -87,5 +88,25 @@ describe("audit F-03: a site payment sends exactly what the review showed", () =
     onConnect(mk({ id: "other", tab: { id: 1 }, frameId: 0, origin: "https://a.example" }));
     expect(cut).toBe(3);
     expect(api.portCount()).toBe(0);
+  });
+});
+
+describe("independent audit L10: rejection cooldown", () => {
+  it("after three rejections the site waits before it can ask again", async () => {
+    const t = setup();
+    const created: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      t.send({ id: 10 + i, method: "sendBitcoin", params: ["bc1qdest", 1000] });
+      for (let k = 0; k < 50; k++) {
+        await new Promise((r) => setTimeout(r, 5));
+        const id = await t.pendingId();
+        if (!created.includes(id)) { created.push(id); break; }
+      }
+      await t.api.decide(created[created.length - 1]!, false);
+    }
+    t.send({ id: 20, method: "sendBitcoin", params: ["bc1qdest", 1000] });
+    for (let k = 0; k < 50 && !t.msgs.some((m) => m.id === 20); k++) await new Promise((r) => setTimeout(r, 5));
+    const r = t.msgs.find((m) => m.id === 20);
+    expect(r?.error?.message).toMatch(/try again in a minute/);
   });
 });

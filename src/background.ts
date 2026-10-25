@@ -170,6 +170,12 @@ async function refreshPrice(force = false): Promise<PriceCache> {
   }
 }
 
+// Audit I6 (independent): keep wallet storage away from content scripts. Session storage is
+// already limited by default; this states it, and covers local storage where the browser allows it.
+for (const area of [chrome.storage.session, chrome.storage.local] as Array<{ setAccessLevel?: (o: { accessLevel: string }) => Promise<void> } | undefined>) {
+  void area?.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" })?.catch(() => undefined);
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   ensureAlarms();
   void pumpPayjoin();

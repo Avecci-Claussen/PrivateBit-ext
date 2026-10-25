@@ -179,6 +179,7 @@ screens.dapp = () => {
       header: siteHeader(v, "Send from the site account"),
       main: html`${originCard(v)}
   ${s.error ? html`<div class="banner danger" role="alert">${I("ban", "s16")}<div><span class="bt">This payment cannot be made</span>${s.error}</div></div>` : ""}
+  ${!s.error && highFee(BigInt(s.amount), BigInt(s.fee), s.feeRate) ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">The fee is unusually high</span>The site asked for ${s.feeRate} sat/vB. That is ${sats(s.fee)}, a large share of this payment. Reject if you did not expect it.</div></div>` : ""}
   <div class="hero-amt"><p class="cap">You send</p><p class="a">${fb(s.amount, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(s.amount)}</p></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">To</span><span class="v"><span class="mono" style="word-break:break-all">${codeHi(s.to, 8, 8)}</span></span></div>
@@ -398,3 +399,8 @@ actions["site-move-go"] = async () => {
 loaders.settings = async () => {
   if (S.mode === "full") await loaders["set-sites"]!();
 };
+
+/** Audit L2 (independent): a fee above 10% of the amount, or above 200 sat/vB, is called out. */
+export function highFee(amount: bigint, fee: bigint, feeRate: number): boolean {
+  return fee * 10n > amount || feeRate > 200;
+}

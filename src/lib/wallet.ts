@@ -2300,6 +2300,15 @@ export class WalletCore {
   async siteBroadcast(origin: string, txHex: string): Promise<string> {
     const { key } = await this.siteKey(origin);
     const parsed = btc.Transaction.fromRaw(fromHex(txHex), { allowUnknownOutputs: true, allowUnknownInputs: true, disableScriptCheck: true });
+    // Audit L1 (independent): a site can only relay transactions that spend its own account.
+    // Anything else would make PrivateBit's server connection carry unrelated transactions.
+    const mine = new Set((await this.siteCoins(key.index)).map((u) => `${u.txid}:${u.vout}`));
+    let spendsSite = false;
+    for (let i = 0; i < parsed.inputsLength; i++) {
+      const inp = parsed.getInput(i);
+      if (inp.txid && mine.has(`${hex(inp.txid)}:${inp.index}`)) spendsSite = true;
+    }
+    if (!spendsSite) throw new Error("This transaction does not spend this site's account, so PrivateBit does not send it.");
     const ours: OwnedOutput[] = [];
     for (let i = 0; i < parsed.outputsLength; i++) {
       const o = parsed.getOutput(i);

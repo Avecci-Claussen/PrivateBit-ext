@@ -6,7 +6,7 @@
  * answered before the user approves the site in a popup. A site only sees its own account.
  */
 import { DAPP_PORT, DappError, ERR, NEEDS_APPROVAL, parseEnvelope, parseRequest, RateLimit, type DappRequest } from "../lib/dapp-proto.ts";
-import { chainInfo, normalizeOrigin, parsePsbt, siteHost, type PsbtReview } from "../lib/sites.ts";
+import { chainInfo, cleartextAllowed, normalizeOrigin, parsePsbt, siteHost, type PsbtReview } from "../lib/sites.ts";
 import type { NetworkId } from "../lib/network.ts";
 import type { PrivateBit } from "../lib/wallet.ts";
 import { hex } from "../lib/bytes.ts";
@@ -103,6 +103,22 @@ export function installDapp(deps: DappDeps) {
   const ports = new Map<chrome.runtime.Port, { origin: string; last?: string; lastChain?: string }>();
   const pending = new Map<string, Pending>();
   const rate = new RateLimit(30, 10_000);
+  // Audit L1 (independent): relaying is cheap to abuse, so it gets its own, tighter limit.
+  const pushRate = new RateLimit(5, 60_000);
+  // Audit L10 (independent): after several rejections in a row a site waits before it can ask again.
+  const rejects = new Map<string, number[]>();
+  const REJECT_LIMIT = 3;
+  const REJECT_WINDOW_MS = 2 * 60_000;
+  const REJECT_COOLDOWN_MS = 60_000;
+  function noteReject(origin: string): void {
+    const now = Date.now();
+    rejects.set(origin, [...(rejects.get(origin) ?? []).filter((t) => now - t < REJECT_WINDOW_MS), now]);
+  }
+  function coolingDown(origin: string): boolean {
+    const now = Date.now();
+    const l = (rejects.get(origin) ?? []).filter((t) => now - t < REJECT_WINDOW_MS);
+    return l.length >= REJECT_LIMIT && now - l[l.length - 1] < REJECT_COOLDOWN_MS;
+  }
   let unlockWaiters: (() => void)[] = [];
 
   const unlocked = async (): Promise<boolean> => !!(await wallet.dataKey().catch(() => null));
@@ -146,6 +162,12 @@ export function installDapp(deps: DappDeps) {
     }
   }
 
+  /** Audit L4 (independent): a random delay per page so sites cannot line up the exact moment of a lock or unlock. */
+  function postLater(port: chrome.runtime.Port, msg: unknown): void {
+    const ms = crypto.getRandomValues(new Uint16Array(1))[0] % 1000;
+    setTimeout(() => post(port, msg), ms);
+  }
+
   /** accountsChanged / chainChanged / networkChanged to every page that should hear it. */
   async function refreshEvents(): Promise<void> {
     const isOpen = await unlocked();
@@ -157,13 +179,13 @@ export function installDapp(deps: DappDeps) {
     for (const [port, st] of ports) {
       const accounts = isOpen ? await accountsFor(st.origin).catch(() => []) : [];
       const a = JSON.stringify(accounts);
-      if (st.last !== undefined && st.last !== a) post(port, { target: "privatebit-page", event: "accountsChanged", data: accounts });
+      if (st.last !== undefined && st.last !== a) postLater(port, { target: "privatebit-page", event: "accountsChanged", data: accounts });
       st.last = a;
       if (!accounts.length) continue;
       const ch = chainInfo(wallet.net);
       if (st.lastChain !== undefined && st.lastChain !== ch.enum) {
-        post(port, { target: "privatebit-page", event: "chainChanged", data: ch });
-        post(port, { target: "privatebit-page", event: "networkChanged", data: ch.network });
+        postLater(port, { target: "privatebit-page", event: "chainChanged", data: ch });
+        postLater(port, { target: "privatebit-page", event: "networkChanged", data: ch.network });
       }
       st.lastChain = ch.enum;
     }
@@ -184,6 +206,7 @@ export function installDapp(deps: DappDeps) {
 
   async function ask(origin: string, req: DappRequest, port: chrome.runtime.Port): Promise<unknown> {
     for (const p of pending.values()) if (p.origin === origin) throw new DappError(ERR.busy, "a request from this site is already waiting for you");
+    if (coolingDown(origin)) throw new DappError(ERR.busy, "you rejected several requests from this site, try again in a minute");
     const id = hex(crypto.getRandomValues(new Uint8Array(12)));
     return new Promise((resolve, reject) => {
       const p: Pending = { id, origin, req, port, resolve, reject, createdAt: Date.now() };
@@ -233,8 +256,10 @@ export function installDapp(deps: DappDeps) {
         // Inscription lookups need an indexer that would learn this address. Not offered.
         return { total: 0, list: [] };
       case "pushTx":
+        if (!pushRate.take(origin)) throw new DappError(ERR.busy, "too many transactions, slow down");
         return wallet.siteBroadcast(origin, req.rawtx);
       case "pushPsbt": {
+        if (!pushRate.take(origin)) throw new DappError(ERR.busy, "too many transactions, slow down");
         const tx = parsePsbt(req.psbt);
         let raw: string;
         try {
@@ -270,6 +295,8 @@ export function installDapp(deps: DappDeps) {
     let origin: string;
     try {
       origin = normalizeOrigin(s.origin ?? new URL(s.url ?? "").origin);
+      // Audit L11 (independent): plain http only for this computer or the local network.
+      if (origin.startsWith("http:") && !cleartextAllowed(new URL(origin).hostname)) throw new Error("http");
     } catch {
       port.disconnect();
       return;
@@ -371,6 +398,7 @@ export function installDapp(deps: DappDeps) {
     const p = pending.get(id);
     if (!p) throw new Error("This request is no longer waiting.");
     if (!approve) {
+      noteReject(p.origin);
       settle(id, new DappError(ERR.rejected, "you rejected the request"));
       return { done: true };
     }

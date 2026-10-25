@@ -443,7 +443,12 @@ screens.review = () => {
   const delayBox = !pj && delay !== "off"
     ? html`<div class="banner" role="status">${I("timer", "s16")}<div><span class="bt">Sent at a random time within ${delayTxt[delay]}</span>After you confirm, the signed payment waits on this computer, encrypted. Until it goes out you can send it now or cancel it, and nothing reaches the network.</div></div>`
     : "";
-  const main = html`
+  // Audit L3 (independent): a large fee is called out on the review, in sats and as a share.
+  const feeHigh = (fee * 10n > amt && fee > 5_000n) || fee > 100_000n || Number(rate) > 200;
+  const feeBox = feeHigh
+    ? html`<div class="banner warn" role="alert" id="fee-warn">${I("triangle-alert", "s16")}<div><span class="bt">The fee is unusually high</span>${sats(fee)} goes to miners${amt > 0n ? `, ${(Number((fee * 1000n) / amt) / 10).toFixed(1)}% of the amount` : ""}. Check the fee before you confirm.</div></div>`
+    : "";
+  const main = html`${feeBox}
   ${changed?.length ? html`<div class="banner warn" role="alert">${I("triangle-alert", "s16")}<div><span class="bt">Nothing was sent. The payment changed since you reviewed it</span>${changed.join(" ")} Check it again below before you confirm.</div></div>` : ""}
   <div class="hero-amt"><p class="cap">${pj ? "You pay" : "You send"}</p><p class="a">${fb(amt, { unit: false, trim: true })}<span class="unit"> ${UNIT()}</span></p>${usd(amt) || (lbl && !legacy) ? html`<p class="fiat">${usd(amt)}${lbl && !legacy ? ` to ${lbl}` : ""}${pj ? " with a PrivateBit payment link" : ""}</p>` : ""}</div>
   ${pathPreview(fromLeg(), toLeg(to, lbl))}
