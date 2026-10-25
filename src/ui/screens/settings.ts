@@ -71,7 +71,7 @@ actions["theme-set"] = (el) => {
 const DELAY_NAME: Record<DelayChoice, string> = { off: "Off", "1m": "Up to 1 minute", "10m": "Up to 10 minutes", "1h": "Up to 1 hour" };
 const SOURCE_NAME: Record<PricePref, string> = { coingecko: "CoinGecko", mexc: "MEXC", off: "Off" };
 function leftoverName(v: LeftoverPref): string {
-  return v === "auto" ? "Automatic" : v === 0 ? "Always keep change" : `Up to ${num(v)} sats`;
+  return v === "auto" ? "Automatic" : v === 0 ? "Keep change" : `${num(v)} sats`;
 }
 function sendingSummary(): string {
   const pr = prefs();
@@ -361,8 +361,8 @@ loaders["set-sending"] = () => {
   S.f.srp = c.sendNodePassword ?? "";
   S.d.sendTest = undefined;
 };
-function seg<T extends string | number>(id: string, act: string, cur: T, list: T[], name: (v: T) => string): Safe {
-  return html`<div class="seg wrap" role="radiogroup" aria-labelledby="${id}">${list.map((v) => html`<button type="button" role="radio" data-act="${act}" data-v="${String(v)}" aria-checked="${String(cur === v)}">${name(v)}</button>`)}</div>`;
+function seg<T extends string | number>(id: string, act: string, cur: T, list: T[], name: (v: T) => string, cls = ""): Safe {
+  return html`<div class="seg wrap ${cls}" role="radiogroup" aria-labelledby="${id}">${list.map((v) => html`<button type="button" role="radio" data-act="${act}" data-v="${String(v)}" aria-checked="${String(cur === v)}">${name(v)}</button>`)}</div>`;
 }
 function sendNodeCfg(): ChainConfig {
   return { ...chain(), sendVia: fv("sv") === "node" ? "node" : "public", sendNodeUrl: fv("su").trim() || undefined, sendNodeUser: fv("sru").trim() || undefined, sendNodePassword: fv("srp") || undefined };
@@ -399,8 +399,8 @@ screens["set-sending"] = () => {
   <div class="field"><p class="label" id="dl">Delay sending by a random time</p>${seg("dl", "delay-set", pr.sendDelay, DELAY_CHOICES, (v) => DELAY_NAME[v])}
     <p class="help">The time a payment reaches the network says less about when you were at your computer. It waits signed and encrypted here, even if you lock or close the window, and you can send it now or cancel it until then. Payment links always go right away.</p></div>
   <div class="list">${toggle("Randomize fee slightly", "Moves the fee rate a little up or down, never below the network minimum, so your payments do not all share one fee rate.", pr.randomizeFee, "rf", "randomizeFee")}</div>
-  <div class="field"><p class="label" id="lo">Small leftover</p>${seg("lo", "leftover-set", pr.leftover, LEFTOVER_CHOICES, leftoverName)}
-    <p class="help">When the change would be this small, it is added to the network fee and no change coin is made. A tiny coin costs about as much to spend later as it is worth, and it links your payments. Automatic uses the cost of spending it at the current fee rate, at least 1,000 sats. The review always shows the amount.</p></div>`,
+  <div class="field"><p class="label" id="lo">Small leftover</p>${seg("lo", "leftover-set", pr.leftover, LEFTOVER_CHOICES, leftoverName, "grid3")}
+    <p class="help">When the change would be this small or smaller, it is added to the network fee and no change coin is made. A tiny coin costs about as much to spend later as it is worth, and it links your payments. Automatic uses the cost of spending it at the current fee rate, at least 1,000 sats. The review always shows the amount.</p></div>`,
   };
 };
 actions["delay-set"] = (el) => {

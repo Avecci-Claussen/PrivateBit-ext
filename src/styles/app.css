@@ -21,3 +21,4 @@ button.action{padding:0 4px}
 .fp-overlay .sheet .grab{display:none}
 .net.compact{padding:0 6px 0 8px;gap:2px}.hdr .net.compact{flex:none}
 .kv .r.sub .k{font:var(--t-caption);color:var(--c-fg2)}.kv .r.sub{padding-top:0}
+.seg.grid3{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr))}
