@@ -496,11 +496,11 @@ sheets.confirm = () => {
   const address = to.kind === "none" || to.kind === "error" ? "" : to.address;
   const kindName = to.kind === "sp" ? "Receive code" : to.kind === "paylink" ? "Payment link" : "Address";
   return html`<div class="scrim" data-act="sheet-close" aria-hidden="true"></div><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cf-h"><span class="grab" aria-hidden="true"></span>
-  <div class="sheet-h"><h2 id="cf-h">Send ${fbShort(amt)}${lbl ? ` to ${lbl}` : ""}?</h2></div>
+  <div class="sheet-h"><h2 id="cf-h">Send ${fb(amt, { trim: true })}${lbl ? ` to ${lbl}` : ""}?</h2></div>
   ${pathPreview(fromLeg(), toLeg(to, lbl))}
   <div class="kv"><div class="r"><span class="k">Network</span><span class="v">${ntag(CHAIN())}</span></div><div class="r"><span class="k">${kindName}</span><span class="v mono">${address.slice(0, 8)} \u2026 ${address.slice(-8)}</span></div><div class="r total"><span class="k">Total</span><span class="v">${fb(amt + fee)}${usd(amt + fee) ? html`<span class="fiat">${usd(amt + fee)}</span>` : ""}</span></div></div>
   <p class="small muted">Payments on ${CHAIN()} cannot be reversed. Check the first and last characters${lbl ? ` with ${lbl}` : ""}.</p>
-  <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="broadcast">Send ${fbShort(amt)}</button><button class="btn btn-ghost btn-block" type="button" data-act="sheet-close">Cancel</button></div></div>`;
+  <div class="stack"><button class="btn btn-primary btn-block" type="button" data-act="broadcast">Send ${fb(amt, { trim: true })}</button><button class="btn btn-ghost btn-block" type="button" data-act="sheet-close">Cancel</button></div></div>`;
 };
 
 actions.broadcast = async () => {

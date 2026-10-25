@@ -178,7 +178,7 @@ screens.dapp = () => {
     ${s.memos.length ? html`<div class="r"><span class="k">Note on chain</span><span class="v">${s.memos.join(", ")}</span></div>` : ""}
     <div class="r total"><span class="k">Total leaving</span><span class="v">${fb(BigInt(s.amount) + BigInt(s.fee))}</span></div></div></div>
   <p class="small muted">Paid from this site's account only. Payments on ${CHAIN()} cannot be reversed.</p>${errBox}`,
-      foot: { cls: "row", html: buttons(`Send ${fbShort(s.amount)}`, ok) },
+      foot: { cls: "row", html: buttons(`Send ${fb(s.amount, { trim: true })}`, ok) },
     };
   }
   if (v.method === "switchChain" && v.switchTo) {
