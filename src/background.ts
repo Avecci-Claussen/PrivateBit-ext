@@ -9,7 +9,7 @@ import { testPayjoinRoute } from "./lib/payjoin.ts";
 import { randomDelayMs } from "./lib/plan-random.ts";
 import { getPriceWithFallback, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates, type PriceSource } from "./lib/requests.ts";
 import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
-import { checkNode, nodeFollows, openChain } from "./lib/chain.ts";
+import { checkNode, nodeFollows, openChain, watchEndpoint } from "./lib/chain.ts";
 import { clearSharedChain, formatBlockStats, onBlockStats } from "./lib/blockshare.ts";
 import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
@@ -260,6 +260,7 @@ type PlanArgs = { destination: string; amount: string; feeRate?: number; coins?:
 type Msg =
   | { type: "STATE" }
   | { type: "BUNDLE" }
+  | { type: "WATCH_SOURCE" }
   | { type: "NEW_MNEMONIC"; add?: boolean }
   | { type: "ONBOARD_GET" }
   | { type: "ONBOARD_CLEAR" }
@@ -448,6 +449,11 @@ async function handle(msg: Msg): Promise<unknown> {
       return wallet.state();
     case "BUNDLE":
       return bundle();
+    case "WATCH_SOURCE": {
+      // For the Android app's background confirmation check. Unlocked only; never includes keys.
+      if (!(await wallet.state()).unlocked) throw new Error("locked");
+      return watchEndpoint(await wallet.loadChain(), wallet.net);
+    }
     case "NEW_MNEMONIC": {
       if (!msg.add && (await loadVaultBlob(kv))) throw new Error("A wallet is already on this computer. Unlock it, or restore from recovery words.");
       const ob: Onboard = { mnemonic: createMnemonic(256), words: 24, createdAt: Date.now() };

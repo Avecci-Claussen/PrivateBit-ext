@@ -629,3 +629,24 @@ export function cancellable(source: ChainSource, signal: AbortSignal): ChainSour
     feeRates: source.feeRates ? wrap(source.feeRates) : undefined,
   };
 }
+
+/** Where a background check asks whether a transaction is in a block (the app's notifications). */
+export type WatchEndpoint = { kind: "core" | "unisat" | "esplora"; url: string; headers: Record<string, string> };
+
+/**
+ * The same block data source the wallet reads from, reduced to what a confirmation check needs:
+ * Core RPC (getrawtransaction verbose), UniSat /v1/indexer/tx, or an Esplora explorer
+ * (/api/tx/<txid>/status) for public mode on Bitcoin. Never a key; may hold the RPC login or the
+ * UniSat token the user set, because the check must reach the same source.
+ */
+export function watchEndpoint(cfg: ChainConfig, net: NetworkId = "fractal"): WatchEndpoint {
+  const m = migrateChainConfig(cfg);
+  if (m.kind === "core") {
+    const headers: Record<string, string> = {};
+    if (m.rpcUser) headers.authorization = `Basic ${btoa(`${m.rpcUser}:${m.rpcPassword ?? ""}`)}`;
+    return { kind: "core", url: m.url, headers };
+  }
+  if (net === "bitcoin") return { kind: "esplora", url: netInfo("bitcoin").explorer.replace(/\/$/, ""), headers: { accept: "application/json" } };
+  const root = (m.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
+  return { kind: "unisat", url: root, headers: unisatHeaders(effectiveUnisatToken(m.unisatToken, root, FRACTAL.defaultUnisat)) };
+}
