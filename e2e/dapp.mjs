@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { launch } from "./harness.mjs";
-import { screens, SHARED } from "./paths.mjs";
+import { backupChecks, screens, SHARED } from "./paths.mjs";
 
 const ROOT = SHARED;
 const req = createRequire(join(ROOT, "package.json"));
@@ -31,8 +31,8 @@ const { ctx, send, hook, page, ok, settle, act, open, setTheme, overflow, target
 const hex = (b) => Buffer.from(b).toString("hex");
 const fromHex = (s) => Uint8Array.from(Buffer.from(s, "hex"));
 
-await send({ type: "NEW_MNEMONIC" });
-await send({ type: "CREATE_CHECKED", password: "throwaway-dapp", name: "Daily" });
+const ob = await send({ type: "NEW_MNEMONIC" });
+await send({ type: "CREATE_CHECKED", password: "throwaway-dapp", name: "Daily", checks: backupChecks(ob.mnemonic) });
 await send({ type: "PREFS_SET", prefs: { priceSource: "off" } });
 await hook(() => self.__pbE2E.fundOpenWallet("300000000", "Savings"));
 const before = (await send({ type: "STATE" }));

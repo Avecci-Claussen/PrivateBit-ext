@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { openChain } from "../src/lib/chain.ts";
-import { FRACTAL } from "../src/lib/network.ts";
+import { cancellable, openChain } from "../src/lib/chain.ts";
+import { withTxHexCache } from "../src/lib/scan.ts";
+import { BITCOIN, FRACTAL, migrateChainConfig, publicServiceUrl } from "../src/lib/network.ts";
 
 const HASH = "ab".repeat(32);
 const LIMIT = JSON.stringify({ code: -2004, msg: "exceeded the request limit for unauthenticated requests", data: null });
@@ -56,5 +57,57 @@ describe("public mode without a data service key", () => {
   it("reports the explorer error when both are unavailable", async () => {
     mock((url) => (url.host.includes("mempool") ? new Response("busy", { status: 429 }) : new Response(LIMIT, { status: 200 })));
     await expect(openChain(cfg).getTip()).rejects.toThrow(/mempool/);
+  });
+});
+
+describe("Bitcoin public mode uses the Bitcoin data service", () => {
+  it("rewrites a Fractal data-service address when the wallet is on Bitcoin", () => {
+    const migrated = migrateChainConfig({ kind: "unisat", url: FRACTAL.defaultUnisat, unisatToken: "btc-key" }, "bitcoin");
+    expect(migrated.url).toBe(BITCOIN.defaultUnisat);
+    expect(publicServiceUrl({ url: FRACTAL.defaultUnisat }, "bitcoin")).toBe("https://open-api.unisat.io");
+    expect(publicServiceUrl({ url: "https://my-node.example" }, "bitcoin")).toBe("https://my-node.example");
+  });
+
+  it("with a key, asks open-api.unisat.io for the tip and a transaction, and mempool.space for the block", async () => {
+    const seen: { host: string; path: string; auth: string }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      const headers = new Headers(init?.headers);
+      seen.push({ host: url.host, path: url.pathname, auth: headers.get("authorization") ?? "" });
+      if (url.host === "open-api.unisat.io" && url.pathname === "/v1/indexer/blockchain/info") {
+        return Response.json({ code: 0, msg: "ok", data: { blocks: 972901, bestBlockHash: HASH } });
+      }
+      if (url.host === "open-api.unisat.io" && url.pathname.startsWith("/v1/indexer/height/")) {
+        return Response.json({ code: 0, msg: "ok", data: { id: HASH, height: 972901 } });
+      }
+      if (url.host === "open-api.unisat.io" && url.pathname.includes("/rawtx/")) return Response.json({ code: 0, msg: "ok", data: "00".repeat(40) });
+      if (url.host === "mempool.space" && url.pathname.startsWith("/api/block-height/")) return new Response(HASH);
+      if (url.host === "mempool.space" && url.pathname.endsWith("/raw")) return new Response(new Uint8Array([1, 2, 3]));
+      return new Response("nope", { status: 404 });
+    }) as typeof fetch;
+    const src = openChain({ kind: "unisat", url: FRACTAL.defaultUnisat, unisatToken: "btc-key" }, "bitcoin");
+    expect(await src.getTip()).toEqual({ height: 972901, hash: HASH });
+    expect(await src.getTxHex("ab".repeat(32))).toBe("00".repeat(40));
+    await src.getBlockRaw!(972901).catch(() => undefined);
+    expect(seen.some((s) => s.host === "open-api-fractal.unisat.io")).toBe(false);
+    expect(seen.some((s) => s.host === "open-api.unisat.io" && s.auth === "Bearer btc-key")).toBe(true);
+    expect(seen.some((s) => s.host === "mempool.space" && s.path.includes("/raw"))).toBe(true);
+  });
+
+  it("the scan wrappers still ask mempool.space or the Bitcoin data service, never the Fractal explorer", async () => {
+    const seen = mock((url) => {
+      if (url.host === "open-api.unisat.io" && url.pathname.includes("/rawtx/")) return Response.json({ code: 0, msg: "ok", data: "00".repeat(40) });
+      if (url.host === "mempool.space") return new Response("00".repeat(40));
+      return new Response("nope", { status: 404 });
+    });
+    const wrapped = cancellable(
+      withTxHexCache(openChain({ kind: "unisat", url: FRACTAL.defaultUnisat, unisatToken: "btc-key" }, "bitcoin")),
+      new AbortController().signal,
+    );
+    expect(wrapped.net).toBe("bitcoin");
+    expect(typeof wrapped.blockPrevouts).toBe("function");
+    expect(await wrapped.getTxHex("ab".repeat(32))).toBe("00".repeat(40));
+    expect(seen.some((s) => s.startsWith("mempool.fractalbitcoin.io"))).toBe(false);
+    expect(seen.some((s) => s.startsWith("open-api.unisat.io"))).toBe(true);
   });
 });

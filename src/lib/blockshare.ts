@@ -2,7 +2,7 @@ import { BlockCheckError, blockKind, headerPrev, parseBlockTransactions, type Li
 import { fromHex, hex } from "./bytes.ts";
 import type { ChainSource } from "./chain.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
-import { MEMPOOL_BITCOIN, mempoolBlockRaw, mempoolTxHex } from "./mempool.ts";
+import { MEMPOOL_BITCOIN, MEMPOOL_FRACTAL, mempoolBlockRaw, mempoolTxHex } from "./mempool.ts";
 import type { NetworkId } from "./network.ts";
 import { parseTxHex } from "./tx.ts";
 import { sha256 } from "@noble/hashes/sha256";
@@ -519,7 +519,11 @@ export function resetExplorerHeadersForTests(): void {
 }
 
 async function fetchParent(source: ChainSource, txid: string): Promise<string | undefined> {
-  const got = source.kind === "core" || source.net === "bitcoin" ? await source.getTxHex(txid).catch(() => undefined) : await mempoolTxHex(txid);
+  // Bitcoin must not fall through to the Fractal explorer. Its own source already knows
+  // mempool.space and, when a key is set, the Bitcoin UniSat host.
+  const got = source.kind === "core" || source.net === "bitcoin"
+    ? await source.getTxHex(txid).catch(() => undefined)
+    : await mempoolTxHex(txid, MEMPOOL_FRACTAL);
   // Audit M2 (independent): a parent transaction must hash to the txid asked for.
   if (got !== undefined) {
     let id = "";

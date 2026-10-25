@@ -1,7 +1,7 @@
 import { chromeKv } from "./chrome-kv.ts";
 import { installE2E } from "./e2e-hook.ts";
 import { jsonSafe } from "./lib/json.ts";
-import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, isNetworkId, netInfo, redactChain, type ChainConfig, type NetworkId } from "./lib/network.ts";
+import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, isNetworkId, netInfo, publicServiceUrl, redactChain, type ChainConfig, type NetworkId } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
 import { dropAllKeys } from "./lib/sessionkeys.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
@@ -9,8 +9,8 @@ import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/pref
 import { testPayjoinRoute } from "./lib/payjoin.ts";
 import { randomDelayMs } from "./lib/plan-random.ts";
 import { getPriceWithFallback, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates, type PriceSource } from "./lib/requests.ts";
-import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
-import { checkNode, nodeFollows, openChain, watchEndpoint } from "./lib/chain.ts";
+import { createMnemonic, loadVaultBlob, seedBackupMatches, type SeedCheck } from "./lib/vault.ts";
+import { checkNode, nodeFollows, openChain, pingDataService, watchEndpoint } from "./lib/chain.ts";
 import { clearSharedChain, formatBlockStats, onBlockStats } from "./lib/blockshare.ts";
 import { backoffMs } from "./lib/net.ts";
 import type { CoinMeta } from "./lib/coinmeta.ts";
@@ -322,7 +322,7 @@ type Msg =
   | { type: "NEW_MNEMONIC"; add?: boolean }
   | { type: "ONBOARD_GET" }
   | { type: "ONBOARD_CLEAR" }
-  | { type: "CREATE_CHECKED"; password: string; passphrase?: string; add?: boolean; name?: string }
+  | { type: "CREATE_CHECKED"; password: string; passphrase?: string; add?: boolean; name?: string; checks?: SeedCheck[] }
   | { type: "RESTORE"; mnemonic: string; password: string; passphrase?: string; birthday: number; add?: boolean; name?: string; forgot?: boolean }
   | { type: "SWITCH_WALLET"; id: string }
   | { type: "UNLOCK"; password: string }
@@ -543,6 +543,9 @@ async function handle(msg: Msg): Promise<unknown> {
     case "CREATE_CHECKED": {
       const ob = await pendingOnboard();
       if (!ob) throw new Error("Start again: the recovery words were cleared.");
+      if (!seedBackupMatches(ob.mnemonic, msg.checks)) {
+        throw new Error("The backup check does not match the words that were shown. Write them down and start the check again.");
+      }
       const birthday = await birthdayForNewWallet();
       if (msg.add) {
         await wallet.addWallet({ mnemonic: ob.mnemonic, password: msg.password, passphrase: msg.passphrase, birthday, name: msg.name, kind: "create" });
@@ -747,17 +750,28 @@ async function handle(msg: Msg): Promise<unknown> {
       return redactChain(await wallet.loadChain());
     case "TEST_CHAIN": {
       const prev = await wallet.loadChain();
+      const net = wallet.net;
       // Audit L5: a saved secret only goes back to the address it was saved for.
       const same = (a?: string, b?: string) => !!a && !!b && a.trim().replace(/\/$/, "") === b.trim().replace(/\/$/, "");
       const cfg: ChainConfig = {
         ...msg.chain,
         rpcPassword: msg.chain.rpcPassword === "********" ? (same(msg.chain.url, prev.url) ? prev.rpcPassword : undefined) : msg.chain.rpcPassword,
-        unisatToken: msg.chain.unisatToken === "********" ? (same(msg.chain.url, prev.url) ? prev.unisatToken : undefined) : msg.chain.unisatToken,
+        unisatToken: msg.chain.unisatToken === "********" ? (publicServiceUrl(msg.chain, net) === publicServiceUrl(prev, net) ? prev.unisatToken : undefined) : msg.chain.unisatToken,
         sendNodePassword: msg.chain.sendNodePassword === "********" ? (same(msg.chain.sendNodeUrl, prev.sendNodeUrl) ? prev.sendNodePassword : undefined) : msg.chain.sendNodePassword,
       };
-      const net = wallet.net;
       const nodeCfg = cfg.kind === "core" ? { url: cfg.url, rpcUser: cfg.rpcUser, rpcPassword: cfg.rpcPassword } : msg.sendNode && cfg.sendNodeUrl ? { url: cfg.sendNodeUrl, rpcUser: cfg.sendNodeUser, rpcPassword: cfg.sendNodePassword } : undefined;
-      if (!nodeCfg) return { ...(await openChain(cfg, net).getTip()), net };
+      if (!nodeCfg) {
+        if (cfg.kind !== "core" && cfg.unisatToken) {
+          try {
+            return { ...(await pingDataService(cfg, net)), net };
+          } catch (e) {
+            const host = new URL(publicServiceUrl(cfg, net)).host;
+            const why = e instanceof Error ? e.message : "request failed";
+            throw new Error(`Could not use this key at ${host}. ${why}`.slice(0, 300));
+          }
+        }
+        return { ...(await openChain(cfg, net).getTip()), net };
+      }
       const check = await checkNode(nodeCfg);
       const onChain = await nodeFollows(nodeCfg, net);
       return { ...check, net, onChain };

@@ -151,7 +151,8 @@ screens.seed = () => {
   ${shown
     ? html`${seedList(false)}<div class="row between"><button class="btn btn-ghost btn-sm" type="button" data-act="hide-words">${I("eye-off", "s16")}Hide words</button><span class="cap">Copy is turned off on purpose</span></div>`
     : html`<div data-st="d461c9">${seedList(true)}<div class="seed-cover"><div class="inner">${I("eye-off", "s24")}<p class="small">Make sure nobody can see your screen.</p><button class="btn btn-secondary btn-sm" type="button" data-act="reveal">${I("eye", "s16")}Reveal words</button></div></div></div>
-  <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">No screenshots, no cloud notes</span>A photo or a synced note is a copy someone else can read.</div></div>`}`,
+  <div class="banner warn">${I("triangle-alert", "s16")}<div><span class="bt">No screenshots, no cloud notes</span>A photo or a synced note is a copy someone else can read.</div></div>`}
+  ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
     foot: html`<button class="btn btn-primary btn-block" type="button" data-act="to-verify" ${shown ? "" : html`aria-disabled="true" disabled`}>I wrote them down</button>`,
   };
 };
@@ -163,7 +164,13 @@ actions["hide-words"] = () => {
   S.f.revealed = false;
   render();
 };
-actions["to-verify"] = () => go("verify");
+actions["to-verify"] = () => {
+  const w = words();
+  if (S.f.revealed !== true || w.length !== 24) return;
+  S.d.verify = makeVerify(w);
+  S.f.revealed = false;
+  go("verify");
+};
 
 type Verify = { pos: number[]; opts: string[][]; pick: (string | null)[] };
 function rnd(n: number): number {
@@ -193,7 +200,6 @@ function makeVerify(w: string[]): Verify {
 
 screens.verify = () => {
   const w = words();
-  if (w.length && !S.d.verify) S.d.verify = makeVerify(w);
   const v = S.d.verify as Verify | undefined;
   const allOk = !!v && v.pos.every((p, i) => v.pick[i] === w[p]);
   return {
@@ -202,32 +208,47 @@ screens.verify = () => {
     header: hdr({ title: "Create wallet" }),
     main: html`
   ${dots(3)}
-  <div class="stack"><h2 data-st="9d50d4">Check your backup</h2><p class="muted">Pick the right word for each position, using your paper.</p></div>
+  <div class="stack"><h2 data-st="9d50d4">Check your backup</h2><p class="muted">Pick each word from the paper you just wrote. The words stay hidden. One wrong answer starts this check over.</p></div>
   ${v
     ? v.pos.map((p, i) => {
         const picked = v.pick[i];
-        const wrong = picked !== null && picked !== w[p];
         return html`<fieldset class="stack" data-st="e8f267"><legend class="label" data-st="4e420a">Word ${p + 1}</legend>
-    <div class="pick">${v.opts[i]!.map((o) => html`<button type="button" data-act="pick" data-i="${i}" data-w="${o}" aria-pressed="${String(picked === o)}" class="${picked === o && wrong ? "wrong" : ""}">${o}</button>`)}</div>
-    ${wrong ? html`<p class="err" role="alert">${I("circle-alert", "s16")}Not word ${p + 1}. Check your paper.</p>` : ""}</fieldset>`;
+    <div class="pick">${v.opts[i]!.map((o) => html`<button type="button" data-act="pick" data-i="${i}" data-w="${o}" aria-pressed="${String(picked === o)}" ${picked ? html`disabled` : ""}>${o}</button>`)}</div></fieldset>`;
       })
-    : ""}
+    : html`<p class="muted">Write the words down first.</p>`}
   ${err("form") ? html`<p class="err" role="alert">${I("circle-alert", "s16")}<span>${err("form")}</span></p>` : ""}`,
-    foot: html`<button class="btn btn-primary btn-block" type="button" data-act="finish-create" ${allOk && !busy("create") ? "" : html`aria-disabled="true"`}>${busy("create") ? html`${I("loader-circle", "s16 spin")}Creating your wallet…` : "Finish"}</button><button class="btn btn-ghost btn-block" type="button" data-act="words-again">Show my words again</button>`,
+    foot: html`<button class="btn btn-primary btn-block" type="button" data-act="finish-create" ${allOk && !busy("create") ? "" : html`aria-disabled="true"`}>${busy("create") ? html`${I("loader-circle", "s16 spin")}Creating your wallet…` : "Finish"}</button><button class="btn btn-ghost btn-block" type="button" data-act="words-again">Back to my paper</button>`,
   };
 };
 actions.pick = (el) => {
-  const v = S.d.verify as Verify;
-  v.pick[Number(el.dataset.i)] = el.dataset.w!;
+  const v = S.d.verify as Verify | undefined;
+  if (!v || v.pick[Number(el.dataset.i)]) return;
+  const i = Number(el.dataset.i);
+  const chosen = el.dataset.w ?? "";
+  const w = words();
+  if (w[v.pos[i]!] !== chosen) {
+    S.d.verify = undefined;
+    S.f.revealed = false;
+    back("seed");
+    S.err.form = "That is not the word from your backup. The check was reset and the words are hidden again. Read them from your paper, then start again.";
+    render();
+    return;
+  }
+  v.pick[i] = chosen;
   render();
 };
 actions["words-again"] = () => {
-  S.f.revealed = true;
+  S.d.verify = undefined;
+  S.f.revealed = false;
   back("seed");
 };
 actions["finish-create"] = async () => {
+  const v = S.d.verify as Verify | undefined;
+  const w = words();
+  if (!v || !v.pos.every((p, i) => v.pick[i] === w[p])) return;
+  const checks = v.pos.map((index, i) => ({ index, word: v.pick[i] ?? "" }));
   const ok = await run("create", async () => {
-    S.b = await call({ type: "CREATE_CHECKED", password: fv("pw"), passphrase: fv("pp"), add: S.f.adding === true, name: fv("wname") });
+    S.b = await call({ type: "CREATE_CHECKED", password: fv("pw"), passphrase: fv("pp"), add: S.f.adding === true, name: fv("wname"), checks });
     return true;
   });
   if (!ok) return;

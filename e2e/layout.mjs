@@ -1,11 +1,11 @@
 // Centered main column in the full page view, at wide widths too.
 import { launch } from "./harness.mjs";
-import { screens } from "./paths.mjs";
+import { backupChecks, screens } from "./paths.mjs";
 const OUT = screens("dapp");
 const h = await launch({ out: OUT });
 const { send, hook, open, page, ok, capture } = h;
-await send({ type: "NEW_MNEMONIC" });
-await send({ type: "CREATE_CHECKED", password: "throwaway-layout", name: "Daily" });
+const ob = await send({ type: "NEW_MNEMONIC" });
+await send({ type: "CREATE_CHECKED", password: "throwaway-layout", name: "Daily", checks: backupChecks(ob.mnemonic) });
 await send({ type: "PREFS_SET", prefs: { priceSource: "off" } });
 await hook(() => self.__pbE2E.fundOpenWallet("200000000"));
 const W = [375, 768, 1280, 1440, 1920];

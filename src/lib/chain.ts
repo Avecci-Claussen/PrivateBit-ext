@@ -2,11 +2,11 @@ import { fromHex } from "./bytes.ts";
 import { netFetch, noteRateLimited } from "./net.ts";
 import { rejectAddressUtxoAsSot } from "./policy.ts";
 import { DIRECT, fetchVia, parseRecommendedFees, RateLimitedError, type FeeRates, type RequestRoute } from "./requests.ts";
-import { FRACTAL, migrateChainConfig, netInfo, type ChainConfig, type ChainKind, type NetworkId } from "./network.ts";
+import { FRACTAL, migrateChainConfig, netInfo, publicServiceUrl, type ChainConfig, type ChainKind, type NetworkId } from "./network.ts";
 import { effectiveUnisatToken } from "./builtin-key.ts";
 import { checkRawBlock } from "./blockparse.ts";
 import { verifyHeaderWithProof } from "./headerproof.ts";
-import { mempoolBlockHash, mempoolBlockPrevouts, mempoolBlockRaw, mempoolBlockTxids, mempoolBroadcast, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
+import { MEMPOOL_BITCOIN, mempoolBlockHash, mempoolBlockPrevouts, mempoolBlockRaw, mempoolBlockTxids, mempoolBroadcast, mempoolFees, mempoolTip, mempoolTxHex } from "./mempool.ts";
 
 export type Tip = { height: number; hash: string };
 
@@ -366,16 +366,19 @@ function unisatHeaders(token?: string): Record<string, string> {
 }
 
 /**
- * UniSat Fractal Open API as a tx/broadcast source. Not an SP index.
+ * UniSat Open API as a tx/broadcast source. Not an SP index.
  * Address UTXO helpers are intentionally omitted so they cannot become SoT.
- * Block bytes for a scan come from mempool.fractalbitcoin.io, not from here.
+ * Block bytes for a scan come from the chain's block explorer, not from here.
+ * `net` selects the host: Bitcoin is open-api.unisat.io, Fractal is open-api-fractal.unisat.io.
  */
-export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): ChainSource {
-  const migrated = migrateChainConfig(cfg);
-  const root = (migrated.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
+export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT, net: NetworkId = "fractal"): ChainSource {
+  const migrated = migrateChainConfig(cfg, net);
+  const root = publicServiceUrl(migrated, net);
+  // A built-in test key is for the Fractal host only. A key the user saved is sent to this host.
   const headers = unisatHeaders(effectiveUnisatToken(migrated.unisatToken, root, FRACTAL.defaultUnisat));
   return {
     kind: "unisat",
+    net,
     async getTip() {
       const data = await unisatGet<{
         blocks?: number;
@@ -496,10 +499,18 @@ export function unisatSource(cfg: ChainConfig, route: RequestRoute = DIRECT): Ch
 }
 
 export function openChain(cfg: ChainConfig, net: NetworkId = "fractal"): ChainSource {
-  const migrated = migrateChainConfig(cfg);
+  const migrated = migrateChainConfig(cfg, net);
   if (migrated.kind === "core") return { ...coreSource(migrated, net), net };
-  const pub = net === "bitcoin" ? explorerSource(netInfo("bitcoin").explorer, "bitcoin") : { ...withExplorerBlocks(unisatSource(migrated)), net };
+  const service = unisatSource({ ...migrated, url: publicServiceUrl(migrated, net) }, DIRECT, net);
+  // A saved key is used for tip, transactions, fees and broadcast. Whole blocks stay on the explorer.
+  const prefer = migrated.unisatToken ? "service" : "explorer";
+  const pub = { ...withExplorerBlocks(service, netInfo(net).explorer, prefer), net };
   return withSendRoute(pub, migrated);
+}
+
+/** Ask only the data service, with no explorer fallback. Settings uses this to check a saved key. */
+export async function pingDataService(cfg: ChainConfig, net: NetworkId): Promise<Tip> {
+  return unisatSource(cfg, DIRECT, net).getTip();
 }
 
 /**
@@ -537,13 +548,13 @@ export function explorerSource(base: string, net: NetworkId): ChainSource {
 }
 
 /**
- * Public mode: tip, block hashes and fee rates come from the block explorer that already serves
- * the raw blocks. These are the same for every wallet, so the explorer learns nothing new.
- * The data service is asked only when the explorer fails. Without a key the data service now
- * refuses almost every request, which stopped the scan at its first step (the tip).
+ * Public mode. Whole blocks always come from this chain's explorer.
+ * Without a key, tip, transactions and fees come from that explorer too, and the data service
+ * is asked only when the explorer fails (without a key it refuses almost every request).
+ * With a key, those calls go to this chain's UniSat host first. Bitcoin uses open-api.unisat.io.
  */
-export function withExplorerBlocks(source: ChainSource): ChainSource {
-  const first = async <T>(primary: () => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
+export function withExplorerBlocks(source: ChainSource, base = netInfo(source.net ?? "fractal").explorer, prefer: "explorer" | "service" = "explorer"): ChainSource {
+  const either = async <T>(primary: () => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
     try {
       return await primary();
     } catch (e) {
@@ -555,32 +566,43 @@ export function withExplorerBlocks(source: ChainSource): ChainSource {
       }
     }
   };
+  const first = <T>(explorer: () => Promise<T>, service: () => Promise<T>): Promise<T> =>
+    prefer === "service" ? either(service, explorer) : either(explorer, service);
+  const explorerFirst = <T>(explorer: () => Promise<T>, service: () => Promise<T>): Promise<T> => either(explorer, service);
   return {
     ...source,
-    getTip: () => first(mempoolTip, () => source.getTip()),
+    getTip: () => first(() => mempoolTip(base), () => source.getTip()),
     getTxHex: (txid) =>
       first(
         async () => {
-          const got = await mempoolTxHex(txid);
+          const got = await mempoolTxHex(txid, base);
           if (!got) throw new Error("mempool tx not found");
           return got;
         },
         () => source.getTxHex(txid),
       ),
-    getBlockHash: (height) => first(() => mempoolBlockHash(height), () => source.getBlockHash(height)),
+    getBlockHash: (height) => explorerFirst(() => mempoolBlockHash(height, base), () => source.getBlockHash(height)),
+    getBlockTxids: (height) => explorerFirst(() => mempoolBlockTxids(height, base), () => source.getBlockTxids(height)),
+    getBlockRaw: (height) => mempoolBlockRaw(height, base),
+    ...(base === MEMPOOL_BITCOIN
+      ? { blockPrevouts: (_height: number, hash: string, indexes: number[]) => mempoolBlockPrevouts(hash, indexes, base) }
+      : {}),
     estimateFeeSatPerVb: () =>
       first(
-        async () => {
-          const r = parseRecommendedFees(await mempoolFees());
-          return Math.max(1, Math.ceil(r.normal));
-        },
+        async () => Math.max(1, Math.ceil(parseRecommendedFees(await mempoolFees(base)).normal)),
         () => source.estimateFeeSatPerVb(),
       ),
     feeRates: () =>
       first(
-        async () => parseRecommendedFees(await mempoolFees()),
+        async () => parseRecommendedFees(await mempoolFees(base)),
         () => (source.feeRates ? source.feeRates() : feeRatesOf({ ...source, feeRates: undefined })),
       ),
+    broadcast: (txHex) =>
+      prefer === "service"
+        ? either(() => source.broadcast(txHex), () => mempoolBroadcast(txHex, base))
+        : (source.net ?? "fractal") === "bitcoin"
+          ? either(() => mempoolBroadcast(txHex, base), () => source.broadcast(txHex))
+          : source.broadcast(txHex),
   };
 }
 
@@ -627,6 +649,9 @@ export function cancellable(source: ChainSource, signal: AbortSignal): ChainSour
     };
   return {
     kind: source.kind,
+    // The scan wraps the source twice. Dropping the chain here made Bitcoin parent lookups
+    // use the Fractal explorer (mempool.fractalbitcoin.io).
+    net: source.net,
     getTip: wrap(source.getTip),
     getBlockHash: wrap(source.getBlockHash),
     getBlockRaw: source.getBlockRaw ? wrap(source.getBlockRaw) : undefined,
@@ -637,6 +662,7 @@ export function cancellable(source: ChainSource, signal: AbortSignal): ChainSour
     broadcast: wrap(source.broadcast),
     estimateFeeSatPerVb: wrap(source.estimateFeeSatPerVb),
     feeRates: source.feeRates ? wrap(source.feeRates) : undefined,
+    blockPrevouts: source.blockPrevouts ? wrap(source.blockPrevouts) : undefined,
   };
 }
 
@@ -651,7 +677,7 @@ export type WatchEndpoint = { kind: "core" | "esplora"; url: string; headers: Re
  * learns which transaction this wallet waits for (audit F-07). The UniSat token is never included.
  */
 export function watchEndpoint(cfg: ChainConfig, net: NetworkId = "fractal"): WatchEndpoint {
-  const m = migrateChainConfig(cfg);
+  const m = migrateChainConfig(cfg, net);
   if (m.kind === "core") {
     const headers: Record<string, string> = {};
     if (m.rpcUser) headers.authorization = `Basic ${btoa(`${m.rpcUser}:${m.rpcPassword ?? ""}`)}`;

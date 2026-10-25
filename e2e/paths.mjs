@@ -13,6 +13,12 @@ export function screens(name = "") {
   return name ? resolve(base, name) : base;
 }
 
+/** Three positions from a generated backup, for CREATE_CHECKED in browser runs. */
+export function backupChecks(mnemonic) {
+  const words = String(mnemonic ?? "").trim().split(/\s+/);
+  return [0, 8, 16].map((index) => ({ index, word: words[index] }));
+}
+
 export function chromePath() {
   return process.env.PB_CHROME || chromium.executablePath();
 }

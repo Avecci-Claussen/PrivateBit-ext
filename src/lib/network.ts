@@ -31,6 +31,8 @@ export const BITCOIN = {
   pubKeyHash: 0x00,
   scriptHash: 0x05,
   wif: 0x80,
+  /** UniSat Open API for Bitcoin. A Fractal key is refused here. */
+  defaultUnisat: "https://open-api.unisat.io",
 } as const;
 
 export type NetworkId = "fractal" | "bitcoin";
@@ -175,10 +177,22 @@ export const DEFAULT_CHAIN: ChainConfig = {
   ohttpRelay: DEFAULT_OHTTP_RELAY,
 };
 
-const MEMPOOL_HOST = "mempool.fractalbitcoin.io";
+const MEMPOOL_HOSTS = ["mempool.fractalbitcoin.io", "mempool.space"];
+
+/**
+ * Public data-service host for this chain. An empty address, or the other chain's public
+ * UniSat host, is rewritten. A node URL or a proxy the user typed is left as they typed it.
+ */
+export function publicServiceUrl(cfg: { url?: string } | undefined, net: NetworkId): string {
+  const url = (cfg?.url || "").replace(/\/$/, "");
+  const fractal = FRACTAL.defaultUnisat.replace(/\/$/, "");
+  const bitcoin = BITCOIN.defaultUnisat.replace(/\/$/, "");
+  if (net === "bitcoin") return !url || url === fractal ? bitcoin : url;
+  return !url || url === bitcoin ? fractal : url;
+}
 
 /** Drop Esplora / mempool hosts. The token is only what the user saved; nothing comes from the build. */
-export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { kind?: string; url?: string }): ChainConfig {
+export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { kind?: string; url?: string }, net: NetworkId = "fractal"): ChainConfig {
   const token = cfg?.unisatToken && cfg.unisatToken.length > 0 ? cfg.unisatToken : undefined;
   const rawDir = cfg?.payjoinDirectory?.trim() || DEFAULT_PAYJOIN_DIRECTORY;
   const payjoinDirectory = /ntfy\.sh/i.test(rawDir) ? DEFAULT_PAYJOIN_DIRECTORY : rawDir;
@@ -196,10 +210,10 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
       ...direct,
     };
   }
-  if (cfg?.kind === "esplora" || (cfg?.url && cfg.url.includes(MEMPOOL_HOST))) {
+  if (cfg?.kind === "esplora" || (cfg?.url && MEMPOOL_HOSTS.some((h) => cfg.url!.includes(h)))) {
     return {
       kind: "unisat",
-      url: FRACTAL.defaultUnisat,
+      url: publicServiceUrl(undefined, net),
       unisatToken: token,
       payjoinDirectory,
       ohttpRelay,
@@ -207,7 +221,7 @@ export function migrateChainConfig(cfg?: Omit<Partial<ChainConfig>, "kind"> & { 
       ...sendRoute(cfg),
     };
   }
-  const url = (cfg?.url || FRACTAL.defaultUnisat).replace(/\/$/, "");
+  const url = publicServiceUrl(cfg, net);
   return {
     kind: "unisat",
     url,

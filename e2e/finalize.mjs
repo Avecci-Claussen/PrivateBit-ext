@@ -5,7 +5,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromePath, DIST_E2E, screens } from "./paths.mjs";
+import { backupChecks, chromePath, DIST_E2E, screens } from "./paths.mjs";
 
 const EXT = DIST_E2E;
 const OUT = screens("finalize");
@@ -158,8 +158,8 @@ async function capture(label, prep, opts = {}) {
 }
 
 // ---------- B. create with a name, rename, length limit ----------
-await send({ type: "NEW_MNEMONIC" });
-await send({ type: "CREATE_CHECKED", password: PW, name: "Daily" });
+const obA = await send({ type: "NEW_MNEMONIC" });
+await send({ type: "CREATE_CHECKED", password: PW, name: "Daily", checks: backupChecks(obA.mnemonic) });
 await send({ type: "PREFS_SET", prefs: { priceSource: "off" } });
 let st = await send({ type: "STATE" });
 const idA = st.wallets[0].id;
@@ -183,8 +183,8 @@ ok("B: rename field has a 40 character limit", (await page.locator("#rn").getAtt
 await fill("#rn", "Daily spending");
 await click('[data-act="wallet-rename-save"]');
 // Second wallet so the switcher has two names.
-await send({ type: "NEW_MNEMONIC", add: true });
-await send({ type: "CREATE_CHECKED", password: "throwaway-final-2", name: "Savings", add: true });
+const obB = await send({ type: "NEW_MNEMONIC", add: true });
+await send({ type: "CREATE_CHECKED", password: "throwaway-final-2", name: "Savings", add: true, checks: backupChecks(obB.mnemonic) });
 st = await send({ type: "STATE" });
 const idB = st.wallets.find((w) => w.name === "Savings")?.id;
 ok("B: second wallet keeps its own name", !!idB && st.wallets.length === 2);

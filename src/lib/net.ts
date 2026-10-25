@@ -12,6 +12,7 @@ type Limit = { gapMs: number; parallel: number };
 
 const LIMITS: Record<string, Limit> = {
   "open-api-fractal.unisat.io": { gapMs: 200, parallel: 4 },
+  "open-api.unisat.io": { gapMs: 200, parallel: 4 },
   "mempool.fractalbitcoin.io": { gapMs: 50, parallel: 6 },
   "mempool.space": { gapMs: 120, parallel: 4 },
   "api.mexc.com": { gapMs: 1000, parallel: 1 },

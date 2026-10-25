@@ -1,14 +1,14 @@
 // 1.0.0 asset guard through the real extension UI: a 546 sat Taproot coin shows as Protected,
 // is left out of automatic sends and Max, and can be unlocked by hand after the warning.
 import { launch } from "./harness.mjs";
-import { screens } from "./paths.mjs";
+import { backupChecks, screens } from "./paths.mjs";
 const OUT = screens("assets");
 import { mkdirSync } from "node:fs";
 mkdirSync(OUT, { recursive: true });
 const h = await launch({ out: OUT });
 const { send, hook, open, page, pop, ok, capture, settle, click, text } = h;
-await send({ type: "NEW_MNEMONIC" });
-await send({ type: "CREATE_CHECKED", password: "throwaway-assets", name: "Daily" });
+const ob = await send({ type: "NEW_MNEMONIC" });
+await send({ type: "CREATE_CHECKED", password: "throwaway-assets", name: "Daily", checks: backupChecks(ob.mnemonic) });
 await send({ type: "PREFS_SET", prefs: { priceSource: "off" } });
 await hook(() => self.__pbE2E.fundOpenWallet("200000"));
 const small = await hook(() => self.__pbE2E.fundOpenWallet("546"));

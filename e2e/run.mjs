@@ -4,7 +4,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromePath, DIST_E2E, screens } from "./paths.mjs";
+import { backupChecks, chromePath, DIST_E2E, screens } from "./paths.mjs";
 
 const EXT = DIST_E2E;
 const OUT = screens();
@@ -95,10 +95,10 @@ async function overflow(name, p = page) {
 
 // ---------- 1. two throwaway wallets ----------
 const obA = await send({ type: "NEW_MNEMONIC" });
-await send({ type: "CREATE_CHECKED", password: PW_A, name: "Daily" });
+await send({ type: "CREATE_CHECKED", password: PW_A, name: "Daily", checks: backupChecks(obA.mnemonic) });
 await send({ type: "PREFS_SET", prefs: { usd: false } });
 const obB = await send({ type: "NEW_MNEMONIC", add: true });
-await send({ type: "CREATE_CHECKED", password: PW_B, name: "Savings", add: true });
+await send({ type: "CREATE_CHECKED", password: PW_B, name: "Savings", add: true, checks: backupChecks(obB.mnemonic) });
 let st = await send({ type: "STATE" });
 ok("two wallets created", st.wallets?.length === 2, st.wallets?.map((w) => w.name).join(", "));
 ok("second wallet is open", st.wallets?.find((w) => w.active)?.name === "Savings");

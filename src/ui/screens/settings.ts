@@ -3,8 +3,7 @@ import { call, type ChainConfig, type Prefs } from "../api.ts";
 import { html, I, curNet, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { findSiteForm, sitesIntro, sitesList } from "./dapp.ts";
 import { hdr, tabs, mailboxHost } from "../chrome.ts";
-import { netInfo, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, FRACTAL } from "../../lib/network.ts";
-const DEFAULT_UNISAT_BASE = FRACTAL.defaultUnisat;
+import { netInfo, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, publicServiceUrl } from "../../lib/network.ts";
 import { LOCK_CHOICES } from "../../lib/prefs.ts";
 import { THEME_CHOICES, type ThemeChoice } from "../../lib/theme.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
@@ -136,7 +135,7 @@ function networkForm(): Safe {
     <button class="opt" role="radio" aria-checked="${String(own)}" type="button" data-act="set" data-k="src" data-v="core"><span class="body"><span class="t">My own ${CHAIN_SHORT()} node</span><span class="d">Most private. Needs a node URL and RPC login.</span></span>${own ? I("check") : ""}</button></div></fieldset>
   ${own
     ? html`<button class="rowlink" type="button" data-act="go" data-to="set-node"><span class="body"><span class="t">Node settings</span><span class="d">${chain().kind === "core" ? chain().url : "Not set up yet"}</span></span><span class="v">${I("chevron-right", "s16")}</span></button>`
-    : html`<div class="field" data-enter="net-save"><label class="label" for="tok">Data service API key <span class="optl">(optional)</span></label><input class="input" id="tok" data-f="tok" type="password" autocomplete="off" value="${fv("tok")}" aria-describedby="tok-h"><p class="help" id="tok-h">Stored encrypted on this computer only. Without a key the service often limits requests. Leave empty to use it without one.</p></div>`}
+    : html`<div class="field" data-enter="net-save"><label class="label" for="tok">Data service API key <span class="optl">(optional)</span></label><input class="input" id="tok" data-f="tok" type="password" autocomplete="off" value="${fv("tok")}" aria-describedby="tok-h"><p class="help" id="tok-h">Stored encrypted on this computer only. On ${CHAIN_SHORT()} a key is sent to ${host(publicServiceUrl(undefined, curNet()), "")}. A key from the other chain is refused there. Without a key, blocks come from ${host(netInfo(curNet()).explorer, "")}.</p></div>`}
   ${errP("net")}`;
 }
 screens["set-network"] = () => ({
@@ -154,12 +153,13 @@ actions["net-save"] = async () => {
   const next: ChainConfig =
     fv("src") === "core"
       ? c
-      : { ...c, kind: "unisat", url: c.kind === "core" ? DEFAULT_UNISAT_BASE : c.url, unisatToken: fv("tok").trim() };
+      : { ...c, kind: "unisat", url: publicServiceUrl(c.kind === "core" ? undefined : c, curNet()), unisatToken: fv("tok").trim() };
   const ok = await run(
     "net",
     async () => {
       await call({ type: "SAVE_CHAIN", chain: next });
       await refresh();
+      if (next.kind === "unisat" && next.unisatToken) await call({ type: "TEST_CHAIN", chain: next });
       return true;
     },
     "net",

@@ -2649,7 +2649,7 @@ export class WalletCore {
     }
     const got = await this.kv.get([CHAIN_KEY]);
     const stored = got[CHAIN_KEY] as ChainConfig | undefined;
-    const migrated = migrateChainConfig(stored ?? DEFAULT_CHAIN);
+    const migrated = migrateChainConfig(stored ?? { kind: "unisat" }, this.net);
     const { plain } = splitChainSecrets(migrated);
     const secretsInPlain = !!(stored?.unisatToken || stored?.rpcPassword || stored?.sendNodePassword);
     if (stored && !secretsInPlain && JSON.stringify(stored) !== JSON.stringify(plain)) {
@@ -2664,7 +2664,7 @@ export class WalletCore {
       unisatToken: secrets.unisatToken ?? migrated.unisatToken,
       rpcPassword: secrets.rpcPassword ?? migrated.rpcPassword,
       sendNodePassword: secrets.sendNodePassword ?? migrated.sendNodePassword,
-    });
+    }, this.net);
     return this.chainCfg;
   }
 
@@ -2675,7 +2675,7 @@ export class WalletCore {
       rpcPassword: isRedactedSecret(cfg.rpcPassword) ? prev.rpcPassword : cfg.rpcPassword,
       unisatToken: isRedactedSecret(cfg.unisatToken) ? prev.unisatToken : cfg.unisatToken,
       sendNodePassword: isRedactedSecret(cfg.sendNodePassword) ? prev.sendNodePassword : cfg.sendNodePassword,
-    });
+    }, this.net);
     const clearToken = cfg.unisatToken === "";
     const { plain, secrets } = splitChainSecrets(next);
     if (clearToken) delete secrets.unisatToken;
@@ -2686,7 +2686,7 @@ export class WalletCore {
       if (key) await this.saveSealed(CHAIN_SECRETS_KEY, {});
     }
     await this.kv.set({ [CHAIN_KEY]: plain });
-    this.chainCfg = migrateChainConfig({ ...plain, ...secrets });
+    this.chainCfg = migrateChainConfig({ ...plain, ...secrets }, this.net);
   }
 
   /** Payment links and Payjoin sends for the UI. No keys, no PSBTs. */

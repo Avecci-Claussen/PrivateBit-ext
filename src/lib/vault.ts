@@ -53,6 +53,24 @@ export function assertMnemonic(mnemonic: string): void {
   if (!validateMnemonic(mnemonic, wordlist)) throw new Error("invalid mnemonic");
 }
 
+export type SeedCheck = { index: number; word: string };
+
+/**
+ * Create-wallet backup check. At least three different positions must be the words that were
+ * shown. A checksum-valid guess, or a retry until one word matches, does not pass.
+ */
+export function seedBackupMatches(mnemonic: string, checks: SeedCheck[] | undefined): boolean {
+  const words = mnemonic.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!checks || checks.length < 3) return false;
+  const seen = new Set<number>();
+  for (const c of checks) {
+    if (!c || !Number.isInteger(c.index) || c.index < 0 || c.index >= words.length || seen.has(c.index)) return false;
+    seen.add(c.index);
+    if (typeof c.word !== "string" || c.word.trim().toLowerCase() !== words[c.index]) return false;
+  }
+  return true;
+}
+
 function kdf(password: string, salt: Uint8Array, params: VaultBlob["kdf"]): Uint8Array {
   if (params.name !== "scrypt") throw new Error("unknown kdf");
   // Refuse edited parameters: too weak to be ours, or so large that unlocking would hang.

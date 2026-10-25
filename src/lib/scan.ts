@@ -113,6 +113,8 @@ export function withTxHexCache(source: ChainSource, max = 512): ChainSource {
   const inflight = new Map<string, Promise<string>>();
   return {
     kind: source.kind,
+    net: source.net,
+    blockPrevouts: source.blockPrevouts,
     getTip: () => source.getTip(),
     getBlockHash: (h) => source.getBlockHash(h),
     getBlockTxids: (h) => source.getBlockTxids(h),

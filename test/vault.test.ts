@@ -16,6 +16,7 @@ import {
   persistVault,
   restoreVaultBackup,
   saveSession,
+  seedBackupMatches,
   unlockVault,
   vaultFromMnemonic,
 } from "../src/lib/vault.ts";
@@ -127,5 +128,14 @@ describe("vault", () => {
       w.createChecked({ mnemonic: createMnemonic(128), password: "pw", birthday: DEFAULT_BIRTHDAY }),
     ).rejects.toThrow(/24 words/);
     expect(await loadVaultBlob(kv)).toBeNull();
+  });
+
+  it("the backup check matches the words that were shown, not a later guess", () => {
+    const mnemonic = createMnemonic(256);
+    const words = mnemonic.split(" ");
+    expect(seedBackupMatches(mnemonic, [0, 8, 16].map((index) => ({ index, word: words[index]! })))).toBe(true);
+    expect(seedBackupMatches(mnemonic, [{ index: 0, word: words[1]! }, { index: 1, word: words[0]! }, { index: 2, word: words[2]! }])).toBe(false);
+    expect(seedBackupMatches(mnemonic, undefined)).toBe(false);
+    expect(seedBackupMatches(mnemonic, [{ index: 0, word: words[0]! }])).toBe(false);
   });
 });
