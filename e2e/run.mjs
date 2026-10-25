@@ -4,10 +4,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromePath, DIST_E2E, screens } from "./paths.mjs";
 
-const EXT = "/workspace/wallet/v2/work/PrivateBit/dist-e2e";
-const OUT = "/workspace/wallet/v2/screens";
-const CHROME = "/home/box/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome";
+const EXT = DIST_E2E;
+const OUT = screens();
+const CHROME = chromePath();
 const PW_A = "throwaway-daily-1";
 const PW_B = "throwaway-savings-2";
 const results = [];
@@ -51,8 +52,8 @@ const click = async (sel, p = page) => {
   try {
     await p.locator(sel).first().click({ timeout: 10000 });
   } catch (e) {
-    await p.screenshot({ path: "/workspace/wallet/v2/e2e/fail.png" });
-    writeFileSync("/workspace/wallet/v2/e2e/fail.html", await p.content());
+    await p.screenshot({ path: join(OUT, "fail.png") });
+    writeFileSync(join(OUT, "fail.html"), await p.content());
     throw e;
   }
   await settle(p, 400);

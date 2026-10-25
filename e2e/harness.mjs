@@ -4,9 +4,10 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromePath, DIST_E2E } from "./paths.mjs";
 
-export const CHROME = "/home/box/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome";
-export async function launch({ out, ext = "/workspace/wallet/v2/work/PrivateBit/dist-e2e", hostRules = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" } = {}) {
+export const CHROME = chromePath();
+export async function launch({ out, ext = DIST_E2E, hostRules = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1" } = {}) {
   const results = [], errors = [], shots = [], axeFindings = [];
   const ok = (name, pass, detail = "") => {
     results.push({ name, pass, detail });

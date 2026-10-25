@@ -5,13 +5,14 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { launch } from "./harness.mjs";
+import { screens, SHARED } from "./paths.mjs";
 
-const ROOT = "/workspace/wallet/v2/work/PrivateBit";
+const ROOT = SHARED;
 const req = createRequire(join(ROOT, "package.json"));
 const btc = req("@scure/btc-signer");
 const { schnorr, secp256k1 } = req("@noble/curves/secp256k1");
 const { sha256 } = req("@noble/hashes/sha256");
-const OUT = "/workspace/wallet/v2/screens/dapp";
+const OUT = screens("dapp");
 const PAGE = readFileSync(join(ROOT, "e2e/dapp-site/index.html"));
 
 function serve() {

@@ -1,6 +1,8 @@
 // Read-only live probe of block download and matching on Fractal mainnet (public sources, no key).
 // Throwaway wallet, no funds, nothing is broadcast. Opt in: PRIVATEBIT_PROBE_SCAN=1 (minutes: PROBE_MINUTES).
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { onBlockStats, resetSharedChainForTests, type BlockStats } from "../src/lib/blockshare.ts";
 import { openChain } from "../src/lib/chain.ts";
@@ -12,7 +14,7 @@ import { PrivateBit } from "../src/lib/wallet.ts";
 const live = !!process.env.PRIVATEBIT_PROBE_SCAN;
 const MINUTES = Number(process.env.PROBE_MINUTES ?? "4");
 const BEHIND = Number(process.env.PROBE_BEHIND ?? "40");
-const OUT = process.env.PROBE_OUT ?? "/workspace/wallet/v2/diag/live-scan.json";
+const OUT = process.env.PROBE_OUT ?? join(tmpdir(), "privatebit-live-scan.json");
 
 describe.skipIf(!live)("live scan probe (read-only)", () => {
   it(

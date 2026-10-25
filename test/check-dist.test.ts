@@ -31,6 +31,15 @@ describe("release gate (check-dist)", () => {
     expect(gate(dist({ "assets/a.js": 'const c={unisatToken:""};' })).code).toBe(0);
   });
 
+  it("allows the public Fractal indexer cold key and refuses an unknown hex constant", () => {
+    const cold = "da8d7239fdb567d62b38f371a77d2d3fe40d0d1a84dc21d7ab0fb0188c506b83";
+    expect(gate(dist({ "assets/payjoin.js": `const Xd="${cold}";` })).code).toBe(0);
+    const unknown = "ab".repeat(32);
+    const r = gate(dist({ "assets/payjoin.js": `const Xd="${unknown}";` }));
+    expect(r.code).not.toBe(0);
+    expect(r.out).not.toContain(unknown);
+  });
+
   it("refuses a default token and does not print it", () => {
     const token = "ab12".repeat(16);
     const r = gate(dist({ "assets/prefs.js": `const c={unisatToken:"${token}"};` }));

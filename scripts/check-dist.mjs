@@ -22,6 +22,9 @@ const PUBLIC_HEX = new Set([
   // Public block hashes that tell Fractal and Bitcoin nodes apart (src/lib/network.ts checkpoints).
   "00000000000000010eee723c7e38b605003765c9b3a26bd5c0a3b44c39803653",
   "000000000000000000010538edbfd2d5b809a33dd83f284aeea41c6d0d96968a",
+  // Fractal indexer cold keys. Public, published in src/lib/headerproof.ts. Not a service token.
+  "da8d7239fdb567d62b38f371a77d2d3fe40d0d1a84dc21d7ab0fb0188c506b83",
+  "5cd26f06fb752947bd414bafeedbaefe5461c543e6f7b404a7900d0ad4f0247d",
 ]);
 
 const RULES = [

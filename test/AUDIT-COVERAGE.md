@@ -1,7 +1,7 @@
 # Audit findings and the tests that cover them
 
 Unit tests run with `npm test` (network blocked). The browser run is
-`/workspace/wallet/v2/e2e/run.mjs` against `npm run build:e2e` (offline mock chain).
+`e2e/run.mjs` against `npm run build:e2e` (offline mock chain).
 
 | Finding | Covered by |
 | --- | --- |

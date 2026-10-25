@@ -1,6 +1,7 @@
 // Centered main column in the full page view, at wide widths too.
 import { launch } from "./harness.mjs";
-const OUT = "/workspace/wallet/v2/screens/dapp";
+import { screens } from "./paths.mjs";
+const OUT = screens("dapp");
 const h = await launch({ out: OUT });
 const { send, hook, open, page, ok, capture } = h;
 await send({ type: "NEW_MNEMONIC" });

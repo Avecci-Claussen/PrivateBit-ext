@@ -4,10 +4,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromePath, DIST_E2E, screens } from "./paths.mjs";
 
-const EXT = "/workspace/wallet/v2/work/PrivateBit/dist-e2e";
-const OUT = "/workspace/wallet/v2/screens/fixes";
-const CHROME = "/home/box/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome";
+const EXT = DIST_E2E;
+const OUT = screens("fixes");
+const CHROME = chromePath();
 const PW = "throwaway-fixes-1";
 const PW2 = "throwaway-fixes-new";
 const results = [];

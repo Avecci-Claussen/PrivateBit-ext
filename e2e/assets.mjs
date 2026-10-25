@@ -1,7 +1,8 @@
 // 1.0.0 asset guard through the real extension UI: a 546 sat Taproot coin shows as Protected,
 // is left out of automatic sends and Max, and can be unlocked by hand after the warning.
 import { launch } from "./harness.mjs";
-const OUT = "/workspace/wallet/v2/screens/assets";
+import { screens } from "./paths.mjs";
+const OUT = screens("assets");
 import { mkdirSync } from "node:fs";
 mkdirSync(OUT, { recursive: true });
 const h = await launch({ out: OUT });

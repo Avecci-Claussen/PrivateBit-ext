@@ -11,3 +11,4 @@ dist-private/
 PrivateBit-PRIVATE*
 scratch/
 release/
+e2e-out/

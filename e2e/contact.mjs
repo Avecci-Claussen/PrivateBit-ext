@@ -1,7 +1,8 @@
 // Builds a contact sheet (HTML plus one PNG per group) from every screenshot in screens/.
 import { chromium } from "playwright";
 import { readdirSync, writeFileSync } from "node:fs";
-const DIR = "/workspace/wallet/v2/screens";
+import { chromePath, screens } from "./paths.mjs";
+const DIR = screens();
 const files = readdirSync(DIR).filter((f) => f.endsWith(".png") && !f.startsWith("contact-sheet"));
 const groups = {
   popup: files.filter((f) => f.startsWith("popup-")),
@@ -13,7 +14,7 @@ const page = (names) => `<!doctype html><meta charset="utf-8"><style>body{margin
 .g{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}figure{margin:0;background:#333;padding:6px;border-radius:6px}
 img{width:100%;height:340px;object-fit:contain;object-position:top;background:#111}figcaption{padding-top:4px}</style>
 <div class="g">${names.sort().map((n) => `<figure><img src="file://${DIR}/${n}"><figcaption>${n.replace(".png", "")}</figcaption></figure>`).join("")}</div>`;
-const b = await chromium.launch({ executablePath: "/home/box/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome", args: ["--allow-file-access-from-files"] });
+const b = await chromium.launch({ executablePath: chromePath(), args: ["--allow-file-access-from-files"] });
 const p = await b.newPage({ viewport: { width: 1600, height: 900 } });
 let index = `<!doctype html><meta charset="utf-8"><title>PrivateBit screens</title><style>body{font:14px system-ui;background:#222;color:#eee;padding:16px}img{max-width:100%}</style>`;
 for (const [name, list] of Object.entries(groups)) {
