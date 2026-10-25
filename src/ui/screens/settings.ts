@@ -579,7 +579,7 @@ screens["set-security"] = () => {
     header: hdr({ title: "Security and lock" }),
     main: waiting
       ? html`
-  <div class="banner warn" role="status">${I("hourglass", "s16")}<div><span class="bt">Auto lock is waiting</span>${pj?.role === "send" ? "A Payjoin payment" : "A payment link"}${pj?.amount && pj.amount !== "0" ? ` of ${Number(pj.amount) / 1e8} ${UNIT()}` : ""} is in progress. Locking now would delete its keys. PrivateBit locks ${prefs().lockMinutes} minutes after it ends, or 2 hours after the usual time without use, which ends the payment.</div></div>
+  <div class="banner" role="status">${I("hourglass", "s16")}<div><span class="bt">A payment keeps going after Lock</span>${pj?.role === "send" ? "A Payjoin payment" : "A payment link"}${pj?.amount && pj.amount !== "0" ? ` of ${Number(pj.amount) / 1e8} ${UNIT()}` : ""} is in progress. The wallet still locks on time. The payment finishes with the key of only the coins it uses, kept in memory until it ends.</div></div>
   <div class="field"><p class="label" id="al2">Lock after no use for</p>${lockSeg("al2")}</div>
   <div class="card flat pad-sm"><div class="kv">
     ${last ? html`<div class="r"><span class="k">Last used</span><span class="v">${hm(last)}</span></div><div class="r"><span class="k">Would have locked</span><span class="v">${hm(last + prefs().lockMinutes * 60_000)}</span></div>` : ""}
@@ -811,8 +811,8 @@ function fullSettings(): Safe {
     <section class="sect" id="pj"><header><h2>Payment links</h2><p>Two servers carry payment link messages. Each one sees only what is listed under it.</p></header>
       ${payjoinForm()}
       <div class="row"><button class="btn btn-secondary" type="button" data-act="pj-test" ${busy("pjt") ? html`aria-disabled="true"` : ""}>${busy("pjt") ? "Testing, up to 40 s…" : "Test"}</button><button class="btn btn-primary" type="button" data-act="pj-save">Save</button></div></section>
-    <section class="sect" id="sec"><header><h2>Security</h2><p>Lock deletes payment link keys. Auto lock waits while a payment is in progress.</p></header>
-      <div class="field"><span class="label" id="alf">Lock after no use for</span><div style="max-width:420px">${lockSeg("alf")}</div><p class="help">Waits while a payment link or Payjoin payment is in progress.</p></div>
+    <section class="sect" id="sec"><header><h2>Security</h2><p>Lock closes the wallet on time. An open Payjoin finishes with only the keys of its own coins.</p></header>
+      <div class="field"><span class="label" id="alf">Lock after no use for</span><div style="max-width:420px">${lockSeg("alf")}</div><p class="help">Payment links and Payjoin payments keep going after Lock.</p></div>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "wallet"}</button></div></section>
     <section class="sect" id="bk"><header><h2>Backup and finding coins</h2><p>Your recovery words restore everything except the labels you typed.</p></header>
       <div class="row" style="flex-wrap:wrap"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>

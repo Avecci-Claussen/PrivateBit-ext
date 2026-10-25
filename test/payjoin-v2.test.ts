@@ -10,7 +10,7 @@ import {
 } from "../src/lib/payjoin-proposal.ts";
 import { DEFAULT_PAYJOIN_DIRECTORY, sendPayjoinV2 } from "../src/lib/payjoin.ts";
 import { parseOhttpKeys } from "../src/lib/ohttp.ts";
-import { destinationNeedsPayjoin } from "../src/lib/send.ts";
+import { destinationNeedsPayjoin, inputSecret } from "../src/lib/send.ts";
 import { INTENT_PAYJOIN } from "../src/lib/policy.ts";
 import { spendSecret, taprootScriptPubKey } from "../src/lib/bip352.ts";
 import { hex } from "../src/lib/bytes.ts";
@@ -96,7 +96,20 @@ function coinFor(account: ReturnType<typeof accountFromVault>, txid: string, val
 }
 
 async function fundedWallet(dir: MemoryDirectory, coinTxid: string, value: string) {
-  const w = new PrivateBit(memoryKv(), {
+  const kv = memoryKv();
+  const raw = new Map<string, unknown>();
+  const spy = {
+    get: kv.get,
+    async set(items: Record<string, unknown>) {
+      for (const [k, v] of Object.entries(items)) raw.set(k, v);
+      await kv.set(items);
+    },
+    async remove(keys: string[]) {
+      for (const k of keys) raw.delete(k);
+      await kv.remove(keys);
+    },
+  };
+  const w = new PrivateBit(spy, {
     kind: "unisat",
     url: "https://open-api-fractal.unisat.io",
     payjoinDirectory: DEFAULT_PAYJOIN_DIRECTORY,
@@ -109,7 +122,7 @@ async function fundedWallet(dir: MemoryDirectory, coinTxid: string, value: strin
   const coin = coinFor(account, coinTxid, value);
   upsertUtxo(scan.utxos, coin);
   await w.saveScan(scan);
-  return { w, account, coin };
+  return { w, account, coin, kvDump: async () => Object.fromEntries(raw) };
 }
 
 describe("BIP77 two-party Payjoin", () => {
@@ -297,7 +310,7 @@ describe("BIP77 two-party Payjoin", () => {
     expect((await alice.w.sessions()).some((s) => s.id === link.id && s.role === "receive")).toBe(true);
   });
 
-  it("does not keep a spend key on disk and will not sign while locked", async () => {
+  it("a payment link keeps going after Lock with only its reserved coin's key (security audit v1)", async () => {
     const dir = new MemoryDirectory();
     const alice = await fundedWallet(dir, "dd".repeat(32), "50000");
     const bob = await fundedWallet(dir, "ee".repeat(32), "10300");
@@ -320,16 +333,17 @@ describe("BIP77 two-party Payjoin", () => {
 
     await alice.w.lock();
     await expect(alice.w.requireAccount()).rejects.toThrow(/locked/);
+    // Nothing in storage reveals the spend key or the reserved coin's key.
+    const dump = JSON.stringify(await alice.kvDump());
+    expect(dump).not.toContain(hex(alice.account.spendSecret));
+    expect(dump).not.toContain(hex(evenPriv(inputSecret(alice.account, alice.coin))));
     const whileLocked = await alice.w.servicePayjoin();
-    expect(whileLocked.processed).toBe(0);
-    // Sessions are sealed with the data key (audit M7): nothing is readable while locked.
-    expect(await alice.w.loadPayjoinSessions()).toEqual([]);
+    expect(whileLocked.errors).toEqual([]);
+    expect(whileLocked.processed).toBe(1);
+    expect(await alice.w.waitingPayjoin()).toBe(true);
 
     await alice.w.unlock("pw");
-    const serviced = await alice.w.servicePayjoin();
-    expect(serviced.processed).toBe(0);
-    expect(serviced.errors.join(" ")).toMatch(/HPKE receiver key is gone/);
-    expect((await alice.w.loadPayjoinSessions())[0]?.status).toBe("failed");
+    expect((await alice.w.loadPayjoinSessions())[0]?.status).toBe("proposed");
   });
 
   it("does not spend a coin reserved for a payment link", async () => {
@@ -339,7 +353,7 @@ describe("BIP77 two-party Payjoin", () => {
     await expect(alice.w.planSend(session.bip21, 10_000n)).rejects.toThrow(/no coins/);
   });
 
-  it("lock wipes the in-flight sender session so the original cannot be finished or broadcast", async () => {
+  it("a Payjoin send finishes after Lock with only its own coins' keys, and is recorded at unlock", async () => {
     const dir = new MemoryDirectory();
     const alice = await fundedWallet(dir, "44".repeat(32), "50000");
     const bob = await fundedWallet(dir, "55".repeat(32), "10300");
@@ -348,11 +362,18 @@ describe("BIP77 two-party Payjoin", () => {
     await bob.w.broadcast(INTENT_PAYJOIN, built);
     expect((await bob.w.loadPayjoinSends()).length).toBe(1);
     await bob.w.lock();
-    expect(await bob.w.loadPayjoinSends()).toEqual([]);
+    expect((await bob.w.loadPayjoinSends())[0]?.status).toBe("waiting");
+    const dump = JSON.stringify(await bob.kvDump());
+    expect(dump).not.toContain(hex(bob.account.spendSecret));
+    expect(dump).not.toContain(hex(inputSecret(bob.account, bob.coin)));
+    expect((await alice.w.servicePayjoin()).processed).toBe(1);
+    const locked = await bob.w.servicePayjoin();
+    expect(locked.errors).toEqual([]);
+    expect(locked.processed).toBe(1);
+    expect((await bob.w.loadPayjoinSends())[0]?.status).toBe("done");
     await bob.w.unlock("pw");
-    expect(await bob.w.loadPayjoinSends()).toEqual([]);
-    const serviced = await bob.w.servicePayjoin();
-    expect(serviced.processed).toBe(0);
+    const hist = await bob.w.history();
+    expect(hist.entries.some((e) => e.kind === "payjoin-sent")).toBe(true);
   });
 
   it("a BIP78 https pj= without RK is not Payjoin", () => {

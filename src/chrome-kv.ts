@@ -6,6 +6,8 @@ const SESSION_KEYS = new Set([
   "privatebit.scan.grant",
   "privatebit.pj.hpke",
   "privatebit.pj.send",
+  "privatebit.pj.grant",
+  "privatebit.btc.pj.grant",
   "privatebit.btc.scan.grant",
   "privatebit.btc.pj.hpke",
   "privatebit.btc.pj.send",

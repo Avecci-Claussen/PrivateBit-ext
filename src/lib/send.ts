@@ -189,7 +189,8 @@ export function planPayload(built: BuiltSend): PlanPayload {
 
 export function signPayjoinProposal(args: {
   proposalB64: string;
-  account: Account;
+  /** The full account, or (while locked) only the secrets of these inputs, by "txid:vout". */
+  account: Account | { scoped: Record<string, string> };
   inputs: SignableInput[];
 }): { txHex: string } {
   const bin = atob(args.proposalB64.replace(/\s/g, ""));
@@ -222,7 +223,12 @@ export function signPayjoinProposal(args: {
         throw new Error("Payjoin proposal uses a forbidden sighash on our input");
       }
     }
-    const d = evenPriv(inputSecret(args.account, u));
+    let d: Uint8Array;
+    if ("scoped" in args.account) {
+      const h = args.account.scoped[`${u.txid}:${u.vout}`];
+      if (!h) throw new Error("no key for this Payjoin input");
+      d = evenPriv(fromHex(h));
+    } else d = evenPriv(inputSecret(args.account, u));
     const preimage = tx.preimageWitnessV1(i, prevScripts, btc.SigHash.DEFAULT, amounts);
     const sig = schnorr.sign(preimage, d);
     tx.updateInput(i, { finalScriptWitness: [sig] });

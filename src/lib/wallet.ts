@@ -3,6 +3,7 @@ import { MEMPOOL_BITCOIN, MEMPOOL_FRACTAL, mempoolTxHex } from "./mempool.ts";
 import { spendSecret, taprootScriptPubKey } from "./bip352.ts";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
+import { dropBox, open as openBox, seal as sealBox, type SealedBox } from "./sessionkeys.ts";
 import { sha256 } from "@noble/hashes/sha256";
 import { setSharedChainNetwork, forgetSharedFrom, IncompleteBlock, loadSharedBlock, pruneSharedBelow, UnsupportedBlock, type SharedBlock } from "./blockshare.ts";
 import { cancellable, openChain, type ChainSource } from "./chain.ts";
@@ -321,6 +322,22 @@ const SCAN_SEALED = new Set([SCAN_KEY, CHAIN_SECRETS_KEY, DELAYED_KEY]);
 const PJ_SEND = "privatebit.pj.send";
 const PJ_HPKE = "privatebit.pj.hpke";
 const SEND_HPKE_PREFIX = "send:";
+/** Sealed (session key slot "pj") scoped keys for Payjoins that keep going after Lock. */
+const PJ_GRANT = "privatebit.pj.grant";
+const PJ_GRANT_AAD = "privatebit/pj-grant/v1";
+const PJ_HPKE_AAD = "privatebit/pj-hpke/v1";
+/**
+ * What a waiting Payjoin needs while the wallet is locked, and nothing more: for a payment link,
+ * the session and the secret of its one reserved coin; for a Payjoin send, the secrets of the
+ * coins it already spends. Never the seed, the spend secret or any other coin's key.
+ */
+type PjGrant = {
+  v: 1;
+  recv: Array<{ s: PayjoinReceiveSession; secret: string }>;
+  sends: Array<{ id: string; secrets: Record<string, string> }>;
+  /** Sends finished while locked; history and change are recorded at the next unlock. */
+  done: Array<{ id: string; proposal: string; txHex: string; txid: string }>;
+};
 const ORIGINAL_PREFIX = "orig:";
 const OHTTP_KEYS_KEY = "privatebit.pj.ohttpkeys";
 const OHTTP_KEYS_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -638,15 +655,129 @@ export class WalletCore {
     };
   }
 
+  /** Mailbox keys of open Payjoins, sealed under the session "pj" key (never plain in storage). */
   private async hpkeSecrets(): Promise<Record<string, string>> {
-    const got = await this.kv.get([PJ_HPKE]);
-    return (got[PJ_HPKE] as Record<string, string>) ?? {};
+    const rec = (await this.kv.get([PJ_HPKE]))[PJ_HPKE] as (SealedBox & { sealed?: 1 }) | Record<string, string> | undefined;
+    if (!rec) return {};
+    if ((rec as { sealed?: 1 }).sealed !== 1) {
+      // An older build kept these plain. Seal them now.
+      const plain = rec as Record<string, string>;
+      await this.writeHpke(plain);
+      return { ...plain };
+    }
+    const raw = await openBox(rec as SealedBox, PJ_HPKE_AAD);
+    return raw ? (JSON.parse(new TextDecoder().decode(raw)) as Record<string, string>) : {};
+  }
+
+  private async writeHpke(all: Record<string, string>): Promise<void> {
+    const prev = (await this.kv.get([PJ_HPKE]))[PJ_HPKE] as SealedBox | undefined;
+    if (!Object.keys(all).length) await this.kv.remove([PJ_HPKE]);
+    else {
+      const box = await sealBox(new TextEncoder().encode(JSON.stringify(all)), PJ_HPKE_AAD);
+      await this.kv.set({ [PJ_HPKE]: { ...box, sealed: 1 } });
+    }
+    await dropBox(prev);
   }
 
   private async saveHpkeSecret(id: string, sk: Uint8Array): Promise<void> {
     const all = await this.hpkeSecrets();
     all[id] = hex(sk);
-    await this.kv.set({ [PJ_HPKE]: all });
+    await this.writeHpke(all);
+  }
+
+  private async loadPjGrant(): Promise<PjGrant | null> {
+    const box = (await this.kv.get([PJ_GRANT]))[PJ_GRANT] as SealedBox | undefined;
+    const raw = await openBox(box, PJ_GRANT_AAD);
+    if (!raw) return null;
+    const g = JSON.parse(new TextDecoder().decode(raw)) as PjGrant;
+    raw.fill(0);
+    return g.v === 1 ? g : null;
+  }
+
+  private async savePjGrant(g: PjGrant): Promise<void> {
+    const prev = (await this.kv.get([PJ_GRANT]))[PJ_GRANT] as SealedBox | undefined;
+    const open = g.recv.some((x) => receiveOpen(x.s)) || g.sends.length > 0 || g.done.length > 0;
+    if (!open) await this.kv.remove([PJ_GRANT]);
+    else await this.kv.set({ [PJ_GRANT]: await sealBox(new TextEncoder().encode(JSON.stringify(g)), PJ_GRANT_AAD) });
+    await dropBox(prev);
+  }
+
+  /**
+   * At Lock: scoped keys for each waiting Payjoin, so it can finish without the wallet staying
+   * unlocked. Returns false when nothing is waiting.
+   */
+  private async writePjGrant(): Promise<boolean> {
+    const now = Date.now();
+    const recv = (await this.loadPayjoinSessions()).filter((s) => receiveOpen(s) && s.reserved && now <= receiveDeadline(s));
+    const sends = (await this.loadPayjoinSends()).filter((s) => s.status === "waiting" && s.expiresAt > now);
+    if (!recv.length && !sends.length) {
+      const box = (await this.kv.get([PJ_GRANT]))[PJ_GRANT] as SealedBox | undefined;
+      await this.kv.remove([PJ_GRANT]);
+      await dropBox(box);
+      return false;
+    }
+    const { account } = await this.requireAccount();
+    const grant: PjGrant = {
+      v: 1,
+      recv: recv.map((s) => ({ s: { ...s, inputSecret: undefined }, secret: hex(evenPriv(inputSecret(account, s.reserved!))) })),
+      sends: sends.map((s) => ({ id: s.id, secrets: Object.fromEntries(s.signableInputs.map((u) => [`${u.txid}:${u.vout}`, hex(inputSecret(account, u))])) })),
+      done: [],
+    };
+    account.spendSecret.fill(0);
+    await this.savePjGrant(grant);
+    return true;
+  }
+
+  /** At unlock: take back what happened while locked into the sealed sessions and history. */
+  private async absorbPjGrant(account: Account): Promise<void> {
+    const g = await this.loadPjGrant();
+    if (!g) return;
+    if (g.recv.length) {
+      const sessions = await this.loadPayjoinSessions();
+      for (const x of g.recv) {
+        const i = sessions.findIndex((s) => s.id === x.s.id);
+        if (i >= 0) sessions[i] = { ...sessions[i]!, ...x.s, inputSecret: undefined };
+      }
+      await this.savePayjoinSessions(sessions);
+    }
+    if (g.done.length) {
+      const sends = await this.loadPayjoinSends();
+      for (const d of g.done) {
+        const s = sends.find((x) => x.id === d.id);
+        if (s) await this.recordPayjoinSend(account, s, d.proposal, d.txHex, d.txid).catch(() => undefined);
+      }
+    }
+    const box = (await this.kv.get([PJ_GRANT]))[PJ_GRANT] as SealedBox | undefined;
+    await this.kv.remove([PJ_GRANT]);
+    await dropBox(box);
+  }
+
+  /** Locked version of closeExpired, on the grant's copy of each link. */
+  private async closeExpiredLocked(g: PjGrant): Promise<void> {
+    const now = Date.now();
+    const gone: string[] = [];
+    for (const x of g.recv) {
+      const s = x.s;
+      if (!receiveOpen(s) || now <= receiveDeadline(s)) continue;
+      const proposed = s.status === "proposed";
+      if (proposed) s.fallbackTxid = await this.broadcastOriginal(s.id);
+      this.endReceive(s, proposed ? (s.fallbackTxid ? "not broadcast by the payer; their original payment was sent instead" : "not broadcast") : "expired");
+      x.secret = "";
+      gone.push(s.id, ORIGINAL_PREFIX + s.id);
+    }
+    const sends = await this.loadPayjoinSends();
+    let dirty = false;
+    for (const s of sends) {
+      if (s.status === "waiting" && now > s.expiresAt) {
+        this.endSend(s, "expired");
+        g.sends = g.sends.filter((x) => x.id !== s.id);
+        gone.push(SEND_HPKE_PREFIX + s.id);
+        dirty = true;
+      }
+    }
+    if (dirty) await this.savePayjoinSends(sends);
+    if (gone.length) await this.forgetPayjoinSecrets(gone);
+    await this.savePjGrant(g);
   }
 
   private async loadHpkeSecret(id: string): Promise<Uint8Array | undefined> {
@@ -665,7 +796,10 @@ export class WalletCore {
   }
 
   private async clearHpkeSecrets(): Promise<void> {
-    await this.kv.remove([PJ_HPKE]);
+    const got = await this.kv.get([PJ_HPKE, PJ_GRANT]);
+    await this.kv.remove([PJ_HPKE, PJ_GRANT]);
+    await dropBox(got[PJ_HPKE] as SealedBox | undefined);
+    await dropBox(got[PJ_GRANT] as SealedBox | undefined);
   }
 
   source(): ChainSource {
@@ -878,6 +1012,14 @@ export class WalletCore {
   /** Work that waited for the data key: link deadlines and payments found while locked. */
   private async afterUnlock(): Promise<void> {
     try {
+      // What a Payjoin did while locked goes back into the sealed sessions and history first.
+      const { account } = await this.requireAccount();
+      await this.absorbPjGrant(account);
+      account.spendSecret.fill(0);
+    } catch {
+      /* absorbed again at the next Payjoin step */
+    }
+    try {
       await this.closeExpired();
       await this.notePayjoinPaid(await this.loadScan());
       await this.finishDelayedRecords();
@@ -991,6 +1133,7 @@ export class WalletCore {
       }
     }
     this.cancelScan();
+    let keepPj = false;
     if (await this.dataKey()) {
       // Done while the data key is still there: the sessions are sealed with it.
       const sessions = await this.loadPayjoinSessions();
@@ -1002,11 +1145,14 @@ export class WalletCore {
         }
       }
       if (dirty) await this.savePayjoinSessions(sessions);
+      keepPj = await this.writePjGrant().catch(() => false);
     }
     this.keyCache = undefined;
     await clearSession(this.kv);
-    await this.clearHpkeSecrets();
-    await this.kv.remove([PJ_SEND]);
+    if (!keepPj) {
+      await this.clearHpkeSecrets();
+      await this.kv.remove([PJ_SEND]);
+    }
   }
 
   async requireAccount(): Promise<{ vault: Omit<SessionVault, "seed">; account: Account; scan: ScanStore }> {
@@ -2557,13 +2703,13 @@ export class WalletCore {
     const all = await this.hpkeSecrets();
     let dirty = false;
     for (const id of ids) if (id in all) (delete all[id], (dirty = true));
-    if (dirty) await this.kv.set({ [PJ_HPKE]: all });
+    if (dirty) await this.writeHpke(all);
   }
 
   /** Delete every key of this wallet's namespace. PrivateBit updates the directory. */
   async deleteOwnKeys(): Promise<void> {
     this.close();
-    await this.kv.remove([...V1_LIVE_KEYS, "privatebit.session", SCAN_GRANT_KEY]);
+    await this.kv.remove([...V1_LIVE_KEYS, "privatebit.session", SCAN_GRANT_KEY, PJ_GRANT]);
   }
 
   /**
@@ -2690,6 +2836,11 @@ export class WalletCore {
 
   /** True while a link or a Payjoin send is open. Every open state has a deadline, so this always ends. */
   async waitingPayjoin(): Promise<boolean> {
+    if (!(await this.dataKey())) {
+      const g = await this.loadPjGrant();
+      if (g && g.recv.some((x) => receiveOpen(x.s))) return true;
+      return (await this.loadPayjoinSends()).some((s) => s.status === "waiting");
+    }
     await this.closeExpired();
     if ((await this.loadPayjoinSessions()).some(receiveOpen)) return true;
     return (await this.loadPayjoinSends()).some((s) => s.status === "waiting");
@@ -2774,11 +2925,33 @@ export class WalletCore {
    */
   private async servicePayjoinNow(): Promise<{ processed: number; errors: string[] }> {
     const vault = await this.session();
-    if (!vault) return { processed: 0, errors: [] };
-    await this.closeExpired();
-    const account = this.accountOf(vault);
+    let grant: PjGrant | null = null;
+    let account: Account | undefined;
+    let sessions: PayjoinReceiveSession[];
+    if (vault) {
+      account = this.accountOf(vault);
+      vault.seed.fill(0);
+      await this.absorbPjGrant(account);
+      await this.closeExpired();
+      sessions = await this.loadPayjoinSessions();
+    } else {
+      // Locked: only what the waiting payments need, sealed at Lock (security audit v1, M6/L13).
+      grant = await this.loadPjGrant();
+      if (!grant) return { processed: 0, errors: [] };
+      await this.closeExpiredLocked(grant);
+      sessions = grant.recv.map((g) => g.s);
+    }
+    const secretFor = (s: PayjoinReceiveSession): Uint8Array => {
+      if (account) return evenPriv(inputSecret(account, s.reserved!));
+      const g = grant!.recv.find((x) => x.s.id === s.id);
+      if (!g) throw new Error("no key for this payment link");
+      return fromHex(g.secret);
+    };
+    const saveSessions = async (): Promise<void> => {
+      if (grant) await this.savePjGrant(grant);
+      else await this.savePayjoinSessions(sessions);
+    };
     const cfg = this.payjoinCfg();
-    const sessions = await this.loadPayjoinSessions();
     let processed = 0;
     const errors: string[] = [];
     for (const s of sessions) {
@@ -2808,14 +2981,16 @@ export class WalletCore {
           replyPk = got.replyPk;
           s.replyPk = hex(replyPk);
           await this.saveOriginal(s.id, original);
-          await this.savePayjoinSessions(sessions);
+          await saveSessions();
         }
         if (!s.reserved) {
           throw new Error("payment link is missing its reserved coin; create a new one");
         }
         // BIP78 receiver checks on the original, and the reserved coin re-checked, before we sign.
         const scan = await this.loadScan();
-        const meta = await this.loadCoinMeta();
+        // Frozen marks are sealed with the data key; while locked they cannot change, and the
+        // reserved coin was checked against them when the link was made and at Lock.
+        const meta = account ? await this.loadCoinMeta() : null;
         const reservedKey = `${s.reserved.txid}:${s.reserved.vout}`;
         const stillOurs = scan.utxos.find((u) => `${u.txid}:${u.vout}` === reservedKey && !u.spent);
         const problems = checkOriginal({
@@ -2826,7 +3001,7 @@ export class WalletCore {
           ourScripts: new Set([...scan.utxos.map((u) => u.scriptPubKey.toLowerCase()), s.extraScriptPubKey.toLowerCase()]),
         });
         if (!stillOurs) problems.push("the reserved coin is no longer available");
-        else if (frozenOutpoints(meta).has(reservedKey)) problems.push("the reserved coin is frozen");
+        else if (meta && frozenOutpoints(meta).has(reservedKey)) problems.push("the reserved coin is frozen");
         if (problems.length) {
           this.endReceive(s, `refused: ${problems.join("; ")}`);
           errors.push(s.error!);
@@ -2837,7 +3012,7 @@ export class WalletCore {
           originalB64: original,
           receiverInput: { ...s.reserved, spent: false },
           // Audit H1: same key choice as every other spend (a coin from an earlier link included).
-          receiverSecret: evenPriv(inputSecret(account, s.reserved)),
+          receiverSecret: secretFor(s),
           extraScript: fromHex(s.extraScriptPubKey),
           extraTweak: s.extraTweak,
         });
@@ -2858,13 +3033,15 @@ export class WalletCore {
         if (!payjoinRetryable(message)) this.endReceive(s, message);
       }
     }
-    await this.savePayjoinSessions(sessions);
-    const sent = await this.servicePayjoinSends(account, errors);
+    await saveSessions();
+    const sent = await this.servicePayjoinSends(account ?? null, grant, errors);
+    if (grant) await this.savePjGrant(grant);
     return { processed: processed + sent, errors };
   }
 
   private async servicePayjoinSends(
-    account: Account,
+    account: Account | null,
+    grant: PjGrant | null,
     errors: string[],
   ): Promise<number> {
     const sends = await this.loadPayjoinSends();
@@ -2897,9 +3074,11 @@ export class WalletCore {
           continue;
         }
         const proposal = psbtForBroadcast(INTENT_PAYJOIN, got, null);
+        const scoped = grant?.sends.find((x) => x.id === s.id)?.secrets;
+        if (!account && !scoped) throw new Error("no keys for this Payjoin; unlock to finish it");
         const signed = signPayjoinProposal({
           proposalB64: proposal,
-          account,
+          account: account ?? { scoped: scoped! },
           inputs: s.signableInputs,
         });
         const txid = await this.source().broadcast(signed.txHex);
@@ -2907,6 +3086,32 @@ export class WalletCore {
         s.txid = txid;
         s.closedAt = Date.now();
         await this.forgetPayjoinSecrets([SEND_HPKE_PREFIX + s.id]);
+        if (!account) {
+          // History and change need the data key: recorded at the next unlock (absorbPjGrant).
+          grant!.sends = grant!.sends.filter((x) => x.id !== s.id);
+          grant!.done.push({ id: s.id, proposal, txHex: signed.txHex, txid });
+          processed += 1;
+          continue;
+        }
+        await this.recordPayjoinSend(account, s, proposal, signed.txHex, txid);
+        processed += 1;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        errors.push(message);
+        s.checkedAt = Date.now();
+        s.error = message;
+        if (!payjoinRetryable(message)) this.endSend(s, message);
+      }
+    }
+    await this.savePayjoinSends(sends);
+    return processed;
+  }
+
+  /** History, labels and our change for a Payjoin we sent. Needs the account (unlocked). */
+  private async recordPayjoinSend(account: Account, s: PayjoinSendSession, proposal: string, txHex: string, txid: string): Promise<void> {
+    const signed = { txHex };
+    {
+      {
         // Our change first: the receiver's input means only our own inputs find it (see scan.ts).
         const change = await this.applyOwnTxChange(account, signed.txHex, txid);
         try {
@@ -2946,17 +3151,8 @@ export class WalletCore {
         } catch {
           /* history is best effort; the payment is already broadcast */
         }
-        processed += 1;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        errors.push(message);
-        s.checkedAt = Date.now();
-        s.error = message;
-        if (!payjoinRetryable(message)) this.endSend(s, message);
       }
     }
-    await this.savePayjoinSends(sends);
-    return processed;
   }
 }
 

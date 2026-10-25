@@ -107,13 +107,9 @@ describe("Payjoin receive state machine", () => {
     const hpke = (await alice.kv.get([scopedName(alice.w.activeId!, "privatebit.pj.hpke")]))[scopedName(alice.w.activeId!, "privatebit.pj.hpke")] as Record<string, string> | undefined;
     expect(Object.keys(hpke ?? {}).filter((k) => k.includes(session.id))).toEqual([]);
 
-    // Auto-lock: held while open, then counts from the end.
+    // Auto lock does not wait for a payment (security audit v1).
     const t0 = 1_000_000;
-    const held = autoLockDecision({ last: t0 }, t0 + 20 * 60_000, 5, true);
-    expect(held.lock).toBe(false);
-    const ended = autoLockDecision(held.next, t0 + 21 * 60_000, 5, false);
-    expect(ended.lock).toBe(false);
-    expect(ended.dueAt).toBe(t0 + 26 * 60_000);
+    expect(autoLockDecision({ last: t0 }, t0 + 20 * 60_000, 5).lock).toBe(true);
   });
 
   it("offers Cancel in every open state, including after a proposal", async () => {

@@ -45,33 +45,18 @@ describe("auto-lock timing", () => {
   });
   it("locks after the idle span", () => {
     const s = touch(undefined, 0);
-    expect(autoLockDecision(s, 15 * M - 1, 15, false).lock).toBe(false);
-    expect(autoLockDecision(s, 15 * M, 15, false).lock).toBe(true);
+    expect(autoLockDecision(s, 15 * M - 1, 15).lock).toBe(false);
+    expect(autoLockDecision(s, 15 * M, 15).lock).toBe(true);
   });
   it("activity resets the timer", () => {
     const s = touch(touch(undefined, 0), 10 * M);
-    expect(autoLockDecision(s, 20 * M, 15, false).lock).toBe(false);
-    expect(autoLockDecision(s, 25 * M, 15, false).lock).toBe(true);
+    expect(autoLockDecision(s, 20 * M, 15).lock).toBe(false);
+    expect(autoLockDecision(s, 25 * M, 15).lock).toBe(true);
   });
-  it("waits while a Payjoin is in progress and counts from its end", () => {
-    let s = touch(undefined, 0);
-    let d = autoLockDecision(s, 20 * M, 15, true);
-    expect(d.lock).toBe(false);
-    expect(d.wouldHaveLockedAt).toBe(15 * M);
-    s = d.next;
-    d = autoLockDecision(s, 40 * M, 15, true);
-    expect(d.lock).toBe(false);
-    s = d.next;
-    d = autoLockDecision(s, 41 * M, 15, false); // payment ended now
-    expect(d.lock).toBe(false);
-    expect(d.dueAt).toBe(56 * M);
-    s = d.next;
-    expect(autoLockDecision(s, 55 * M, 15, false).lock).toBe(false);
-    expect(autoLockDecision(s, 56 * M, 15, false).lock).toBe(true);
+  it("never waits for a payment in progress (security audit v1)", () => {
+    const s = { last: 0 };
+    expect(autoLockDecision(s, 15 * M, 15).lock).toBe(true);
   });
-});
-
-describe("block data service limits", () => {
   it("treats a 403 request-limit answer as rate limited, for fees and for chain reads", async () => {
     const { openChain } = await import("../src/lib/chain.ts");
     const { RateLimitedError } = await import("../src/lib/requests.ts");

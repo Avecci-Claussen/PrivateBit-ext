@@ -4,7 +4,7 @@ import { entropyToMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { sha256 } from "@noble/hashes/sha2";
 import { fromHex, hex, randomBytes } from "./bytes.ts";
-import { dropKey, open, seal, type SealedBox } from "./sessionkeys.ts";
+import { dropBox, open, seal, type SealedBox } from "./sessionkeys.ts";
 
 export const VAULT_VERSION = 1;
 /**
@@ -236,15 +236,17 @@ export function sessionSig(seed: Uint8Array): string {
 export async function saveSession(kv: Kv, vault: UnlockedVault | SessionVault): Promise<void> {
   const words = "words" in vault ? vault.words : vault.mnemonic.trim().split(/\s+/).length;
   const hasPassphrase = "hasPassphrase" in vault ? vault.hasPassphrase : vault.passphrase.length > 0;
+  const prev = (await kv.get([SESSION_KEY]))[SESSION_KEY] as Partial<SessionRecord> | undefined;
   const body: SessionRecord = {
     v: 2,
-    box: await seal("session", vault.seed, SESSION_AAD),
+    box: await seal(vault.seed, SESSION_AAD),
     birthday: vault.birthday,
     words,
     hasPassphrase,
     sig: sessionSig(vault.seed),
   };
   await kv.set({ [SESSION_KEY]: body });
+  if (prev?.box) await dropBox(prev.box);
 }
 
 /** The session with a freshly opened seed. The caller zeroes the seed when it is done. */
@@ -257,7 +259,7 @@ export async function loadSession(kv: Kv): Promise<SessionVault | null> {
     await kv.remove([SESSION_KEY]);
     return null;
   }
-  const seed = await open("session", s.box, SESSION_AAD);
+  const seed = await open(s.box, SESSION_AAD);
   if (!seed) return null;
   return { seed, birthday: s.birthday ?? 0, words: s.words ?? 24, hasPassphrase: !!s.hasPassphrase, sig: s.sig ?? sessionSig(seed) };
 }
@@ -270,8 +272,9 @@ export async function sessionInfo(kv: Kv): Promise<Omit<SessionVault, "seed"> | 
 }
 
 export async function clearSession(kv: Kv): Promise<void> {
+  const prev = (await kv.get([SESSION_KEY]))[SESSION_KEY] as Partial<SessionRecord> | undefined;
   await kv.remove([SESSION_KEY]);
-  await dropKey("session");
+  await dropBox(prev?.box);
 }
 
 export async function saveScanGrant(kv: Kv, grant: ScanGrant): Promise<void> {

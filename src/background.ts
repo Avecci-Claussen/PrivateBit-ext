@@ -3,7 +3,7 @@ import { installE2E } from "./e2e-hook.ts";
 import { jsonSafe } from "./lib/json.ts";
 import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, isNetworkId, netInfo, redactChain, type ChainConfig, type NetworkId } from "./lib/network.ts";
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
-import { dropKey } from "./lib/sessionkeys.ts";
+import { dropAllKeys } from "./lib/sessionkeys.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
 import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
 import { testPayjoinRoute } from "./lib/payjoin.ts";
@@ -138,7 +138,8 @@ async function checkAutoLock(): Promise<void> {
   const now = Date.now();
   const got = (await kv.get([ACTIVITY_KEY]))[ACTIVITY_KEY] as ActivityState | undefined;
   const state = got ?? touch(undefined, now);
-  const d = autoLockDecision(state, now, prefs.lockMinutes, await wallet.waitingPayjoin());
+  // Security audit v1: a waiting Payjoin no longer holds the lock. It finishes with its scoped keys.
+  const d = autoLockDecision(state, now, prefs.lockMinutes);
   if (d.lock) {
     await wallet.lock();
     await kv.remove([ACTIVITY_KEY, FEES_KEY]);
@@ -183,8 +184,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(() => {
   // A new browser session: session storage is empty, so the session keys left in IndexedDB open nothing. Delete them.
-  void dropKey("session");
-  void dropKey("pj");
+  void dropAllKeys();
   ensureAlarms();
   void pumpPayjoin();
 });

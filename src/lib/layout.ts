@@ -33,6 +33,7 @@ export const WALLET_SCOPED = [
   "privatebit.pj.sessions",
   "privatebit.pj.send",
   "privatebit.pj.hpke",
+  "privatebit.pj.grant",
   "privatebit.session",
   // Connected websites (origins and their account index), sealed with the data key. Both chains.
   "privatebit.sites",
@@ -49,6 +50,7 @@ export const WALLET_SCOPED = [
   "privatebit.btc.pj.sessions",
   "privatebit.btc.pj.send",
   "privatebit.btc.pj.hpke",
+  "privatebit.btc.pj.grant",
   "privatebit.btc.scan.grant",
   "privatebit.btc.delayed",
   "privatebit.btc.birthday",
@@ -66,6 +68,7 @@ export const NET_SCOPED = [
   "privatebit.pj.sessions",
   "privatebit.pj.send",
   "privatebit.pj.hpke",
+  "privatebit.pj.grant",
   "privatebit.scan.grant",
   "privatebit.delayed",
   "privatebit.birthday",

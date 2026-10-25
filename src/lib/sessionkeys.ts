@@ -12,10 +12,10 @@
  * - In the Android app it lives only in memory: the app process ending locks the wallet.
  * The seed is opened only for the operation that needs it (signing, deriving), then zeroed.
  */
-export type SealedBox = { iv: string; ct: string };
-export type KeySlot = "session" | "pj";
+export type SealedBox = { kid: string; iv: string; ct: string };
 
-const mem = new Map<KeySlot, CryptoKey>();
+/** Keys by id. Each sealed box has its own key, so wallets and boxes never share one. */
+const mem = new Map<string, CryptoKey>();
 const DB = "privatebit-session-keys";
 const STORE = "keys";
 
@@ -52,21 +52,12 @@ function idb<T>(mode: IDBTransactionMode, f: (s: IDBObjectStore) => IDBRequest<T
   });
 }
 
-async function getKey(slot: KeySlot, create: boolean): Promise<CryptoKey | undefined> {
-  const m = mem.get(slot);
+async function keyFor(kid: string): Promise<CryptoKey | undefined> {
+  const m = mem.get(kid);
   if (m) return m;
-  if (useIdb()) {
-    const k = (await idb<CryptoKey>("readonly", (s) => s.get(slot) as IDBRequest<CryptoKey>)) ?? undefined;
-    if (k) {
-      mem.set(slot, k);
-      return k;
-    }
-  }
-  if (!create) return undefined;
-  const k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-  if (k.extractable) throw new Error("session key must not be extractable");
-  mem.set(slot, k);
-  if (useIdb()) await idb("readwrite", (s) => s.put(k, slot));
+  if (!useIdb()) return undefined;
+  const k = (await idb<CryptoKey>("readonly", (s) => s.get(kid) as IDBRequest<CryptoKey>)) ?? undefined;
+  if (k) mem.set(kid, k);
   return k;
 }
 
@@ -77,18 +68,22 @@ const fromHex = (h: string): Uint8Array => {
   return out;
 };
 
-/** Seal bytes under the slot's key, creating the key on first use. The input is not kept. */
-export async function seal(slot: KeySlot, data: Uint8Array, aad: string): Promise<SealedBox> {
-  const key = (await getKey(slot, true))!;
+/** Seal bytes under a new non-extractable key. The caller keeps only the box. */
+export async function seal(data: Uint8Array, aad: string): Promise<SealedBox> {
+  const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  if (key.extractable) throw new Error("session key must not be extractable");
+  const kid = toHex(crypto.getRandomValues(new Uint8Array(16)));
+  mem.set(kid, key);
+  if (useIdb()) await idb("readwrite", (s) => s.put(key, kid));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode(aad) }, key, data as BufferSource));
-  return { iv: toHex(iv), ct: toHex(ct) };
+  return { kid, iv: toHex(iv), ct: toHex(ct) };
 }
 
-/** Open a sealed box. Null when the key is gone (locked, browser restarted) or the box was altered. */
-export async function open(slot: KeySlot, box: SealedBox | undefined, aad: string): Promise<Uint8Array | null> {
-  if (!box || typeof box.iv !== "string" || typeof box.ct !== "string") return null;
-  const key = await getKey(slot, false);
+/** Open a box. Null when its key is gone (locked, browser restarted) or the box was altered. */
+export async function open(box: SealedBox | undefined, aad: string): Promise<Uint8Array | null> {
+  if (!box || typeof box.kid !== "string" || typeof box.iv !== "string" || typeof box.ct !== "string") return null;
+  const key = await keyFor(box.kid);
   if (!key) return null;
   try {
     return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromHex(box.iv) as BufferSource, additionalData: new TextEncoder().encode(aad) }, key, fromHex(box.ct) as BufferSource));
@@ -97,14 +92,22 @@ export async function open(slot: KeySlot, box: SealedBox | undefined, aad: strin
   }
 }
 
-/** Forget the slot's key: everything sealed under it becomes unreadable. */
-export async function dropKey(slot: KeySlot): Promise<void> {
-  mem.delete(slot);
-  if (useIdb()) await idb("readwrite", (s) => s.delete(slot));
+/** Forget a box's key: the box becomes unreadable for good. */
+export async function dropBox(box: { kid?: unknown } | undefined | null): Promise<void> {
+  const kid = box && typeof box.kid === "string" ? box.kid : undefined;
+  if (!kid) return;
+  mem.delete(kid);
+  if (useIdb()) await idb("readwrite", (s) => s.delete(kid));
 }
 
-/** For tests: true when the slot's key exists and cannot be exported. */
-export async function keyIsNonExtractable(slot: KeySlot): Promise<boolean> {
-  const k = await getKey(slot, false);
+/** Forget every session key (browser start). */
+export async function dropAllKeys(): Promise<void> {
+  mem.clear();
+  if (useIdb()) await idb("readwrite", (s) => s.clear());
+}
+
+/** For tests: true when the box's key exists and cannot be exported. */
+export async function boxKeyIsNonExtractable(box: SealedBox): Promise<boolean> {
+  const k = await keyFor(box.kid);
   return !!k && k.extractable === false;
 }

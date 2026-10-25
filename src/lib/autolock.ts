@@ -1,52 +1,25 @@
 /**
  * Auto lock timing (FLOWS.md section 11). Pure so it can be unit tested.
  * - Counts from the last click or key press in the popup or full page.
- * - Waits while a payment link or Payjoin send is in progress, because locking deletes its keys,
- *   but at most MAX_HOLD_MS past the normal lock time (audit M6, independent): the unlocked
- *   words do not sit in memory for a whole day because a link is open.
- * - After the payment ends, the timer counts from the end.
+ * - Never waits for a payment (security audit v1): a payment link or Payjoin send in progress
+ *   keeps going after Lock with only the keys of its own coins (wallet.ts PjGrant).
  */
 export type ActivityState = {
   last: number;
-  waitingSince?: number;
-  waitEndedAt?: number;
 };
 
 export type AutoLockDecision = {
   lock: boolean;
   next: ActivityState;
-  /** When it would lock if nothing else happens. Undefined while waiting. */
-  dueAt?: number;
-  /** When it would have locked if no payment was waiting. */
-  wouldHaveLockedAt?: number;
+  /** When it would lock if nothing else happens. */
+  dueAt: number;
 };
 
-/** Longest the auto lock waits for an open payment past its normal time. */
-export const MAX_HOLD_MS = 2 * 60 * 60_000;
-
-export function autoLockDecision(
-  state: ActivityState,
-  now: number,
-  minutes: number,
-  waiting: boolean,
-): AutoLockDecision {
-  const span = minutes * 60_000;
-  if (waiting && now >= state.last + span + MAX_HOLD_MS) {
-    return { lock: true, next: { last: state.last }, dueAt: state.last + span + MAX_HOLD_MS };
-  }
-  if (waiting) {
-    const next: ActivityState = { last: state.last, waitingSince: state.waitingSince ?? now };
-    return { lock: false, next, wouldHaveLockedAt: state.last + span };
-  }
-  const next: ActivityState = { last: state.last };
-  let ended = state.waitEndedAt;
-  if (state.waitingSince !== undefined) ended = now;
-  if (ended !== undefined) next.waitEndedAt = ended;
-  const base = Math.max(state.last, ended ?? 0);
-  const dueAt = base + span;
-  return { lock: now >= dueAt, next, dueAt };
+export function autoLockDecision(state: ActivityState, now: number, minutes: number): AutoLockDecision {
+  const dueAt = state.last + minutes * 60_000;
+  return { lock: now >= dueAt, next: { last: state.last }, dueAt };
 }
 
-export function touch(state: ActivityState | undefined, now: number): ActivityState {
-  return { ...(state ?? {}), last: now };
+export function touch(_state: ActivityState | undefined, now: number): ActivityState {
+  return { last: now };
 }
