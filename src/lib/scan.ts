@@ -1,4 +1,4 @@
-import { detectOurUtxos, type DetectedOutput } from "./bip352.ts";
+import { detectOurUtxos, type DetectedOutput, type EligibleVin } from "./bip352.ts";
 import type { SharedBlock } from "./blockshare.ts";
 import type { ScanAccount } from "./keys.ts";
 import { extractEligibleVins, type RawVin } from "./extract-inputs.ts";
@@ -465,6 +465,50 @@ export async function recoverWatchedFromHints(
   return next;
 }
 
+/**
+ * Payjoin change. As a Payjoin sender, our change output is a Silent Payment to our own change
+ * code, made from our inputs only (the original). The receiver then adds an input, so a scan
+ * over all inputs of the final transaction no longer finds it. For a transaction that spends our
+ * coins next to someone else's, also match with our spent coins alone. Runs only for transactions
+ * that spend our coins, needs no network, and uses the same BIP352 matching as every other coin.
+ */
+export function detectOwnInputChange(
+  account: ScanAccount,
+  store: ScanStore,
+  txid: string,
+  inputs: { txid: string; vout: number }[],
+  taps: { xonly: Uint8Array; vout: number; value: bigint }[],
+): (DetectedOutput & { txid: string; value: bigint })[] {
+  if (taps.length === 0) return [];
+  const real = inputs.filter((v) => !isCoinbaseTxid(v.txid));
+  const vins: EligibleVin[] = [];
+  for (const v of real) {
+    const u = store.utxos.find((x) => x.txid === v.txid && x.vout === v.vout && x.spentBy === txid);
+    if (!u) continue;
+    const spk = fromHex(u.scriptPubKey);
+    if (spk.length !== 34 || spk[0] !== 0x51 || spk[1] !== 0x20) return [];
+    vins.push({ txid: v.txid, vout: v.vout, pubkey: Uint8Array.from([0x02, ...spk.slice(2)]), taproot: true });
+  }
+  // None of ours, or all of them ours: the normal full-input match already covers it.
+  if (vins.length === 0 || vins.length === real.length) return [];
+  const found = detectOurUtxos({
+    vins,
+    taprootOutputs: taps.map((t) => ({ xonly: t.xonly, vout: t.vout })),
+    scanSecret: account.scanSecret,
+    spendPub: account.spendPub,
+    labels: account.labels,
+    outpoints: vins.map((v) => ({ txid: v.txid, vout: v.vout })),
+  });
+  return found.map((f) => ({ ...f, txid, value: taps.find((t) => t.vout === f.vout)!.value }));
+}
+
+function applyOwnInputChange(account: ScanAccount, store: ScanStore, txHex: string, height: number): void {
+  const tx = parseTxHex(txHex);
+  for (const hit of detectOwnInputChange(account, store, tx.txid, tx.vin, taprootOutputs(tx))) {
+    upsertUtxo(store.utxos, hitToUtxo(hit, height));
+  }
+}
+
 /** Apply a tx we already have (broadcast or mempool) without waiting for its block. */
 export async function applyTxHex(
   account: ScanAccount,
@@ -475,6 +519,7 @@ export async function applyTxHex(
 ): Promise<ScanStore> {
   const next = cloneStore(store);
   ingestSeenTx(next, txHex, height);
+  applyOwnInputChange(account, next, txHex, height);
   try {
     const hits = await scanTransaction(account, source, txHex, height);
     for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));
@@ -509,6 +554,15 @@ export function applySharedSlice(
       },
       block.height,
     );
+    for (const hit of detectOwnInputChange(
+      account,
+      next,
+      tx.txid,
+      tx.inputs,
+      tx.taps.map((tap) => ({ xonly: fromHex(tap.xonly), vout: tap.vout, value: BigInt(tap.value) })),
+    )) {
+      upsertUtxo(next.utxos, hitToUtxo(hit, block.height));
+    }
     for (const tap of tx.taps) {
       const spk = "5120" + tap.xonly.toLowerCase();
       const w = next.watch?.find((item) => item.scriptPubKey.toLowerCase() === spk);
@@ -678,6 +732,7 @@ export async function scanStep(
       continue;
     }
     clearHole(next, txid);
+    applyOwnInputChange(account, next, hexTx, height);
     try {
       const hits = await scanTransaction(account, source, hexTx, height, inputs);
       for (const hit of hits) upsertUtxo(next.utxos, hitToUtxo(hit, height));

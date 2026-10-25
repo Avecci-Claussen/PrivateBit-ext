@@ -1230,8 +1230,56 @@ export class WalletCore {
         if (!(e instanceof StaleWriteError)) throw e;
       }
     }
+    if (full) await this.recoverPayjoinChange(account, source).catch(() => undefined);
     const pos = (await this.coins_.read()).store.lastHeight;
     if (pos > 5_000) void pruneSharedBelow(pos - 5_000).catch(() => undefined);
+  }
+
+  /** Payjoin sends already checked for missing change in this run of the app. */
+  private changeChecked = new Set<string>();
+
+  /**
+   * Recovery for Payjoins sent before the change fix: their change was never added. Re-read each
+   * sent Payjoin that has no change recorded, match it with our own spent coins, and fill in the
+   * coin and the history row. Read only; nothing is signed or broadcast.
+   */
+  private async recoverPayjoinChange(account: ScanAccount, source: ChainSource): Promise<void> {
+    const hist = await this.loadHistory();
+    const todo = Object.values(hist.entries).filter(
+      (e) => e.kind === "payjoin-sent" && !e.change && !this.changeChecked.has(e.txid),
+    );
+    if (todo.length === 0) return;
+    let found = false;
+    for (const e of todo.slice(0, 8)) {
+      this.changeChecked.add(e.txid);
+      let txHex: string;
+      try {
+        txHex = await source.getTxHex(e.txid);
+      } catch {
+        this.changeChecked.delete(e.txid);
+        continue;
+      }
+      const height = source.getTxHeight ? ((await source.getTxHeight(e.txid).catch(() => null)) ?? 0) : 0;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const snap = await this.coins_.read();
+        const next = await applyTxHex(account, source, snap.store, txHex, height);
+        try {
+          await this.coins_.commit(snap.rev, next, { flush: true });
+          break;
+        } catch (err) {
+          if (!(err instanceof StaleWriteError)) throw err;
+        }
+      }
+      const mine = (await this.coins_.read()).store.utxos.filter((u) => u.txid === e.txid);
+      if (mine.length === 0) continue;
+      const value = mine.reduce((a, u) => a + BigInt(u.value), 0n);
+      e.change = value.toString();
+      const ops = new Set(e.outpoints ?? []);
+      for (const u of mine) ops.add(`${u.txid}:${u.vout}`);
+      e.outpoints = [...ops];
+      found = true;
+    }
+    if (found) await this.saveHistory(hist);
   }
 
   /** Scripts of payment links that are open, or closed less than a week ago. */
@@ -1295,6 +1343,14 @@ export class WalletCore {
       }
     }
     throw new Error("could not record the broadcast payment; it will appear after the next block");
+  }
+
+  /** Apply our own broadcast and return the change it gave back to us. */
+  private async applyOwnTxChange(account: ScanAccount, txHex: string, txid: string): Promise<{ value: bigint; outpoints: string[] }> {
+    await this.applyOwnTx(account, txHex);
+    const store = (await this.coins_.read()).store;
+    const mine = store.utxos.filter((u) => u.txid === txid);
+    return { value: mine.reduce((a, u) => a + BigInt(u.value), 0n), outpoints: mine.map((u) => `${u.txid}:${u.vout}`) };
   }
 
   async restoreBackup(password: string): Promise<void> {
@@ -2756,8 +2812,10 @@ export class WalletCore {
         s.txid = txid;
         s.closedAt = Date.now();
         await this.forgetPayjoinSecrets([SEND_HPKE_PREFIX + s.id]);
+        // Our change first: the receiver's input means only our own inputs find it (see scan.ts).
+        const change = await this.applyOwnTxChange(account, signed.txHex, txid);
         try {
-          const ours = s.signableInputs.map((u) => `${u.txid}:${u.vout}`);
+          const ours = [...s.signableInputs.map((u) => `${u.txid}:${u.vout}`), ...change.outpoints];
           // Audit L6: the real fee, from the proposal's own input values.
           let fee = 0n;
           let vsize = 0;
@@ -2778,15 +2836,21 @@ export class WalletCore {
             to: s.destination,
             label: s.label ?? this.pendingSendLabels.get(s.id),
             outpoints: ours,
+            change: change.value,
             now: Date.now(),
           });
           const e = hist.entries[txid];
           if (e && fee === 0n) delete e.fee;
           await this.saveHistory(hist);
+          const label = s.label ?? this.pendingSendLabels.get(s.id);
+          if (label && change.outpoints.length > 0) {
+            let meta = await this.loadCoinMeta();
+            for (const op of change.outpoints) meta = setCoinMeta(meta, op, { label });
+            await this.saveCoinMeta(meta);
+          }
         } catch {
           /* history is best effort; the payment is already broadcast */
         }
-        await this.applyOwnTx(account, signed.txHex);
         processed += 1;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
