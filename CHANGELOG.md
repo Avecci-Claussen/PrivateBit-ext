@@ -4,6 +4,18 @@
 
 First public release.
 
+### Security audit v1 (folded into 1.0.0)
+Full report: SECURITY-AUDIT-v1.md. Highlights:
+- Payjoin link coins with an odd spend key sign correctly (existing Fractal receipts become
+  spendable), and link outputs come from the seed so a restore finds them.
+- Site signing refuses SIGHASH_SINGLE and NONE variants; ALL|ANYONECANPAY is signed with a warning.
+- The page provider is added only to sites you allowed, or every site if you turn that on in Privacy.
+- New passwords need at least 12 characters; vaults move to scrypt 2^17 on the next unlock.
+- Explorer blocks are checked against their merkle root, hash and proof of work.
+- An unfinished Payjoin link sends the payer's original payment after its deadline.
+- Auto lock waits at most 2 hours past its usual time for a waiting Payjoin.
+- Sites can only relay transactions that spend their own account and wait after repeated rejections.
+
 ### Wallet
 - Bitcoin and Fractal Bitcoin mainnet, switched with the chain chip. Each chain keeps its own coins, history and settings.
 - One reusable receive code (Silent Payments, BIP352). Coins are found by matching whole blocks on this computer.

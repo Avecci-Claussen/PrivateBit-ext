@@ -222,3 +222,14 @@ describe("L1, L2, L11: site limits", () => {
     expect(highFee(100_000n, 2_000n, 10)).toBe(false);
   });
 });
+
+describe("M6: a waiting Payjoin holds the auto lock for at most 2 hours", () => {
+  it("locks 2 hours after the usual time even while waiting", async () => {
+    const { autoLockDecision, MAX_HOLD_MS } = await import("../src/lib/autolock.ts");
+    const st = { last: 0 };
+    const span = 15 * 60_000;
+    expect(autoLockDecision(st, span + 1, 15, true).lock).toBe(false);
+    expect(autoLockDecision(st, span + MAX_HOLD_MS - 1, 15, true).lock).toBe(false);
+    expect(autoLockDecision(st, span + MAX_HOLD_MS, 15, true).lock).toBe(true);
+  });
+});
