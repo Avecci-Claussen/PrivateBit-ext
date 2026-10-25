@@ -2690,7 +2690,11 @@ export class WalletCore {
     let receiveDirty = false;
     for (const s of sessions) {
       if (!receiveOpen(s) || now <= receiveDeadline(s)) continue;
-      this.endReceive(s, s.status === "proposed" ? "not broadcast" : "expired");
+      const proposed = s.status === "proposed";
+      // Audit M4 (independent): a payer who never broadcasts the proposal still pays. The original
+      // payment is broadcast instead (BIP78), so asking for a proposal to see our coin is not free.
+      if (proposed) s.fallbackTxid = await this.broadcastOriginal(s.id);
+      this.endReceive(s, proposed ? (s.fallbackTxid ? "not broadcast by the payer; their original payment was sent instead" : "not broadcast") : "expired");
       gone.push(s.id, ORIGINAL_PREFIX + s.id);
       receiveDirty = true;
     }
@@ -2706,6 +2710,19 @@ export class WalletCore {
     }
     if (sendDirty) await this.savePayjoinSends(sends);
     if (gone.length) await this.forgetPayjoinSecrets(gone);
+  }
+
+  /** The payer's signed original for a link, broadcast. Undefined when there is none or it was refused. */
+  private async broadcastOriginal(id: string): Promise<string | undefined> {
+    const original = await this.loadOriginal(id).catch(() => undefined);
+    if (!original) return undefined;
+    try {
+      const raw = hex(parsePsbt(original).extract());
+      return await this.source().broadcast(raw);
+    } catch {
+      // Already spent (the payer sent the proposal or another payment), or not final.
+      return undefined;
+    }
   }
 
   async servicePayjoin(): Promise<{ processed: number; errors: string[] }> {

@@ -293,6 +293,8 @@ export type PayjoinReceiveSession = {
   proposalDeadline?: number;
   /** Final transaction id, known from our proposal (signatures do not change a segwit txid). */
   proposedTxid?: string;
+  /** Audit M4 (independent): the payer's original payment, broadcast when the proposal was not. */
+  fallbackTxid?: string;
 };
 
 export type PayjoinSendSession = {

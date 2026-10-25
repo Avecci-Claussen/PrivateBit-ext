@@ -99,7 +99,10 @@ describe("Payjoin receive state machine", () => {
     expect(await alice.w.waitingPayjoin()).toBe(false);
     row = (await alice.w.loadPayjoinSessions())[0]!;
     expect(row.status).toBe("failed");
-    expect(row.error).toBe("not broadcast");
+    // Audit M4 (independent): the payer's original payment goes out instead.
+    expect(row.error).toMatch(/original payment was sent instead/);
+    expect(alice.sent).toHaveLength(1);
+    expect(row.fallbackTxid).toBe(parseTxHex(alice.sent[0]!).txid);
     expect((await alice.w.blockedOutpoints()).reserved.size).toBe(0);
     const hpke = (await alice.kv.get([scopedName(alice.w.activeId!, "privatebit.pj.hpke")]))[scopedName(alice.w.activeId!, "privatebit.pj.hpke")] as Record<string, string> | undefined;
     expect(Object.keys(hpke ?? {}).filter((k) => k.includes(session.id))).toEqual([]);
