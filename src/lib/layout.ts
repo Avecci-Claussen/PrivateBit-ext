@@ -34,6 +34,7 @@ export const WALLET_SCOPED = [
   "privatebit.pj.hpke",
   "privatebit.session",
   "privatebit.scan.grant",
+  "privatebit.delayed",
 ] as const;
 const SCOPED = new Set<string>(WALLET_SCOPED);
 

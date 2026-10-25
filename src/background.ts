@@ -5,6 +5,7 @@ import { DEFAULT_BIRTHDAY, DEFAULT_CHAIN, LEGACY_DEFAULT_BIRTHDAY, redactChain, 
 import { INTENT_PAYJOIN, INTENT_SIMPLE_SEND, PrivateBit } from "./lib/wallet.ts";
 import { autoLockDecision, touch, type ActivityState } from "./lib/autolock.ts";
 import { DEFAULT_PREFS, normalizePrefs, PREFS_KEY, type Prefs } from "./lib/prefs.ts";
+import { randomDelayMs } from "./lib/plan-random.ts";
 import { getPrice, PRICE_PERIOD_MIN, RateLimitedError, type FeeRates } from "./lib/requests.ts";
 import { createMnemonic, loadVaultBlob } from "./lib/vault.ts";
 import { openChain } from "./lib/chain.ts";
@@ -226,13 +227,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void refreshPrice();
     return;
   }
+  if (alarm.name === DELAY_ALARM) {
+    void pumpDelayed();
+    return;
+  }
   if (alarm.name !== FOLLOW_ALARM && alarm.name !== CATCHUP_ALARM) return;
   kickCatchup(0);
 });
 
 kickCatchup(0);
+void pumpDelayed();
 
-type PlanArgs = { destination: string; amount: string; feeRate?: number; coins?: string[]; max?: boolean };
+type PlanArgs = { destination: string; amount: string; feeRate?: number; coins?: string[]; max?: boolean; seed?: string };
 
 type Msg =
   | { type: "STATE" }
@@ -251,7 +257,7 @@ type Msg =
   | { type: "SCAN_KICK" }
   | { type: "TIP" }
   | ({ type: "PLAN" } & PlanArgs)
-  | ({ type: "BROADCAST"; intent: "payjoin" | "simple-send"; label?: string; planId?: string } & PlanArgs)
+  | ({ type: "BROADCAST"; intent: "payjoin" | "simple-send"; label?: string; planId?: string; sendNow?: boolean } & PlanArgs)
   | { type: "MAX_AMOUNT"; feeRate: number; coins?: string[] }
   | { type: "FEE_RATES"; force?: boolean }
   | { type: "PRICE"; force?: boolean }
@@ -265,6 +271,9 @@ type Msg =
   | { type: "ONETIME_VIEW" }
   | { type: "SWEEP_PLAN"; index: number; feeRate: number }
   | { type: "SWEEP_ONETIME"; index: number; feeRate: number }
+  | { type: "DELAYED_SEND_NOW"; id: string }
+  | { type: "DELAYED_CANCEL"; id: string }
+  | { type: "DELAYED_DISMISS"; id: string }
   | { type: "SPLIT_PLAN"; outpoint: string; amounts: string[]; feeRate: number }
   | { type: "SPLIT_COIN"; outpoint: string; amounts: string[]; feeRate: number }
   | { type: "MIGRATE_START" }
@@ -299,6 +308,7 @@ async function bundle() {
     price: (got[PRICE_KEY] as PriceCache | undefined) ?? null,
     activity: (got[ACTIVITY_KEY] as ActivityState | undefined) ?? null,
     waiting: await wallet.waitingPayjoin(),
+    delayed: await wallet.delayedView().catch(() => []),
   };
 }
 
@@ -321,8 +331,59 @@ async function bumpLegacyBirthday(): Promise<void> {
   }
 }
 
+/** The network minimum for "Randomize fee slightly": the cached fee reading, or 1 sat/vB. */
+async function minimumFeeRate(): Promise<number> {
+  const cached = (await kv.get([FEES_KEY]))[FEES_KEY] as FeeRates | undefined;
+  const m = cached?.minimum;
+  return typeof m === "number" && Number.isFinite(m) && m > 0 ? m : 1;
+}
+
 async function planOf(m: PlanArgs) {
-  return { amount: BigInt(m.amount || "0"), opts: { feeRate: m.feeRate, coins: m.coins, max: m.max } };
+  const prefs = await getPrefs();
+  return {
+    amount: BigInt(m.amount || "0"),
+    opts: {
+      feeRate: m.feeRate,
+      coins: m.coins,
+      max: m.max,
+      seed: m.seed,
+      randomizeFee: prefs.randomizeFee,
+      minFeeRate: await minimumFeeRate(),
+      leftover: prefs.leftover,
+    },
+    prefs,
+  };
+}
+
+/* ---------- delayed sending ---------- */
+
+const DELAY_ALARM = "pb.delayed";
+let delayTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Wake for the next held payment. The alarm survives a worker restart; the timer is precise while awake. */
+async function scheduleDelayed(next: number | undefined): Promise<void> {
+  if (delayTimer !== undefined) clearTimeout(delayTimer);
+  delayTimer = undefined;
+  if (next === undefined) {
+    await chrome.alarms.clear(DELAY_ALARM);
+    return;
+  }
+  // Chrome runs alarms at most every 30 seconds; the timer covers the short waits.
+  chrome.alarms.create(DELAY_ALARM, { when: Math.max(Date.now() + 30_000, next) });
+  const wait = Math.max(0, next - Date.now());
+  if (wait < 5 * 60_000) delayTimer = setTimeout(() => void pumpDelayed(), wait + 50);
+}
+
+async function pumpDelayed(): Promise<void> {
+  try {
+    await wallet.loadChain();
+    const r = await wallet.runDelayed();
+    if (r.sent.length) kickCatchup(0);
+    await scheduleDelayed(r.next);
+  } catch {
+    // No vault, or the list cannot be opened yet: look again in a minute.
+    chrome.alarms.create(DELAY_ALARM, { delayInMinutes: 1 });
+  }
 }
 
 async function handle(msg: Msg): Promise<unknown> {
@@ -376,6 +437,7 @@ async function handle(msg: Msg): Promise<unknown> {
     }
     case "SWITCH_WALLET":
       await wallet.openWallet(msg.id);
+      void pumpDelayed();
       await kv.remove([ACTIVITY_KEY, FEES_KEY]);
       await kv.set({ [LOCKINFO_KEY]: { by: "user", at: Date.now() } satisfies LockInfo });
       return bundle();
@@ -385,6 +447,7 @@ async function handle(msg: Msg): Promise<unknown> {
       await kv.remove([LOCKINFO_KEY]);
       await kv.set({ [ACTIVITY_KEY]: touch(undefined, Date.now()) });
       void pumpPayjoin();
+      void pumpDelayed();
       void refreshPrice();
       kickCatchup(0);
       return bundle();
@@ -417,14 +480,20 @@ async function handle(msg: Msg): Promise<unknown> {
     }
     case "BROADCAST": {
       // Only the reviewed plan is sent (audit M10). A changed plan comes back for review.
-      const { amount, opts } = await planOf(msg);
+      const { amount, opts, prefs } = await planOf(msg);
       if (typeof msg.planId !== "string" || typeof opts.feeRate !== "number") throw new Error("Review the payment first.");
       const checked = await wallet.confirmPlan(msg.planId, msg.destination, amount, { ...opts, feeRate: opts.feeRate });
       if (!checked.ok) return { changed: true, plan: checked.plan };
       const built = checked.built;
       const intent = msg.intent === "payjoin" ? INTENT_PAYJOIN : INTENT_SIMPLE_SEND;
-      const result = await wallet.broadcast(intent, built, { label: msg.label, feeRate: opts.feeRate });
+      // Payjoin is never delayed: the receiver is waiting for the payer's transaction.
+      const holdMs = intent === INTENT_PAYJOIN || msg.sendNow ? 0 : randomDelayMs(prefs.sendDelay);
+      const result = await wallet.broadcast(intent, built, { label: msg.label, feeRate: built.feeRate ?? opts.feeRate, holdMs });
       if (result.kind === "payjoin-pending") schedulePayjoinWake();
+      if (result.kind === "delayed") {
+        await scheduleDelayed(result.sendAt);
+        return { delayed: { id: result.id, sendAt: result.sendAt }, fee: built.fee.toString() };
+      }
       return { ...(result.kind === "txid" ? { txid: result.txid } : { pending: true }), fee: built.fee.toString() };
     }
     case "MAX_AMOUNT":
@@ -475,6 +544,21 @@ async function handle(msg: Msg): Promise<unknown> {
     }
     case "SWEEP_ONETIME":
       return wallet.sweepOneTime(msg.index, msg.feeRate);
+    case "DELAYED_SEND_NOW": {
+      const r = await wallet.runDelayed({ only: msg.id });
+      if (r.sent.length) kickCatchup(0);
+      await scheduleDelayed(r.next);
+      return { ...r, bundle: await bundle() };
+    }
+    case "DELAYED_CANCEL": {
+      await wallet.cancelDelayed(msg.id);
+      const left = (await wallet.delayedView()).filter((d) => d.status === "waiting");
+      await scheduleDelayed(left.reduce<number | undefined>((m, d) => (m === undefined || d.sendAt < m ? d.sendAt : m), undefined));
+      return bundle();
+    }
+    case "DELAYED_DISMISS":
+      await wallet.dismissDelayed(msg.id);
+      return bundle();
     case "SPLIT_PLAN":
       return wallet.planSplit(msg.outpoint, msg.amounts, msg.feeRate);
     case "SPLIT_COIN":

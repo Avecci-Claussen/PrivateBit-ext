@@ -1,4 +1,4 @@
-import type { WalletState, CoinView, SessionView } from "../lib/wallet.ts";
+import type { WalletState, CoinView, SessionView, DelayedView } from "../lib/wallet.ts";
 import type { Prefs } from "../lib/prefs.ts";
 import type { ActivityState } from "../lib/autolock.ts";
 import type { HistoryEntry } from "../lib/history.ts";
@@ -18,9 +18,10 @@ export type Bundle = {
   price: PriceCache | null;
   activity: ActivityState | null;
   waiting: boolean;
+  delayed?: DelayedView[];
 };
 export type Fees = FeeRates & { fetchedAt: number };
-export type { WalletState, CoinView, SessionView, HistoryEntry, PlanPayload, ChainConfig, OneTimeRecord, Prefs };
+export type { WalletState, CoinView, SessionView, HistoryEntry, PlanPayload, ChainConfig, OneTimeRecord, Prefs, DelayedView };
 
 export class ApiError extends Error {
   constructor(

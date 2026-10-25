@@ -67,7 +67,10 @@ import {
   type ScanStore,
 } from "./scan.ts";
 import { evenPriv, sessionTweak, tweakSpend } from "./schnorr-util.ts";
-import { buildSend, buildSplit, destinationNeedsPayjoin, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
+import { buildSend, buildSplit, destinationNeedsPayjoin, groupInputLabels, planDigest, planPayload, signPayjoinProposal, type PlanPayload } from "./send.ts";
+import { isPlanSeed, jitterFeeRate, newPlanSeed } from "./plan-random.ts";
+import type { SignableInput } from "./send.ts";
+import type { OwnedOutput } from "./scan.ts";
 import {
   clearSession,
   loadScanGrant,
@@ -137,7 +140,7 @@ import {
 import { ONE_TIME_RESTORE_WINDOW } from "./keys.ts";
 import { feeRatesOf } from "./chain.ts";
 import type { FeeRates } from "./requests.ts";
-import { maxSendable } from "./coinselect.ts";
+import { leftoverLimit, maxSendable, type LeftoverPref } from "./coinselect.ts";
 import { FRACTAL_CHAIN_ID, splitChainSecrets, type ChainSecrets } from "./network.ts";
 import { parseBip21 } from "./bip21.ts";
 
@@ -203,7 +206,37 @@ export type PlanOptions = {
   feeRate?: number;
   coins?: string[];
   max?: boolean;
+  /** Plan seed from the review (plan-random.ts). Missing: a fresh one is made. */
+  seed?: string;
+  /** "Randomize fee slightly": move the rate by up to 5%, never below `minFeeRate`. */
+  randomizeFee?: boolean;
+  minFeeRate?: number;
+  /** Small leftover rule for no-change sending. */
+  leftover?: LeftoverPref;
 };
+
+/** A signed payment held for "Delay sending by a random time". Never broadcast until sendAt. */
+export type DelayedSend = {
+  id: string;
+  createdAt: number;
+  sendAt: number;
+  status: "waiting" | "sent" | "failed";
+  txHex: string;
+  txid?: string;
+  error?: string;
+  sentAt?: number;
+  /** History, labels and the coin list were updated for this send. */
+  recorded?: boolean;
+  label?: string;
+  feeRate: number;
+  amount: string;
+  fee: string;
+  change: string;
+  destination: string;
+  signableInputs: SignableInput[];
+  ourOutputs: OwnedOutput[];
+};
+export type DelayedView = Omit<DelayedSend, "txHex" | "signableInputs" | "ourOutputs">;
 
 export type SessionView = {
   role: "receive" | "send";
@@ -228,9 +261,9 @@ export type SessionView = {
   cancellable?: boolean;
 };
 
-export type BroadcastResult = { kind: "txid"; txid: string } | { kind: "payjoin-pending" };
+export type BroadcastResult = { kind: "txid"; txid: string } | { kind: "payjoin-pending" } | { kind: "delayed"; id: string; sendAt: number };
 
-type BuiltPlan = Awaited<ReturnType<typeof buildSend>>;
+type BuiltPlan = Awaited<ReturnType<typeof buildSend>> & { feeRate?: number };
 
 export const FOLLOW_TIP_STEPS = 24;
 /** During a scan, history is rebuilt at most this often. */
@@ -250,7 +283,9 @@ const HISTORY_KEY = "privatebit.history";
 const COINMETA_KEY = "privatebit.coinmeta";
 const ONETIME_KEY = "privatebit.onetime";
 /** Sealed with the scan key, which block matching keeps after Lock. Everything else uses the data key. */
-const SCAN_SEALED = new Set([SCAN_KEY, CHAIN_SECRETS_KEY]);
+/** Held payments are sealed with the scan key so the worker can still send them after Lock. */
+const DELAYED_KEY = "privatebit.delayed";
+const SCAN_SEALED = new Set([SCAN_KEY, CHAIN_SECRETS_KEY, DELAYED_KEY]);
 const PJ_SEND = "privatebit.pj.send";
 const PJ_HPKE = "privatebit.pj.hpke";
 const SEND_HPKE_PREFIX = "send:";
@@ -329,6 +364,8 @@ export class WalletCore {
     this.cancelScan();
     // Session-only Payjoin secrets are deleted, never carried over (audit H9). The UI asks first.
     await this.cancelOpenPayjoins("wallet switched").catch(() => undefined);
+    // A held payment belongs to this wallet. It goes out now rather than waiting unseen (the UI says so first).
+    await this.sendAllDelayedNow().catch(() => undefined);
     await this.settle().catch(() => undefined);
     await this.lock();
     await this.kv.remove([SCAN_GRANT_KEY]);
@@ -787,6 +824,7 @@ export class WalletCore {
     try {
       await this.closeExpired();
       await this.notePayjoinPaid(await this.loadScan());
+      await this.finishDelayedRecords();
     } catch {
       /* the next scan step runs it again */
     }
@@ -1222,20 +1260,26 @@ export class WalletCore {
       if (s.status !== "waiting") continue;
       for (const inp of s.signableInputs) reserved.add(`${inp.txid}:${inp.vout}`);
     }
+    for (const d of await this.loadDelayed()) {
+      if (d.status !== "waiting") continue;
+      for (const inp of d.signableInputs) reserved.add(`${inp.txid}:${inp.vout}`);
+    }
     return { reserved, frozen: frozenOutpoints(await this.loadCoinMeta()) };
   }
 
-  async planSend(destination: string, amount: bigint, opts: PlanOptions = {}): Promise<ReturnType<typeof buildSend>> {
+  async planSend(destination: string, amount: bigint, opts: PlanOptions = {}): Promise<BuiltPlan> {
     const { account, scan } = await this.requireAccount();
-    const feeRate = opts.feeRate ?? (await this.source().estimateFeeSatPerVb());
-    if (!Number.isFinite(feeRate) || feeRate <= 0) throw new Error("fee rate must be above 0 sat/vB");
+    const chosenRate = opts.feeRate ?? (await this.source().estimateFeeSatPerVb());
+    if (!Number.isFinite(chosenRate) || chosenRate <= 0) throw new Error("fee rate must be above 0 sat/vB");
+    const seed = isPlanSeed(opts.seed) ? opts.seed : newPlanSeed();
+    const feeRate = opts.randomizeFee ? jitterFeeRate(chosenRate, seed, opts.minFeeRate) : chosenRate;
     const { reserved, frozen } = await this.blockedOutpoints();
     const skipOutpoints = new Set([...reserved, ...frozen]);
     if (!opts.coins) {
       // Automatic never touches a one-time coin; it is moved by its own sweep.
       for (const u of scan.utxos) if (u.kind === "bip86") skipOutpoints.add(outpointOf(u));
     }
-    return buildSend({
+    const built = await buildSend({
       account,
       utxos: scan.utxos,
       destination,
@@ -1245,7 +1289,10 @@ export class WalletCore {
       skipOutpoints,
       include: opts.coins,
       max: opts.max,
+      leftover: leftoverLimit(feeRate, opts.leftover ?? "auto"),
+      seed,
     });
+    return { ...built, feeRate };
   }
 
   /** Pasting a payment link this wallet created itself. Another wallet's link is not this one. */
@@ -1267,8 +1314,15 @@ export class WalletCore {
     return this.payloadOf(await this.planSend(destination, amount, opts));
   }
 
-  private payloadOf(built: BuiltPlan): PlanPayload {
-    return { ...planPayload(built), planId: planDigest(built.psbtBase64, { chain: `fractal:${FRACTAL_CHAIN_ID}`, wallet: this.walletId }) };
+  private async payloadOf(built: BuiltPlan): Promise<PlanPayload> {
+    const meta = await this.loadCoinMeta().catch(() => ({}) as CoinMetaMap);
+    const inputs = built.signableInputs.map((u) => `${u.txid}:${u.vout}`);
+    return {
+      ...planPayload(built),
+      ...(built.feeRate !== undefined ? { feeRate: built.feeRate } : {}),
+      inputLabels: groupInputLabels(inputs, (op) => meta[op]?.label),
+      planId: planDigest(built.psbtBase64, { chain: `fractal:${FRACTAL_CHAIN_ID}`, wallet: this.walletId }),
+    };
   }
 
   /**
@@ -1286,7 +1340,7 @@ export class WalletCore {
     if (!Number.isFinite(opts.feeRate) || opts.feeRate <= 0) throw new PolicyError("Review the payment first.");
     await this.assertNotOwnLink(destination);
     const built = await this.planSend(destination, amount, opts);
-    const now = this.payloadOf(built);
+    const now = await this.payloadOf(built);
     if (now.planId !== planId) return { ok: false, plan: now };
     return { ok: true, built };
   }
@@ -1307,9 +1361,14 @@ export class WalletCore {
   async broadcast(
     intent: BroadcastIntent,
     built: Awaited<ReturnType<typeof buildSend>>,
-    extra?: { label?: string; feeRate?: number; kind?: HistoryKind },
+    extra?: { label?: string; feeRate?: number; kind?: HistoryKind; holdMs?: number },
   ): Promise<BroadcastResult> {
     await this.requireAccount();
+    if (intent !== INTENT_PAYJOIN && extra?.holdMs && extra.holdMs > 0) {
+      // "Delay sending by a random time": signed now, held encrypted, sent by the worker later.
+      const held = await this.holdDelayed(built, { label: extra.label, feeRate: extra.feeRate ?? 0, holdMs: extra.holdMs });
+      return { kind: "delayed", id: held.id, sendAt: held.sendAt };
+    }
     if (intent === INTENT_PAYJOIN) {
       if (!destinationNeedsPayjoin(built.request) || !built.request.pj) {
         throw new PolicyError(
@@ -1390,6 +1449,158 @@ export class WalletCore {
       pieces: kind === "split" ? built.ourOutputs.length : undefined,
     });
     await this.saveHistory(hist);
+  }
+
+  /* ---------- delayed sending ---------- */
+
+  /** One change to the held list at a time: the timer, Send now and Cancel never race. */
+  private delayTail: Promise<unknown> = Promise.resolve();
+  private delayLocked<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.delayTail.then(fn);
+    this.delayTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async loadDelayed(): Promise<DelayedSend[]> {
+    const got = await this.loadSealed<DelayedSend[]>(DELAYED_KEY, () => []);
+    return Array.isArray(got.value) ? got.value : [];
+  }
+
+  /** False when the held list exists but cannot be opened right now (no key): never overwrite it then. */
+  private async delayedReadable(): Promise<boolean> {
+    const got = await this.loadSealed<DelayedSend[]>(DELAYED_KEY, () => []);
+    return got.status !== "unreadable";
+  }
+
+  private async saveDelayed(list: DelayedSend[]): Promise<void> {
+    await this.saveSealed(DELAYED_KEY, list);
+  }
+
+  /** Held payments for the UI, without the signed transaction. */
+  async delayedView(): Promise<DelayedView[]> {
+    return (await this.loadDelayed()).map(({ txHex: _t, signableInputs: _s, ourOutputs: _o, ...v }) => v);
+  }
+
+  async holdDelayed(built: BuiltPlan, extra: { label?: string; feeRate: number; holdMs: number }): Promise<DelayedSend> {
+    return this.delayLocked(async () => {
+      const now = Date.now();
+      const entry: DelayedSend = {
+        id: hex(randomBytes(8)),
+        createdAt: now,
+        sendAt: now + Math.max(0, Math.round(extra.holdMs)),
+        status: "waiting",
+        txHex: built.txHex,
+        label: extra.label,
+        feeRate: extra.feeRate,
+        amount: built.amount.toString(),
+        fee: built.fee.toString(),
+        change: built.change.toString(),
+        destination: built.request.raw,
+        signableInputs: built.signableInputs,
+        ourOutputs: built.ourOutputs,
+      };
+      if (!(await this.delayedReadable())) throw new Error("held payments cannot be read right now; unlock and try again");
+      const list = (await this.loadDelayed()).filter((d) => d.status === "waiting" || !d.recorded);
+      list.push(entry);
+      await this.saveDelayed(list);
+      return entry;
+    });
+  }
+
+  /** Cancel is safe: a held payment was never broadcast. Its coins become spendable again. */
+  async cancelDelayed(id: string): Promise<boolean> {
+    return this.delayLocked(async () => {
+      const list = await this.loadDelayed();
+      const d = list.find((x) => x.id === id);
+      if (!d || d.status !== "waiting") return false;
+      await this.saveDelayed(list.filter((x) => x.id !== id));
+      return true;
+    });
+  }
+
+  async sendAllDelayedNow(): Promise<void> {
+    for (const d of await this.loadDelayed()) if (d.status === "waiting") await this.runDelayed({ only: d.id });
+  }
+
+  /** Drop a "not sent" entry after the user has seen it. */
+  async dismissDelayed(id: string): Promise<void> {
+    await this.delayLocked(async () => {
+      const list = await this.loadDelayed();
+      await this.saveDelayed(list.filter((x) => !(x.id === id && x.status === "failed")));
+    });
+  }
+
+  /**
+   * Broadcast every held payment that is due (or the one asked for with Send now). Works after
+   * Lock: the list is sealed with the scan key. History and labels need the data key, so after
+   * Lock they are written at the next unlock. Returns when the next one is due.
+   */
+  async runDelayed(opts: { now?: number; only?: string } = {}): Promise<{ sent: string[]; failed: string[]; next?: number }> {
+    return this.delayLocked(async () => {
+      const now = opts.now ?? Date.now();
+      if (!(await this.delayedReadable())) return { sent: [], failed: [] };
+      const list = await this.loadDelayed();
+      const sent: string[] = [];
+      const failed: string[] = [];
+      for (const d of list) {
+        if (d.status !== "waiting") continue;
+        if (opts.only ? d.id !== opts.only : d.sendAt > now) continue;
+        try {
+          d.txid = await this.source().broadcast(d.txHex);
+          d.status = "sent";
+          d.sentAt = Date.now();
+          sent.push(d.id);
+          await this.coins_.update((fresh) => applyBuiltSend(fresh, d.txHex, d.ourOutputs), { flush: true });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (/failed to fetch|fetch failed|network|timeout|timed out|abort|429|503|rate limit|request limit/i.test(msg)) {
+            // Not reached the network: try again in a minute, still held.
+            d.sendAt = now + 60_000;
+          } else {
+            d.status = "failed";
+            d.error = msg;
+            failed.push(d.id);
+          }
+        }
+      }
+      await this.recordDelayed(list);
+      await this.saveDelayed(list);
+      const next = list.filter((d) => d.status === "waiting").reduce<number | undefined>((m, d) => (m === undefined || d.sendAt < m ? d.sendAt : m), undefined);
+      return { sent, failed, ...(next !== undefined ? { next } : {}) };
+    });
+  }
+
+  /** Write history and labels for held payments that went out while locked. Mutates `list`. */
+  private async recordDelayed(list: DelayedSend[]): Promise<void> {
+    if (!(await this.dataKey())) return;
+    for (const d of list) {
+      if (d.status !== "sent" || d.recorded || !d.txid) continue;
+      const builtLike = {
+        signableInputs: d.signableInputs,
+        ourOutputs: d.ourOutputs,
+        amount: BigInt(d.amount),
+        fee: BigInt(d.fee),
+        change: BigInt(d.change),
+        request: { raw: d.destination },
+      } as unknown as Awaited<ReturnType<typeof buildSend>>;
+      await this.afterBroadcast(d.txid, builtLike, "sent", d.label, d.feeRate);
+      d.recorded = true;
+    }
+    // Sent and recorded entries are done; history has them now.
+    for (let i = list.length - 1; i >= 0; i--) if (list[i]!.status === "sent" && list[i]!.recorded) list.splice(i, 1);
+  }
+
+  /** At unlock: finish the records of payments that were sent while locked. */
+  async finishDelayedRecords(): Promise<void> {
+    await this.delayLocked(async () => {
+      const list = await this.loadDelayed();
+      if (!list.some((d) => d.status === "sent" && !d.recorded)) return;
+      await this.recordDelayed(list);
+      await this.saveDelayed(list);
+    });
   }
 
   /** Scan newly indexed heights. One call already spends the catch-up budget. */
@@ -2721,6 +2932,12 @@ export class PrivateBit {
   maxAmount = this.d("maxAmount");
   feeRates = this.d("feeRates");
   broadcast = this.d("broadcast");
+  delayedView = this.d("delayedView");
+  cancelDelayed = this.d("cancelDelayed");
+  dismissDelayed = this.d("dismissDelayed");
+  runDelayed = this.d("runDelayed");
+  finishDelayedRecords = this.d("finishDelayedRecords");
+  loadDelayed = this.d("loadDelayed");
 
   /** Chain source for the open wallet's settings. */
   source(): ChainSource {
