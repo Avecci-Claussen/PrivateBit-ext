@@ -1,6 +1,6 @@
 import { S, screens, actions, loaders, go, back, render, run, refresh, fv, busy, err, toast } from "../app.ts";
 import { call, type ChainConfig, type Prefs } from "../api.ts";
-import { html, I, curNet, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
+import { html, raw, I, curNet, NETLOGO, num, hm, type Safe, UNIT, CHAIN_SHORT, CHAIN } from "../kit.ts";
 import { findSiteForm, sitesIntro, sitesList } from "./dapp.ts";
 import { hdr, tabs, mailboxHost } from "../chrome.ts";
 import { netInfo, DEFAULT_PAYJOIN_DIRECTORY, DEFAULT_OHTTP_RELAY, publicServiceUrl } from "../../lib/network.ts";
@@ -113,12 +113,43 @@ screens.settings = () => {
   ${row("globe", "Connected sites", "Websites you approved, each with its own account", "set-sites")}
 </div>
   ${S.mode === "popup" ? html`<button class="btn btn-secondary btn-block" type="button" data-act="open-full">${I("external-link", "s16")}Open full page</button>` : ""}
-  <p class="cap" data-st="91a870">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p>`,
+  ${aboutBlock()}`,
     page: fullSettings(),
   };
 };
 actions["open-full"] = () => {
   void chrome.runtime.openOptionsPage();
+};
+
+const X_URL = "https://x.com/The_LonelyBit";
+const TELEGRAM_URL = "https://t.me/FractalBits";
+const GITHUB_EXT = "https://github.com/Avecci-Claussen/PrivateBit-ext";
+const GITHUB_ANDROID = "https://github.com/Avecci-Claussen/PrivateBit-Mobile-Android";
+const PUBLIC_LINKS = new Set([X_URL, TELEGRAM_URL, GITHUB_EXT, GITHUB_ANDROID]);
+const onPhone = (): boolean => typeof (globalThis as { Capacitor?: unknown }).Capacitor !== "undefined";
+
+const X_MARK = raw(`<svg class="brand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/></svg>`);
+const TELEGRAM_MARK = raw(`<svg class="brand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`);
+const GITHUB_MARK = raw(`<svg class="brand" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>`);
+
+function socialButton(url: string, label: string, mark: Safe): Safe {
+  return html`<button class="btn btn-ghost btn-sm social-btn" type="button" data-act="open-social" data-url="${url}" aria-label="${label}" title="${label}">${mark}</button>`;
+}
+
+function aboutBlock(): Safe {
+  const github = onPhone() ? GITHUB_ANDROID : GITHUB_EXT;
+  return html`<div class="about"><p class="cap" data-st="91a870">PrivateBit ${VERSION}</p><div class="social">${socialButton(X_URL, "X", X_MARK)}${socialButton(TELEGRAM_URL, "Telegram", TELEGRAM_MARK)}${socialButton(github, "GitHub", GITHUB_MARK)}</div></div>`;
+}
+
+actions["open-social"] = (el) => {
+  const url = el.dataset.url ?? "";
+  if (!PUBLIC_LINKS.has(url)) return;
+  const tabs = (chrome as { tabs?: { create?: (o: { url: string }) => void } }).tabs;
+  if (tabs?.create) {
+    tabs.create({ url });
+    return;
+  }
+  window.location.assign(url);
 };
 
 /* ---------- network and data source (55) ---------- */
@@ -818,7 +849,7 @@ function fullSettings(): Safe {
       <div class="row" data-st="62da06"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-password">Change password</button><button class="btn btn-danger-outline" type="button" data-act="go" data-to="remove">Remove ${(S.b!.state.wallets ?? []).find((w) => w.active)?.name ?? "wallet"}</button></div></section>
     <section class="sect" id="bk"><header><h2>Backup and finding coins</h2><p>Your recovery words restore everything except the labels you typed.</p></header>
       <div class="row" data-st="62da06"><button class="btn btn-secondary" type="button" data-act="go" data-to="set-backup">${I("file-key", "s16")}Show recovery words</button><button class="btn btn-secondary" type="button" data-act="go" data-to="set-scan">${I("scan-line", "s16")}Look again from a block</button><button class="btn btn-secondary" type="button" data-act="go" data-to="migrate">${I("arrow-right-left", "s16")}Move coins from another wallet</button></div>
-      <p class="cap">PrivateBit ${VERSION}. GreyBound, The Lonely Bits LLC</p></section>
+      ${aboutBlock()}</section>
     <section class="sect" id="sites"><header><h2>Connected sites</h2><p>Websites you approved. Each has its own account on each chain.</p></header>
       <div class="stack" data-st="765d57">${sitesIntro()}${sitesList()}${findSiteForm()}</div></section>
   </div></div>`;

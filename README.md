@@ -92,4 +92,4 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 
 ## License
 
-No license has been chosen yet. Until one is added, all rights are reserved by the authors. Third party licenses for bundled fonts and icons are in `public/licenses/`.
+MIT. See [LICENSE](LICENSE). Third party licenses for bundled fonts and icons are in `public/licenses/`.
