@@ -95,3 +95,6 @@ See [SECURITY.md](SECURITY.md) for how to report a problem.
 ## License
 
 MIT. See [LICENSE](LICENSE). Third party licenses for bundled fonts and icons are in `public/licenses/`.
+
+<img width="1024" height="1024" alt="mark-dark-1024" src="https://github.com/user-attachments/assets/8f1b0ea4-fff0-4c5b-8f27-7e6c8aa71593" />
+
