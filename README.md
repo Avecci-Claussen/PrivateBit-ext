@@ -1,4 +1,4 @@
-# PrivateBit
+<img width="1024" height="198" alt="lockup-dark-1024" src="https://github.com/user-attachments/assets/3fbfdfd1-db00-4080-b608-d7d34acb9097" />
 
 A private wallet for Bitcoin and Fractal Bitcoin, as a Chrome extension. You get one reusable receive code (Silent Payments, BIP352), payment links that Payjoin with other PrivateBit users, and keys that never leave your computer. Websites can connect to it, and each one gets its own separate account.
 
