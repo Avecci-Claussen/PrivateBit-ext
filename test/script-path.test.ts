@@ -78,6 +78,18 @@ describe("script path signing for sites", () => {
     const priv = reviewPsbt(parsePsbt(psbt), key, () => "private", { toSignInputs: [{ index: 0, disableTweakSigner: true }] });
     expect(priv.refuse).toMatch(/private balance/);
   });
+  it("useTweakedSigner false selects the untweaked key, and true is refused when the script checks the other key", () => {
+    const { pay } = scriptCoin(internalX);
+    const psbt = psbtFor(pay);
+    const off = reviewPsbt(parsePsbt(psbt), key, () => "unknown", { toSignInputs: [{ index: 0, publicKey: key.publicKey, useTweakedSigner: false }] });
+    expect(off.refuse).toBeUndefined();
+    expect(off.inputs[0]!.script?.key).toBe("internal");
+    const on = reviewPsbt(parsePsbt(psbt), key, () => "unknown", { toSignInputs: [{ index: 0, useTweakedSigner: true }] });
+    expect(on.refuse).toMatch(/tweaked key/);
+    const { pay: outPay } = scriptCoin(new Uint8Array(k.output));
+    const forced = reviewPsbt(parsePsbt(psbtFor(outPay)), key, () => "unknown", { toSignInputs: [{ index: 0, address: k.address, disableTweakSigner: true }] });
+    expect(forced.refuse).toMatch(/untweaked key/);
+  });
   it("an untweaked key path signature for the site's own coin is refused", () => {
     const tx = new btc.Transaction({ allowUnknownOutputs: true });
     tx.addInput({ txid: "55".repeat(32), index: 0, witnessUtxo: { script: fromHex(k.scriptPubKey), amount: 10_000n } });

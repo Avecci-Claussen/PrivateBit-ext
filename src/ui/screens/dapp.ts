@@ -12,7 +12,7 @@ import { messageRisks, visibleMessage } from "../../lib/message-check.ts";
 type Owner = "site" | "private" | "other-site" | "unknown";
 type Review = {
   inputs: { index: number; txid: string; vout: number; value: string | null; address?: string; owner: Owner; sign: boolean; sighash: number; script?: { leaf: string; version: number; key: string } }[];
-  outputs: { index: number; value: string; address?: string; memo?: string; owner: Owner }[];
+  outputs: { index: number; value: string; address?: string; memo?: string; owner: Owner; locked?: boolean }[];
   toSign: number[];
   spent: string;
   returned: string;
@@ -93,19 +93,19 @@ function reviewBlock(r: Review, n: number, of: number): Safe {
   return html`<section class="stack" aria-label="Transaction ${n} of ${of}">
   ${of > 1 ? html`<p class="io-h">Transaction ${n} of ${of}</p>` : ""}
   ${r.refuse ? html`<div class="banner danger" role="alert">${I("ban", "s16")}<div><span class="bt">PrivateBit will not sign this</span>${r.refuse}</div></div>` : ""}
-  <div class="hero-amt"><p class="cap">Leaves this site's account</p><p class="a">${fb(net > 0n ? net : 0n, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(net > 0n ? net : 0n)}${fee !== null ? ", network fee included" : ""}</p></div>
+  <div class="hero-amt"><p class="cap">Leaves this site's account</p><p class="a">${fb(net > 0n ? net : 0n, { unit: false })}<span class="unit"> ${UNIT()}</span></p><p class="fiat">${sats(net > 0n ? net : 0n)}${fee !== null && fee >= 0n ? ", network fee included" : ""}</p></div>
   <div class="card"><div class="kv">
     <div class="r"><span class="k">You sign</span><span class="v"><span>${mine.length} ${mine.length === 1 ? "input" : "inputs"}, ${fb(spent)}</span><span class="cap">${mine.some((x) => x.script) ? "From this site's account and scripts that name its key" : "From this site's account only"}</span></span></div>
     ${notMine.length ? html`<div class="r"><span class="k">Not yours</span><span class="v"><span>${notMine.length} ${notMine.length === 1 ? "input" : "inputs"}</span><span class="cap">Added by the site or someone else. You do not sign ${notMine.length === 1 ? "it" : "them"}.</span></span></div>` : ""}
     ${back > 0n ? html`<div class="r"><span class="k">Back to the site account</span><span class="v mono">${fb(back)}</span></div>` : ""}
-    <div class="r"><span class="k">Network fee</span><span class="v">${fee === null ? html`<span class="muted">Unknown. Some inputs have no amount.</span>` : html`<span class="mono">${sats(fee)}</span>`}</span></div>
+    <div class="r"><span class="k">Network fee</span><span class="v">${fee === null ? html`<span class="muted">Unknown. Some inputs have no amount.</span>` : fee < 0n ? html`<span class="muted">Not final. The buyer adds coins after you sign.</span>` : html`<span class="mono">${sats(fee)}</span>`}</span></div>
   </div></div>
   <p class="io-h">Goes to</p>
-  <div class="io">${out.length ? out.map((o) => html`<div class="io-row"><span class="badge ${o.memo !== undefined ? "" : "warn"}">${o.memo !== undefined ? "Note" : "Leaves"}</span><span class="code">${o.memo !== undefined ? o.memo : mid(o.address ?? "Unknown script", 10, 6)}</span><span class="amt">${fb(o.value)}</span></div>`) : html`<div class="io-row"><span class="code">Nothing leaves</span></div>`}</div>
+  <div class="io">${out.length ? out.map((o) => html`<div class="io-row"><span class="badge ${o.locked === false ? "warn" : o.memo !== undefined ? "" : "warn"}">${o.locked === false ? "Not locked" : o.memo !== undefined ? "Note" : "Leaves"}</span><span class="code">${o.memo !== undefined ? o.memo : mid(o.address ?? "Unknown script", 10, 6)}</span><span class="amt">${fb(o.value)}</span></div>`) : html`<div class="io-row"><span class="code">Nothing leaves</span></div>`}</div>
   ${r.warnings.length ? html`<div class="banner warn" role="note">${I("triangle-alert", "s16")}<div><span class="bt">Check before signing</span>${r.warnings.join(" ")}</div></div>` : ""}
   <details class="card pad-sm"><summary class="small strong" data-st="3b6a3a">All inputs and outputs</summary><div class="stack" data-st="56f435">
     <p class="io-h">Inputs</p><div class="io">${r.inputs.map((x) => html`<div class="io-row"><span class="badge ${x.sign ? (x.script ? "warn" : "ok") : ""}">${x.sign ? (x.script ? "You sign a script" : "You sign") : "Not yours"}</span><span class="code">${mid(`${x.txid}:${x.vout}`, 10, 4)}</span><span class="amt">${x.value === null ? "?" : fb(x.value)}</span></div>`)}</div>
-    <p class="io-h">Outputs</p><div class="io">${r.outputs.map((o) => html`<div class="io-row"><span class="badge ${o.owner === "site" ? "ok" : ""}">${o.owner === "site" ? "Site account" : o.memo !== undefined ? "Note" : "Leaves"}</span><span class="code">${o.memo ?? mid(o.address ?? "Unknown script", 10, 6)}</span><span class="amt">${fb(o.value)}</span></div>`)}</div>
+    <p class="io-h">Outputs</p><div class="io">${r.outputs.map((o) => html`<div class="io-row"><span class="badge ${o.locked === false ? "warn" : o.owner === "site" ? "ok" : ""}">${o.locked === false ? "Not locked" : o.owner === "site" ? "Site account" : o.memo !== undefined ? "Note" : "Leaves"}</span><span class="code">${o.memo ?? mid(o.address ?? "Unknown script", 10, 6)}</span><span class="amt">${fb(o.value)}</span></div>`)}</div>
   </div></details>
 </section>`;
 }

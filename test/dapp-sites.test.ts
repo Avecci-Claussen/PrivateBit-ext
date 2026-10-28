@@ -20,6 +20,7 @@ import {
   signMessageEcdsa,
   signReviewedPsbt,
   siteIndex,
+  siteSpendIn,
   upsertSite,
   emptySites,
   type SiteKey,
@@ -184,16 +185,51 @@ describe("PSBT review and signing", () => {
     expect(reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 9 }] }).refuse).toMatch(/does not exist/);
     expect(reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 1, publicKey: k.publicKey }] }).refuse).toBeUndefined();
   });
-  it("sighash (audit H3): SINGLE and NONE refused in every form; ALL|ANYONECANPAY warns and signs with the type byte", () => {
-    const mk = () => parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], [{ script: other, amount: 9_000n }]));
-    for (const t of [0x02, 0x03, 0x82, 0x83]) expect(reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [t] }] }).refuse).toMatch(/does not sign it/);
+  it("sighash: a seller listing is partial, and SINGLE with no matching output is refused", () => {
+    const mk = () => parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], [{ script: other, amount: 9_000n }, { script: other, amount: 1n }]));
+    for (const t of [0x03, 0x83]) {
+      const tx = mk();
+      const r = reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [t] }] });
+      expect(r.refuse, String(t)).toBeUndefined();
+      const out = parsePsbt(signReviewedPsbt(tx, r, k, false));
+      expect(out.getInput(0).tapKeySig?.length).toBe(65);
+      expect(out.getInput(0).tapKeySig![64]).toBe(t);
+    }
+    for (const t of [0x02, 0x82]) {
+      expect(reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, sighashTypes: [t] }] }).refuse, String(t)).toMatch(/locks no output/);
+    }
     const tx = mk();
-    const r = reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x81] }] });
-    expect(r.refuse).toBeUndefined();
-    expect(r.warnings.join(" ")).toMatch(/ALL\|ANYONECANPAY/);
-    const out = parsePsbt(signReviewedPsbt(tx, r, k, false));
-    expect(out.getInput(0).tapKeySig?.length).toBe(65);
-    expect(() => signReviewedPsbt(mk(), reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, sighashTypes: [0x83] }] }), k)).toThrow();
+    const anyone = reviewPsbt(tx, k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x81] }] });
+    expect(anyone.refuse).toBeUndefined();
+    expect(anyone.outputs.every((o) => o.locked)).toBe(true);
+    expect(anyone.warnings.join(" ")).toMatch(/ALL\|ANYONECANPAY/);
+    const listing = parsePsbt(psbtFor(
+      [{ script: k.scriptPubKey, amount: 10_000n }, { script: other, amount: 0n }],
+      [{ script: other, amount: 50_000n }, { script: k.scriptPubKey, amount: 1n }],
+    ));
+    const reviewed = reviewPsbt(listing, k, owner, { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x83] }] });
+    expect(reviewed.refuse).toBeUndefined();
+    expect(reviewed.warnings.join(" ")).toMatch(/do not cover the outputs/);
+    expect(reviewed.outputs.map((o) => o.locked)).toEqual([true, false]);
+    expect(BigInt(reviewed.fee!)).toBeLessThan(0n);
+    const sig = parsePsbt(signReviewedPsbt(listing, reviewed, k, false)).getInput(0).tapKeySig!;
+    const scripts = [fromHex(k.scriptPubKey), fromHex(other)];
+    const amounts = [10_000n, 0n];
+    const buyerFills = parsePsbt(psbtFor(
+      [{ script: k.scriptPubKey, amount: 10_000n }, { script: other, amount: 0n }],
+      [{ script: other, amount: 50_000n }, { script: k.scriptPubKey, amount: 9_000n }],
+    ));
+    expect(schnorr.verify(sig.slice(0, 64), buyerFills.preimageWitnessV1(0, scripts, 0x83, amounts), fromHex(k.output))).toBe(true);
+    const priceChanged = parsePsbt(psbtFor(
+      [{ script: k.scriptPubKey, amount: 10_000n }, { script: other, amount: 0n }],
+      [{ script: other, amount: 1n }, { script: k.scriptPubKey, amount: 1n }],
+    ));
+    expect(schnorr.verify(sig.slice(0, 64), priceChanged.preimageWitnessV1(0, scripts, 0x83, amounts), fromHex(k.output))).toBe(false);
+    expect(reviewPsbt(listing, k, owner, { toSignInputs: [{ index: 0, sighashTypes: [0x01] }] }).refuse).toMatch(/Outputs are larger/);
+    const noOutput = parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n }], []));
+    expect(reviewPsbt(noOutput, k, owner, { toSignInputs: [{ index: 0, sighashTypes: [0x03] }] }).refuse).toMatch(/any transaction/);
+    expect(reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, sighashTypes: [0x04] }] }).refuse).toMatch(/does not sign that type/);
+    expect(reviewPsbt(mk(), k, owner, { toSignInputs: [{ index: 0, address: k.address, useTweakedSigner: false }] }).refuse).toMatch(/untweaked key/);
   });
   it("nothing to sign is refused", () => {
     const tx = parsePsbt(psbtFor([{ script: other, amount: 5_000n }], [{ script: other, amount: 4_000n }]));
@@ -201,6 +237,23 @@ describe("PSBT review and signing", () => {
   });
   it("rejects junk PSBTs", () => {
     expect(() => parsePsbt("00ff")).toThrow(/not a valid PSBT/);
+  });
+  it("recognizes a site spend the scan has not seen, and ignores a lookup that fails", async () => {
+    const tx = parsePsbt(psbtFor([{ script: k.scriptPubKey, amount: 10_000n, txid: "cd".repeat(32) }], [{ script: other, amount: 9_000n }]));
+    const id = "cd".repeat(32);
+    await expect(siteSpendIn(tx, k.scriptPubKey, new Set(), async (txid, vout) => {
+      expect(txid).toBe(id);
+      expect(vout).toBe(0);
+      return { script: k.scriptPubKey, value: 10_000n };
+    })).resolves.toEqual({ txid: id, vout: 0, value: 10_000n });
+    await expect(siteSpendIn(tx, k.scriptPubKey, new Set([`${id}:0`]), async () => {
+      throw new Error("should not look up a coin the scan already has");
+    })).resolves.toMatchObject({ txid: id });
+    await expect(siteSpendIn(tx, k.scriptPubKey, new Set(), async () => undefined)).resolves.toBeUndefined();
+    await expect(siteSpendIn(tx, k.scriptPubKey, new Set(), async () => {
+      throw new Error("down");
+    })).resolves.toBeUndefined();
+    await expect(siteSpendIn(tx, other, new Set(), async () => ({ script: k.scriptPubKey, value: 10_000n }))).resolves.toBeUndefined();
   });
 });
 
@@ -247,6 +300,7 @@ describe("provider request validation", () => {
     expect(code(() => parseRequest("pushTx", [{ rawtx: "zz" }]))).toBe(ERR.invalid);
     expect(code(() => parseRequest("sendBitcoin", ["bc1x", 10]))).toBe(ERR.invalid);
     expect(code(() => parseRequest("sendBitcoin", ["bc1x", 1000, { feeRate: -1 }]))).toBe(ERR.invalid);
+    expect(() => parseRequest("sendBitcoin", ["bc1q", 1000, { feeRate: 0 }])).toThrow(/above 0 and at most 5000/);
     expect(code(() => parseRequest("switchChain", ["ETHEREUM"]))).toBe(ERR.unsupported);
     expect(code(() => parseRequest("switchNetwork", ["testnet"]))).toBe(ERR.unsupported);
     expect(code(() => parseRequest("signPsbt", ["00", { toSignInputs: [{ index: -1 }] }]))).toBe(ERR.invalid);
@@ -265,6 +319,12 @@ describe("provider request validation", () => {
     const r = parseRequest("signPsbt", ["70736274ff", { autoFinalized: false, toSignInputs: [{ index: 0, publicKey: "02AA", sighashTypes: [1] }] }]);
     expect(r).toMatchObject({ options: { autoFinalized: false, toSignInputs: [{ index: 0, publicKey: "02aa", sighashTypes: [1] }] } });
     expect(parseRequest("signPsbts", [["70736274ff", "cHNidP8="]])).toMatchObject({ psbts: ["70736274ff", "cHNidP8="] });
+    expect(parseRequest("signPsbts", [["70736274ff", "cHNidP8="], { autoFinalized: false, toSignInputs: [{ index: 0 }] }])).toMatchObject({
+      options: [
+        { autoFinalized: false, toSignInputs: [{ index: 0 }] },
+        { autoFinalized: false, toSignInputs: [{ index: 0 }] },
+      ],
+    });
   });
   it("sendBitcoin and switchChain", () => {
     expect(parseRequest("sendBitcoin", ["bc1q", 1000, { feeRate: 3, memo: "a", memos: ["b"] }])).toEqual({ method: "sendBitcoin", to: "bc1q", sats: 1000, feeRate: 3, memos: ["a", "b"] });

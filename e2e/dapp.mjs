@@ -249,12 +249,11 @@ await shotPopup(w, "sign-warnings");
 await w.click("[data-act=dapp-reject]");
 await result();
 
-// Audit H3: SINGLE|ANYONECANPAY is refused, there is nothing to approve.
+// A seller listing uses SINGLE|ANYONECANPAY. The review warns, and the locked output is the one at the signed input.
 await start("signPsbt", p3, { toSignInputs: [{ index: 0, address: addr, sighashTypes: [0x83] }] });
 w = await approvalWindow();
 t = await w.locator("body").innerText();
-ok("refuses SINGLE|ANYONECANPAY", /does not sign it/.test(t), t.slice(0, 300));
-ok("no approve button on a refused request", (await w.locator("[data-act=dapp-approve]:not([disabled]):not([aria-disabled=true])").count()) === 0);
+ok("warns about SINGLE|ANYONECANPAY instead of refusing the listing", /SINGLE\|ANYONECANPAY/.test(t) && !/will not sign this/i.test(t), t.slice(0, 400));
 await w.click("[data-act=dapp-reject]");
 await result();
 

@@ -137,7 +137,8 @@ export function parseRequest(method: unknown, params: unknown): DappRequest {
     case "signPsbts": {
       if (!Array.isArray(p[0]) || !p[0].length || p[0].length > MAX_PSBTS) bad(`psbts must be a list of 1 to ${MAX_PSBTS}`);
       const psbts = (p[0] as unknown[]).map((x, i) => psbtStr(x, `psbts[${i}]`));
-      const optsIn = p[1] === undefined ? [] : Array.isArray(p[1]) ? (p[1] as unknown[]) : bad("options must be a list");
+      const rawOpts = p[1];
+      const optsIn = rawOpts === undefined ? [] : Array.isArray(rawOpts) ? rawOpts : isObj(rawOpts) ? psbts.map(() => rawOpts) : bad("options must be an object or a list");
       return { method, psbts, options: psbts.map((_, i) => signOptions(optsIn[i])) };
     }
     case "pushPsbt":
@@ -151,7 +152,7 @@ export function parseRequest(method: unknown, params: unknown): DappRequest {
       const to = str(p[0], "to", 200).trim();
       const sats = int(p[1], "satoshis", 330, 21e14);
       const o = p[2] === undefined ? {} : isObj(p[2]) ? (p[2] as Record<string, unknown>) : bad("options must be an object");
-      const feeRate = o.feeRate === undefined ? undefined : typeof o.feeRate === "number" && o.feeRate > 0 && o.feeRate <= 5000 ? o.feeRate : bad("feeRate must be a number from 0 to 5000");
+      const feeRate = o.feeRate === undefined ? undefined : typeof o.feeRate === "number" && o.feeRate > 0 && o.feeRate <= 5000 ? o.feeRate : bad("feeRate must be a number above 0 and at most 5000");
       const memos: string[] = [];
       if (o.memo !== undefined) memos.push(str(o.memo, "memo", 80));
       if (o.memos !== undefined) {

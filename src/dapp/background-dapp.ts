@@ -347,7 +347,7 @@ export function installDapp(deps: DappDeps) {
   });
 
   async function feeRateFor(req: { feeRate?: number }): Promise<number> {
-    if (req.feeRate) return req.feeRate;
+    if (req.feeRate !== undefined) return req.feeRate;
     try {
       return (await wallet.feeRates()).normal || 2;
     } catch {

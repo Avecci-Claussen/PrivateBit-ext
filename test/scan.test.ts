@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   addWatch,
   applyBuiltSend,
+  claimBuiltSend,
+  releaseBuiltSend,
   confirmedBalance,
   emptyScanStore,
   isCoinbaseTxid,
@@ -186,6 +188,24 @@ describe("scan", () => {
     expect(pendingBalance(next)).toBe(8_999_860n);
     expect(confirmedBalance(next)).toBe(0n);
     expect(next.utxos.find((u) => u.txid === parent)?.spent).toBe(true);
+    const again = claimBuiltSend(next, send, []);
+    expect(again.utxos.find((u) => u.txid === parent)?.spent).toBe(true);
+    const stolen = structuredClone(next);
+    const coin = stolen.utxos.find((u) => u.txid === parent);
+    if (coin) coin.spentBy = "ab".repeat(32);
+    expect(() => claimBuiltSend(stolen, send, [])).toThrow(/already spent/);
+    const released = releaseBuiltSend(next, send, [
+      {
+        vout: 1,
+        value: "8999860",
+        scriptPubKey: "0014ee4fbefa4054af754130fbc8d71999e132ce5c84",
+        tweak: "bb".repeat(32),
+        label: 0,
+        k: 0,
+      },
+    ]);
+    expect(released.utxos.find((u) => u.txid === parent)?.spent).toBe(false);
+    expect(spendableBalance(released)).toBe(10_000_000n);
   });
 
   it("confirms a local sweep even when Silent Payment detect cannot run", async () => {

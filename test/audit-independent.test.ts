@@ -81,8 +81,8 @@ describe("H2: Payjoin links come from the recovery words", () => {
   }, 30000);
 });
 
-describe("H3: a site signature always covers every output", () => {
-  it("auditor PoC: SINGLE|ANYONECANPAY with an uncommitted return output is refused", () => {
+describe("H3: a partial site signature locks only what its sighash commits to", () => {
+  it("SINGLE|ANYONECANPAY leaves the other output free, and changing the locked output breaks the signature", () => {
     const hd = HDKey.fromMasterSeed(new Uint8Array(64).fill(7));
     const k = siteKeyFromHd(hd, 0x40000001, "fractal");
     const key = { scriptPubKey: k.scriptPubKey, address: k.address, publicKey: hex(k.internalPub!), output: hex(k.output), secret: k.secret };
@@ -93,22 +93,32 @@ describe("H3: a site signature always covers every output", () => {
     tx.addOutput({ script: attacker, amount: 1_000n });
     tx.addOutput({ script: siteSpk, amount: 98_500n });
     const psbtHex = hex(tx.toPSBT());
-    for (const t of [0x02, 0x03, 0x82, 0x83]) {
-      const review = reviewPsbt(parsePsbt(psbtHex), key, () => "unknown", { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [t] }] });
-      expect(review.refuse).toMatch(/does not sign it/);
-      expect(() => signReviewedPsbt(parsePsbt(psbtHex), review, key, false)).toThrow();
-    }
-    // With ALL the change output is committed: rewriting it breaks the signature.
+    const single = reviewPsbt(parsePsbt(psbtHex), key, () => "unknown", { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x83] }] });
+    expect(single.refuse).toBeUndefined();
+    expect(single.outputs.map((o) => o.locked)).toEqual([true, false]);
+    expect(single.warnings.join(" ")).toMatch(/Only output 0/);
+    const sig = parsePsbt(signReviewedPsbt(parsePsbt(psbtHex), single, key, false)).getInput(0).tapKeySig!;
+    const rewritten = new btc.Transaction({ allowUnknownOutputs: true });
+    rewritten.addInput({ txid: "33".repeat(32), index: 0, witnessUtxo: { script: siteSpk, amount: 100_000n } });
+    rewritten.addOutput({ script: attacker, amount: 1_000n });
+    rewritten.addOutput({ script: attacker, amount: 98_800n });
+    expect(schnorr.verify(sig.slice(0, 64), rewritten.preimageWitnessV1(0, [siteSpk], 0x83, [100_000n]), k.output)).toBe(true);
+    const price = new btc.Transaction({ allowUnknownOutputs: true });
+    price.addInput({ txid: "33".repeat(32), index: 0, witnessUtxo: { script: siteSpk, amount: 100_000n } });
+    price.addOutput({ script: attacker, amount: 90_000n });
+    price.addOutput({ script: siteSpk, amount: 98_500n });
+    expect(schnorr.verify(sig.slice(0, 64), price.preimageWitnessV1(0, [siteSpk], 0x83, [100_000n]), k.output)).toBe(false);
+    const none = reviewPsbt(parsePsbt(psbtHex), key, () => "unknown", { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x02] }] });
+    expect(none.refuse).toMatch(/locks no output/);
+    const bare = new btc.Transaction({ allowUnknownOutputs: true });
+    bare.addInput({ txid: "33".repeat(32), index: 0, witnessUtxo: { script: siteSpk, amount: 100_000n } });
+    expect(reviewPsbt(bare, key, () => "unknown", { toSignInputs: [{ index: 0, sighashTypes: [0x03] }] }).refuse).toMatch(/any transaction/);
     const review = reviewPsbt(parsePsbt(psbtHex), key, () => "unknown", { toSignInputs: [{ index: 0, address: k.address, sighashTypes: [0x01] }] });
     expect(review.refuse).toBeUndefined();
+    expect(review.outputs.every((o) => o.locked)).toBe(true);
     expect(BigInt(review.spent) - BigInt(review.returned)).toBe(1_500n);
-    const sig = parsePsbt(signReviewedPsbt(parsePsbt(psbtHex), review, key, false)).getInput(0).tapKeySig!;
-    const evil = new btc.Transaction({ allowUnknownOutputs: true });
-    evil.addInput({ txid: "33".repeat(32), index: 0, witnessUtxo: { script: siteSpk, amount: 100_000n } });
-    evil.addOutput({ script: attacker, amount: 1_000n });
-    evil.addOutput({ script: attacker, amount: 98_800n });
-    const pre = evil.preimageWitnessV1(0, [siteSpk], 0x01, [100_000n]);
-    expect(schnorr.verify(sig.slice(0, 64), pre, k.output)).toBe(false);
+    const allSig = parsePsbt(signReviewedPsbt(parsePsbt(psbtHex), review, key, false)).getInput(0).tapKeySig!;
+    expect(schnorr.verify(allSig.slice(0, 64), rewritten.preimageWitnessV1(0, [siteSpk], 0x01, [100_000n]), k.output)).toBe(false);
   });
 });
 
@@ -241,7 +251,13 @@ describe("L1, L2, L11: site limits", () => {
     await w.create({ password: "password1", birthday: 10 });
     await w.connectSite("https://app.example.com");
     const raw = "02000000" + "01" + "11".repeat(32) + "00000000" + "00" + "ffffffff" + "01" + "e803000000000000" + "16" + "0014" + "22".repeat(20) + "00000000";
-    await expect(w.siteBroadcast("https://app.example.com", raw)).rejects.toThrow(/does not spend this site's account/);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response("missing", { status: 404 })) as typeof fetch;
+    try {
+      await expect(w.siteBroadcast("https://app.example.com", raw)).rejects.toThrow(/does not spend this site's account/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   }, 30000);
 
   it("plain http only for this computer or the local network", async () => {

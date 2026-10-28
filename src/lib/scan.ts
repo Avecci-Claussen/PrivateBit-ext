@@ -831,6 +831,35 @@ export function applyBuiltSend(store: ScanStore, txHex: string, ours: OwnedOutpu
   return next;
 }
 
+/**
+ * Mark this payment's inputs spent before it is broadcast. A second payment that tries to
+ * spend one of them fails here. Retrying the same transaction is allowed.
+ */
+export function claimBuiltSend(store: ScanStore, txHex: string, ours: OwnedOutput[]): ScanStore {
+  const parsed = parseTxHex(txHex);
+  for (const vin of parsed.vin) {
+    const u = store.utxos.find((x) => x.txid === vin.txid && x.vout === vin.vout);
+    if (u?.spent && u.spentBy !== parsed.txid) throw new Error("a coin in this payment was already spent");
+  }
+  return applyBuiltSend(store, txHex, ours);
+}
+
+/** Undo a claim when the broadcast did not reach the network. */
+export function releaseBuiltSend(store: ScanStore, txHex: string, ours: OwnedOutput[]): ScanStore {
+  const next = cloneStore(store);
+  const parsed = parseTxHex(txHex);
+  const change = new Set(ours.map((o) => o.vout));
+  next.utxos = next.utxos.filter((u) => !(u.txid === parsed.txid && change.has(u.vout) && u.height === 0 && !u.spent));
+  for (const u of next.utxos) {
+    if (u.spentBy === parsed.txid) {
+      u.spent = false;
+      delete u.spentBy;
+      delete u.spentHeight;
+    }
+  }
+  return next;
+}
+
 /** How many recent block hashes are kept for reorg detection. */
 export const RECENT_HASHES = 12;
 

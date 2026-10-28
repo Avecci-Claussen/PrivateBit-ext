@@ -48,7 +48,11 @@ The **Test** button checks that the node answers, which chain it is on, how far 
 
 ## Connect to websites
 
-Pages see a provider at `window.privatebit`, and under the name most Fractal and Bitcoin dApps already look for. Methods: `requestAccounts`, `getAccounts`, `getNetwork`, `switchNetwork`, `getChain`, `switchChain`, `getPublicKey`, `getBalance`, `getInscriptions` (always empty), `signMessage` (`ecdsa`, `bip322-simple`), `signPsbt`, `signPsbts`, `pushPsbt`, `pushTx`, `sendBitcoin`, `disconnect`, plus `on` and `removeListener` for `accountsChanged`, `networkChanged` and `chainChanged`.
+Pages see a provider at `window.privatebit`, and under the name most Fractal and Bitcoin dApps already look for. Methods: `requestAccounts`, `getAccounts`, `getNetwork`, `switchNetwork`, `getChain`, `switchChain`, `getPublicKey`, `getBalance`, `getInscriptions`, `signMessage` (`ecdsa`, `bip322-simple`), `signPsbt`, `signPsbts`, `pushPsbt`, `pushTx`, `sendBitcoin`, `disconnect`, plus `on` and `removeListener` for `accountsChanged`, `networkChanged` and `chainChanged`.
+
+`getInscriptions` refuses with "does not read inscriptions or runes". It does not return an empty list. An empty list would tell a site that an inscribed coin is ordinary bitcoin. There is no `sendInscription`. Small Taproot coins stay out of automatic payments until the wallet can read what they carry.
+
+`signPsbt` signs `SIGHASH_SINGLE` and `SINGLE|ANYONECANPAY` for a listing. The approval window marks the one locked output. `SIGHASH_NONE` is refused, because that signature does not lock any output. A `SINGLE` signature with no output at that input's position is refused. `signPsbts` accepts one options object and applies it to every PSBT, or a list with one entry per PSBT. `useTweakedSigner` selects the tweaked key. `disableTweakSigner` selects the untweaked key, and only when a script in that coin checks it.
 
 Each site's account is at `m/86'/coin'/i'/0/0`, where `coin` is `8228` on Fractal and `0` on Bitcoin, and `i` is a hardened index from 2^30 up, taken from a hash of the site's origin. The same site gets the same account after a restore. Connected sites are listed in Settings, Connected sites, with the address, balance, Add funds, Move back to private and Disconnect.
 

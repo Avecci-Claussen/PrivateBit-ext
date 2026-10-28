@@ -150,7 +150,7 @@ export type ReviewInput = {
   /** Script path spend: the leaf (hex), its version and which of this site's keys it names. */
   script?: { leaf: string; version: number; key: "internal" | "output" };
 };
-export type ReviewOutput = { index: number; value: string; address?: string; memo?: string; owner: Owner };
+export type ReviewOutput = { index: number; value: string; address?: string; memo?: string; owner: Owner; /** False when a signed input does not commit to this output. */ locked: boolean };
 export type PsbtReview = {
   inputs: ReviewInput[];
   outputs: ReviewOutput[];
@@ -179,11 +179,14 @@ export type ToSignInput = {
 export type SignPsbtOptions = { autoFinalized?: boolean; toSignInputs?: ToSignInput[] };
 
 /**
- * Audit H3: only signature types that commit to every output. SINGLE and NONE (with or without
- * ANYONECANPAY) let the site change or drop outputs after you sign, so the review could not
- * show what really leaves. ALL|ANYONECANPAY is allowed with a warning: others can add inputs.
+ * DEFAULT and ALL commit to every output. ALL|ANYONECANPAY commits to every output and lets
+ * the buyer add inputs. SINGLE and SINGLE|ANYONECANPAY are the listing signatures: only the
+ * output at the same index stays locked, and the review says so. NONE locks nothing, so it
+ * is refused. A SINGLE signature with no output at that index is the one-hash, valid on any
+ * later transaction, so that one is refused too.
  */
-const SIGHASH_OK = new Set([0x00, 0x01, 0x81]);
+const SIGHASH_OK = new Set([0x00, 0x01, 0x03, 0x81, 0x83]);
+const MAX_SITE_LOOKUPS = 16;
 const SIGHASH_NAMES: Record<number, string> = {
   0x00: "DEFAULT",
   0x01: "ALL",
@@ -195,6 +198,18 @@ const SIGHASH_NAMES: Record<number, string> = {
 };
 export function sighashName(t: number): string {
   return SIGHASH_NAMES[t] ?? `0x${t.toString(16)}`;
+}
+
+/** useTweakedSigner wins over disableTweakSigner, matching the provider sites already call. */
+function signerFor(t: ToSignInput | undefined, leafKey: "internal" | "output" | undefined): "tweaked" | "internal" {
+  if (typeof t?.useTweakedSigner === "boolean") return t.useTweakedSigner ? "tweaked" : "internal";
+  if (typeof t?.disableTweakSigner === "boolean") return t.disableTweakSigner ? "internal" : "tweaked";
+  return leafKey === "internal" ? "internal" : "tweaked";
+}
+
+function partialSighash(sighash: number): boolean {
+  const base = sighash & 0x1f;
+  return base === 2 || base === 3 || (sighash & 0x80) !== 0;
 }
 
 export function psbtBytes(input: string): Uint8Array {
@@ -332,20 +347,31 @@ export function reviewPsbt(tx: btc.Transaction, key: Pick<SiteKey, "scriptPubKey
     const sighash = t?.sighashTypes?.[0] ?? inp.sighashType ?? 0;
     if (prev) inSum += prev.amount;
     else allKnown = false;
-    // Script path: only when the site names the input, and only for a leaf committed in that coin.
-    const leaf = t && owner !== "site" ? siteLeafOf(inp, key) : undefined;
+    // A leaf is accepted only when it is committed in the coin. The flag then picks which key signs it.
+    const leaf = sign && inp.tapLeafScript?.length ? siteLeafOf(inp, key) : undefined;
     if (leaf && "bad" in leaf) refuse ??= `Input ${i}: ${leaf.bad}.`;
-    const script = leaf && !("bad" in leaf) ? { leaf: hex(leaf.leaf), version: leaf.version, key: leaf.key } : undefined;
-    if (t?.disableTweakSigner && !script && owner === "site") refuse ??= `Input ${i} asks for a signature with the untweaked key outside a script, which no Taproot coin accepts.`;
+    const leafOk = leaf && !("bad" in leaf) ? leaf : undefined;
+    const choice = signerFor(t, leafOk?.key);
+    const scriptAgrees = !!leafOk && ((choice === "internal" && leafOk.key === "internal") || (choice === "tweaked" && leafOk.key === "output"));
+    const script = scriptAgrees && leafOk ? { leaf: hex(leafOk.leaf), version: leafOk.version, key: leafOk.key } : undefined;
     inputs.push({ index: i, txid, vout, value: prev ? prev.amount.toString() : null, address: prev ? addressOf(prev.script) : undefined, owner, sign, sighash, ...(script ? { script } : {}) });
     if (owner === "private") refuse ??= "This includes coins from your private balance. PrivateBit never signs those for a website.";
     if (owner === "other-site") refuse ??= "This includes coins from another website's account.";
     if (sign) {
       if (!prev) refuse ??= `input ${i} has no amount or script, so it cannot be checked`;
-      else if (owner !== "site" && !(script && owner === "unknown")) refuse ??= `input ${i} is not paid to this site's account`;
+      else if (leafOk && !script) refuse ??= choice === "internal" ? `Input ${i} asks for the untweaked key, but the script checks the tweaked key.` : `Input ${i} asks for the tweaked key, but the script checks the untweaked key.`;
+      else if (choice === "internal" && !script) refuse ??= `Input ${i} asks for the untweaked key, and this coin has no script that checks it. A key-path spend needs the tweaked key.`;
+      else if (!script && owner !== "site") refuse ??= `input ${i} is not paid to this site's account`;
       if (script) warnings.push(`Input ${i} is a script spend that names this site's key. Your signature lets that script move ${prev ? prev.amount.toString() : "its"} sats to the outputs shown.`);
-      if (!SIGHASH_OK.has(sighash)) refuse ??= `Input ${i} asks for signature type ${sighashName(sighash)}. It would let the site change or remove outputs after you sign, so PrivateBit does not sign it.`;
+      if (!SIGHASH_OK.has(sighash)) {
+        const base = sighash & 0x1f;
+        refuse ??= base === 2
+          ? `Input ${i} uses ${sighashName(sighash)}. That signature locks no output, so the coin could be sent anywhere after you sign. PrivateBit does not sign it.`
+          : `Input ${i} asks for signature type ${sighashName(sighash)}. PrivateBit does not sign that type.`;
+      } else if ((sighash & 0x1f) === 3 && i >= tx.outputsLength) refuse ??= `Input ${i} uses SINGLE, but there is no output at that position. That signature would fit any transaction, so PrivateBit does not sign it.`;
       else if (sighash === 0x81) warnings.push(`Input ${i} uses signature type ALL|ANYONECANPAY. Others can add their own inputs after you sign. The outputs stay exactly as shown.`);
+      else if (sighash === 0x83) warnings.push(`Input ${i} uses SINGLE|ANYONECANPAY. Only output ${i} stays as shown. The site can change every other output, and the buyer can add inputs.`);
+      else if (sighash === 0x03) warnings.push(`Input ${i} uses SINGLE. Only output ${i} stays as shown. The site can change every other output.`);
       if (prev) spent += prev.amount;
     } else if (owner === "unknown") {
       warnings.push(`Input ${i} is not yours. You are not signing it.`);
@@ -368,10 +394,21 @@ export function reviewPsbt(tx: btc.Transaction, key: Pick<SiteKey, "scriptPubKey
     const owner: Owner = sh === key.scriptPubKey ? "site" : ownerOf(sh, "");
     if (owner === "site") returned += value;
     else leaves += value;
-    outputs.push({ index: i, value: value.toString(), address: addressOf(script), memo: memoOf(script), owner });
+    outputs.push({ index: i, value: value.toString(), address: addressOf(script), memo: memoOf(script), owner, locked: true });
   }
   const fee = allKnown ? inSum - outSum : null;
-  if (fee !== null && fee < 0n) refuse ??= "Outputs are larger than inputs.";
+  const signed = inputs.filter((x) => x.sign);
+  const partial = signed.some((x) => partialSighash(x.sighash));
+  if (fee !== null && fee < 0n) {
+    if (partial) warnings.push("The inputs shown do not cover the outputs. The buyer adds coins after you sign, so this is not the final fee.");
+    else refuse ??= "Outputs are larger than inputs.";
+  }
+  const commitsAll = signed.some((x) => {
+    const base = x.sighash & 0x1f;
+    return base === 0 || base === 1;
+  });
+  const singleAt = new Set(signed.filter((x) => (x.sighash & 0x1f) === 3).map((x) => x.index));
+  for (const o of outputs) o.locked = commitsAll || singleAt.has(o.index);
   return { inputs, outputs, toSign, spent: spent.toString(), returned: returned.toString(), leaves: leaves.toString(), fee: fee === null ? null : fee.toString(), warnings, ...(refuse ? { refuse } : {}) };
 }
 
@@ -412,6 +449,38 @@ export function signReviewedPsbt(tx: btc.Transaction, review: PsbtReview, key: P
     if (autoFinalized) tx.finalizeIdx(i);
   }
   return hex(tx.toPSBT());
+}
+
+/**
+ * The first input that spends this site's account. Coins the scan has already seen match
+ * immediately. Coins the scan has not seen yet are checked from the previous transaction,
+ * up to a small cap so a site cannot make the wallet fetch an arbitrary list.
+ */
+export async function siteSpendIn(
+  tx: btc.Transaction,
+  scriptPubKey: string,
+  known: ReadonlySet<string>,
+  lookup: (txid: string, vout: number) => Promise<{ script: string; value: bigint } | undefined>,
+): Promise<{ txid: string; vout: number; value: bigint } | undefined> {
+  const unknown: { txid: string; vout: number }[] = [];
+  for (let i = 0; i < tx.inputsLength; i++) {
+    const inp = tx.getInput(i);
+    if (!inp.txid) continue;
+    const txid = hex(inp.txid);
+    const vout = inp.index ?? 0;
+    if (known.has(`${txid}:${vout}`)) return { txid, vout, value: inp.witnessUtxo?.amount ?? 0n };
+    unknown.push({ txid, vout });
+  }
+  for (const u of unknown.slice(0, MAX_SITE_LOOKUPS)) {
+    let found: { script: string; value: bigint } | undefined;
+    try {
+      found = await lookup(u.txid, u.vout);
+    } catch {
+      found = undefined;
+    }
+    if (found?.script === scriptPubKey) return { txid: u.txid, vout: u.vout, value: found.value };
+  }
+  return undefined;
 }
 
 // ---------- Sends from a site account ----------

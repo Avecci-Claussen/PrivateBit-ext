@@ -48,10 +48,12 @@ import { parseOhttpKeys, type OhttpKeyConfig } from "./ohttp.ts";
 import {
   addWatch,
   noteWatchedOutput,
-  applyBuiltSend,
+  claimBuiltSend,
+  releaseBuiltSend,
   applyTxHex,
   markAbsentWatchSpent,
   recoverWatchedFromHints,
+  upsertUtxo,
   retryDeferred,
   confirmedBalance,
   emptyScanStore,
@@ -86,6 +88,7 @@ import {
   signMessageEcdsa,
   signReviewedPsbt,
   siteHost,
+  siteSpendIn,
   upsertSite,
   pickSiteIndex,
   type OwnerOf,
@@ -1744,11 +1747,16 @@ export class WalletCore {
     }
     const hexTx = built.txHex;
     void psbtForBroadcast(INTENT_SIMPLE_SEND, null, built.psbtBase64);
-    const txid = await this.source().broadcast(hexTx);
+    // Claim the coins before the network call. A second payment of the same coin fails here.
+    await this.coins_.update((fresh) => claimBuiltSend(fresh, hexTx, built.ourOutputs), { flush: true });
+    let txid: string;
+    try {
+      txid = await this.source().broadcast(hexTx);
+    } catch (e) {
+      await this.coins_.update((fresh) => releaseBuiltSend(fresh, hexTx, built.ourOutputs), { flush: true });
+      throw e;
+    }
     await this.afterBroadcast(txid, built, extra?.kind ?? "sent", extra?.label, extra?.feeRate ?? 0);
-    // Re-read inside the writer queue so a scan step prepared earlier cannot undo this.
-    // Confirmation comes from our own block scan; the txid is not looked up anywhere.
-    await this.coins_.update((fresh) => applyBuiltSend(fresh, hexTx, built.ourOutputs), { flush: true });
     return { kind: "txid", txid };
   }
 
@@ -1846,6 +1854,11 @@ export class WalletCore {
       };
       if (!(await this.delayedReadable())) throw new Error("held payments cannot be read right now; unlock and try again");
       const list = (await this.loadDelayed()).filter((d) => d.status === "waiting" || !d.recorded);
+      const held = new Set<string>();
+      for (const d of list) if (d.status === "waiting") for (const inp of d.signableInputs) held.add(`${inp.txid}:${inp.vout}`);
+      for (const inp of built.signableInputs) {
+        if (held.has(`${inp.txid}:${inp.vout}`)) throw new Error("a coin in this payment is already in a held payment");
+      }
       list.push(entry);
       await this.saveDelayed(list);
       return entry;
@@ -1891,12 +1904,13 @@ export class WalletCore {
         if (d.status !== "waiting") continue;
         if (opts.only ? d.id !== opts.only : d.sendAt > now) continue;
         try {
+          await this.coins_.update((fresh) => claimBuiltSend(fresh, d.txHex, d.ourOutputs), { flush: true });
           d.txid = await this.source().broadcast(d.txHex);
           d.status = "sent";
           d.sentAt = Date.now();
           sent.push(d.id);
-          await this.coins_.update((fresh) => applyBuiltSend(fresh, d.txHex, d.ourOutputs), { flush: true });
         } catch (e) {
+          await this.coins_.update((fresh) => releaseBuiltSend(fresh, d.txHex, d.ourOutputs), { flush: true }).catch(() => undefined);
           const msg = e instanceof Error ? e.message : String(e);
           if (/failed to fetch|fetch failed|network|timeout|timed out|abort|429|503|rate limit|request limit/i.test(msg)) {
             // Not reached the network: try again in a minute, still held.
@@ -2524,19 +2538,56 @@ export class WalletCore {
     // Audit L1 (independent): a site can only relay transactions that spend its own account.
     // Anything else would make PrivateBit's server connection carry unrelated transactions.
     const mine = new Set((await this.siteCoins(key.index)).map((u) => `${u.txid}:${u.vout}`));
-    let spendsSite = false;
-    for (let i = 0; i < parsed.inputsLength; i++) {
-      const inp = parsed.getInput(i);
-      if (inp.txid && mine.has(`${hex(inp.txid)}:${inp.index}`)) spendsSite = true;
-    }
-    if (!spendsSite) throw new Error("This transaction does not spend this site's account, so PrivateBit does not send it.");
+    const hit = await siteSpendIn(parsed, key.scriptPubKey, mine, async (txid, vout) => {
+      let raw: string;
+      try {
+        raw = await this.source().getTxHex(txid);
+      } catch {
+        return undefined;
+      }
+      try {
+        const prev = btc.Transaction.fromRaw(fromHex(raw), { allowUnknownOutputs: true, allowUnknownInputs: true, disableScriptCheck: true });
+        const o = prev.getOutput(vout);
+        if (!o?.script) return undefined;
+        return { script: hex(o.script), value: o.amount ?? 0n };
+      } catch {
+        return undefined;
+      }
+    });
+    if (!hit) throw new Error("This transaction does not spend this site's account, so PrivateBit does not send it.");
     const ours: OwnedOutput[] = [];
     for (let i = 0; i < parsed.outputsLength; i++) {
       const o = parsed.getOutput(i);
       if (o.script && hex(o.script) === key.scriptPubKey) ours.push({ vout: i, value: String(o.amount ?? 0n), scriptPubKey: key.scriptPubKey, tweak: "", label: null, k: 0, kind: "site", index: key.index });
     }
-    const txid = await this.source().broadcast(txHex);
-    await this.coins_.update((fresh) => applyBuiltSend(fresh, txHex, ours), { flush: true });
+    await this.coins_.update((fresh) => claimBuiltSend(fresh, txHex, ours), { flush: true });
+    let txid: string;
+    try {
+      txid = await this.source().broadcast(txHex);
+    } catch (e) {
+      await this.coins_.update((fresh) => releaseBuiltSend(fresh, txHex, ours), { flush: true });
+      throw e;
+    }
+    if (!mine.has(`${hit.txid}:${hit.vout}`)) {
+      await this.coins_.update((fresh) => {
+        upsertUtxo(fresh.utxos, {
+          txid: hit.txid,
+          vout: hit.vout,
+          value: hit.value.toString(),
+          scriptPubKey: key.scriptPubKey,
+          tweak: "",
+          label: null,
+          k: 0,
+          height: 0,
+          spent: true,
+          spentBy: txid,
+          spentHeight: 0,
+          kind: "site",
+          index: key.index,
+        });
+        return fresh;
+      }, { flush: true });
+    }
     await this.touchSite(origin);
     return txid;
   }
